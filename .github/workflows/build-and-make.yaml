@@ -969,6 +969,20 @@ jobs:
                   IPTVNATOR_REQUIRE_EMBEDDED_MPV: ${{ (matrix.os == 'linux' || matrix.os == 'windows' || (matrix.os == 'macos' && (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/master'))) && '1' || '0' }}
               run: pnpm run verify:package-layout -- "$PACKAGE_OS" "$PACKAGE_ARCH"
 
+            # Exercise the public installers before they are uploaded. Windows
+            # installs NSIS silently into an isolated directory (and extracts
+            # an MSI administratively if one is produced); macOS mounts the
+            # DMG read-only and validates its app bundle without opening a GUI.
+            - name: Smoke-test Windows installer payload
+              if: matrix.os == 'windows'
+              shell: pwsh
+              run: pnpm run verify:desktop-installer -- --platform windows --root dist/executables --expected-arch "${{ matrix.arch }}"
+
+            - name: Smoke-test macOS DMG payload
+              if: matrix.os == 'macos'
+              shell: bash
+              run: pnpm run verify:desktop-installer -- --platform macos --root dist/executables --expected-arch "${{ matrix.arch }}" --expected-app-id com.zenplay.app
+
             - name: Make marker-only foreign-architecture DEB packages
               if: matrix.os == 'linux' && matrix.linux_profile == 'system'
               shell: bash

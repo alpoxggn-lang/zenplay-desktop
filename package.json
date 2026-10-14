@@ -78,6 +78,8 @@
         "typecheck:spec": "node tools/typecheck/spec-typecheck.mjs",
         "typecheck:spec:test": "node --test tools/typecheck/spec-typecheck.test.mjs",
         "verify:package-layout": "node tools/packaging/verify-electron-package-layout.mjs",
+        "verify:desktop-installer": "node tools/packaging/verify-desktop-installer.mjs",
+        "verify:desktop-installer:test": "node --test tools/packaging/verify-desktop-installer.test.mjs",
         "embedded-mpv:build-native:homebrew": "IPTVNATOR_EMBEDDED_MPV_ALLOW_HOMEBREW=1 nx run electron-backend:build-embedded-mpv",
         "embedded-mpv:build-runtime": "node tools/embedded-mpv/build-macos-runtime.mjs",
         "embedded-mpv:build-runtime:linux": "node tools/embedded-mpv/build-linux-runtime.mjs",

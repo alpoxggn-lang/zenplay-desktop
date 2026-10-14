@@ -20,15 +20,15 @@ chosen deliberately by bumping `package.json`.
 
 ## Surfaces built from one set of notes
 
-| Surface | Command | Writes |
-| --- | --- | --- |
-| `CHANGELOG.md` section | `release:notes:changelog` | the file |
-| Website blog scaffold | `release:notes:blog` | `apps/website/src/content/blog/<vX-Y>-release-notes.mdx` |
-| GitHub release body | (tag build) | via `extract-changelog-section.mjs --public` |
-| Telegram announcement | `release:notes:telegram` | stdout |
-| Reddit announcement | `release:notes:reddit` | stdout |
-| Highlight cards | `release:cards:generate` | `dist/release-highlight-cards/v<version>/` |
-| Screenshots | `release:screenshots` | `apps/website/public/blog/<vX-Y>/screenshots/` |
+| Surface                | Command                   | Writes                                                   |
+| ---------------------- | ------------------------- | -------------------------------------------------------- |
+| `CHANGELOG.md` section | `release:notes:changelog` | the file                                                 |
+| Website blog scaffold  | `release:notes:blog`      | `apps/website/src/content/blog/<vX-Y>-release-notes.mdx` |
+| GitHub release body    | (tag build)               | via `extract-changelog-section.mjs --public`             |
+| Telegram announcement  | `release:notes:telegram`  | stdout                                                   |
+| Reddit announcement    | `release:notes:reddit`    | stdout                                                   |
+| Highlight cards        | `release:cards:generate`  | `dist/release-highlight-cards/v<version>/`               |
+| Screenshots            | `release:screenshots`     | `apps/website/public/blog/<vX-Y>/screenshots/`           |
 
 Run the two stdout commands as `pnpm --silent run …` whenever the output is
 redirected to a file or a clipboard. Without it pnpm prints its lifecycle
@@ -51,7 +51,7 @@ changes. It is rejected on `type: internal`, and capped at **60 characters** to
 keep it headline-sized — roughly what the hero card fits on one line.
 
 The cap is an authoring guideline, not a rendering guarantee: character count
-is not width. Card text wraps by *estimated rendered width*
+is not width. Card text wraps by _estimated rendered width_
 (`estimateTextWidth`), because 34 `W` at font-size 52 measures ~1948px where
 1072px are available — a character-capped line still ran off the canvas.
 
@@ -203,7 +203,7 @@ The `v*` tag build creates a **draft** GitHub release.
 the gate that runs before a human publishes it. It is strictly read-only: it
 never publishes, edits or deletes.
 
-1. **Find the run.** `gh run list` reports what is indexed *right now* — its
+1. **Find the run.** `gh run list` reports what is indexed _right now_ — its
    `--limit` caps how many runs come back, it does not wait for one to appear,
    and a tag pushed seconds ago routinely is not indexed yet. The verifier
    polls (10 attempts, 6 s apart) before concluding the tag was never pushed.
@@ -226,25 +226,40 @@ An already-published release still gets its asset report — auditing one after
 the fact is useful — but **never a success exit**. Reporting a pass for a
 pre-publication gate after publication would claim a boundary already crossed.
 
+### Installer payload gate
+
+The platform build must verify the actual customer installer before uploading
+it. On Windows, `tools/packaging/verify-desktop-installer.mjs` checks the NSIS
+PE structure, performs a silent install into an isolated temporary directory,
+and verifies the installed `ZenPlay.exe` plus Electron `app.asar`. If a future
+build also emits MSI, the same gate validates its compound-file signature and
+administratively extracts and checks its payload. On macOS, the gate mounts the
+DMG read-only, validates the ZenPlay bundle identifier, executable architecture,
+Mach-O payload and `app.asar`, then detaches it. Neither path opens the app UI.
+
+The smoke steps run before `actions/upload-artifact`; therefore a malformed or
+non-installable EXE/DMG cannot reach the release job. Their portable structural
+tests run with `pnpm run verify:desktop-installer:test`.
+
 ### Required asset set
 
 28 assets, verified against a real complete matrix build. When the build matrix
 in `.github/workflows/build-and-make.yaml` gains or loses a target, update
 `requiredAssetRules()` in the same PR.
 
-| Platform | Assets |
-| --- | --- |
-| macOS | `ZenPlay-<version>-mac-{x64,arm64}.{dmg,zip}` + a `.blockmap` for each (8) |
-| Windows | `-windows-x64-setup.exe` + `.blockmap` (2) |
-| DEB | `-linux-{amd64,arm64,armv7l}.deb` (3) |
-| AppImage | `-linux-{x86_64,arm64,armv7l}.AppImage` (3) |
-| Snap | `-linux-{amd64,armhf}.snap` (2) |
-| RPM | `-linux-x86_64.rpm` (1) |
-| Flatpak | `-linux-x86_64.flatpak` (1) |
-| Pacman | `-linux-x64.pacman` **or** `-linux-x86_64.pkg.tar.*` (1) |
-| Updater metadata | `latest.yml`, `latest-mac.yml`, `latest-linux.yml`, `latest-linux-arm.yml`, `latest-linux-arm64.yml` (5) |
-| Source compliance | `linux-frame-copy-runtime-sources.tar.xz` (1) |
-| Integrity | `SHA256SUMS` (1) |
+| Platform          | Assets                                                                                                   |
+| ----------------- | -------------------------------------------------------------------------------------------------------- |
+| macOS             | `ZenPlay-<version>-mac-{x64,arm64}.{dmg,zip}` + a `.blockmap` for each (8)                               |
+| Windows           | `-windows-x64-setup.exe` + `.blockmap` (2)                                                               |
+| DEB               | `-linux-{amd64,arm64,armv7l}.deb` (3)                                                                    |
+| AppImage          | `-linux-{x86_64,arm64,armv7l}.AppImage` (3)                                                              |
+| Snap              | `-linux-{amd64,armhf}.snap` (2)                                                                          |
+| RPM               | `-linux-x86_64.rpm` (1)                                                                                  |
+| Flatpak           | `-linux-x86_64.flatpak` (1)                                                                              |
+| Pacman            | `-linux-x64.pacman` **or** `-linux-x86_64.pkg.tar.*` (1)                                                 |
+| Updater metadata  | `latest.yml`, `latest-mac.yml`, `latest-linux.yml`, `latest-linux-arm.yml`, `latest-linux-arm64.yml` (5) |
+| Source compliance | `linux-frame-copy-runtime-sources.tar.xz` (1)                                                            |
+| Integrity         | `SHA256SUMS` (1)                                                                                         |
 
 Before either a draft upload or nightly publication, the workflow generates
 `SHA256SUMS` for every public Windows and macOS package, its blockmap, and all
@@ -360,7 +375,7 @@ frontend and backend builds and before electron-builder reads it
 
 **Publication** (steps at the end of the `create-release` job):
 
-1. `NIGHTLY_RELEASE_TOKEN` — a fine-grained PAT with *Contents: read/write*
+1. `NIGHTLY_RELEASE_TOKEN` — a fine-grained PAT with _Contents: read/write_
    on `alpoxggn-lang/zenplay-desktop-nightly` — is required. Without it the run only warns;
    `GITHUB_TOKEN` cannot write to another repository. The nightly repository
    needs one commit on its default branch, because `gh release create`
