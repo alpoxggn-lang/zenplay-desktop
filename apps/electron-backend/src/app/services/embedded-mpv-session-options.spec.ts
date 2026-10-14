@@ -1,4 +1,5 @@
 import {
+    EMBEDDED_MPV_HARDWARE_DEFAULT_OPTIONS,
     EMBEDDED_MPV_LANGUAGE_DEFAULT_OPTIONS,
     EMBEDDED_MPV_NETWORK_DEFAULT_OPTIONS,
 } from '@iptvnator/shared/interfaces';
@@ -36,6 +37,7 @@ describe('readEmbeddedMpvSessionOptions', () => {
     it('places the bundled CA before an explicit user override', () => {
         expect(readEmbeddedMpvSessionOptions()).toEqual({
             extraOptions: [
+                ...EMBEDDED_MPV_HARDWARE_DEFAULT_OPTIONS,
                 ...EMBEDDED_MPV_NETWORK_DEFAULT_OPTIONS,
                 ...EMBEDDED_MPV_LANGUAGE_DEFAULT_OPTIONS,
                 'tls-ca-file=C:/ZenPlay/resources/certs/cacert.pem',

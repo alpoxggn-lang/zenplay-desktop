@@ -1,4 +1,5 @@
 import {
+    EMBEDDED_MPV_HARDWARE_DEFAULT_OPTIONS,
     EMBEDDED_MPV_LANGUAGE_DEFAULT_OPTIONS,
     EMBEDDED_MPV_NETWORK_DEFAULT_OPTIONS,
     normalizeEmbeddedMpvExtraOptions,
@@ -61,6 +62,7 @@ describe('embedded MPV extra options', () => {
 
     it('prepends the network defaults and drops forbidden keys for the addon', () => {
         expect(resolveEmbeddedMpvSessionOptionArguments('')).toEqual([
+            ...EMBEDDED_MPV_HARDWARE_DEFAULT_OPTIONS,
             ...EMBEDDED_MPV_NETWORK_DEFAULT_OPTIONS,
             ...EMBEDDED_MPV_LANGUAGE_DEFAULT_OPTIONS,
         ]);
@@ -69,6 +71,7 @@ describe('embedded MPV extra options', () => {
                 'wid=42\nhwdec=no\nnetwork-timeout=3\nbroken line'
             )
         ).toEqual([
+            ...EMBEDDED_MPV_HARDWARE_DEFAULT_OPTIONS,
             ...EMBEDDED_MPV_NETWORK_DEFAULT_OPTIONS,
             ...EMBEDDED_MPV_LANGUAGE_DEFAULT_OPTIONS,
             'hwdec=no',
@@ -81,6 +84,14 @@ describe('embedded MPV extra options', () => {
             resolveEmbeddedMpvSessionOptionArguments('network-timeout=3');
         expect(options.indexOf('network-timeout=10')).toBeLessThan(
             options.indexOf('network-timeout=3')
+        );
+    });
+
+    it('prefers safe hardware decoding while preserving a software override', () => {
+        const options = resolveEmbeddedMpvSessionOptionArguments('hwdec=no');
+        expect(options[0]).toBe('hwdec=auto-safe');
+        expect(options.indexOf('hwdec=auto-safe')).toBeLessThan(
+            options.indexOf('hwdec=no')
         );
     });
 
@@ -100,6 +111,7 @@ describe('embedded MPV extra options', () => {
                 ['tls-ca-file=C:/ZenPlay/certs/cacert.pem']
             )
         ).toEqual([
+            ...EMBEDDED_MPV_HARDWARE_DEFAULT_OPTIONS,
             ...EMBEDDED_MPV_NETWORK_DEFAULT_OPTIONS,
             ...EMBEDDED_MPV_LANGUAGE_DEFAULT_OPTIONS,
             'tls-ca-file=C:/ZenPlay/certs/cacert.pem',

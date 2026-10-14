@@ -33,6 +33,17 @@ export const EMBEDDED_MPV_FORBIDDEN_OPTION_KEYS: readonly string[] = [
 ];
 
 /**
+ * Prefer the machine's native decoder without making playback depend on it.
+ * `auto-safe` lets libmpv select a supported VideoToolbox/D3D11VA/VA-API
+ * path and transparently fall back to software decoding when a driver or
+ * codec cannot use hardware acceleration. A later user option can still
+ * disable or replace this policy while troubleshooting a device.
+ */
+export const EMBEDDED_MPV_HARDWARE_DEFAULT_OPTIONS: readonly string[] = [
+    'hwdec=auto-safe',
+];
+
+/**
  * Applied to every embedded session ahead of the user's options, on every
  * engine: a stalled IPTV connection then surfaces as an mpv error within
  * seconds instead of the 60 s libmpv default, and ffmpeg re-requests a
@@ -147,11 +158,11 @@ export function validateEmbeddedMpvExtraOptions(
 }
 
 /**
- * The `key=value` lines a session addon receives: the network and language
- * defaults first, then trusted per-session defaults, then the user's options
- * with forbidden keys removed. Every engine (Windows/Linux/macOS native-view
- * and the frame-copy helper) applies them in this order after its own built-in
- * options, so an explicit user value remains authoritative.
+ * The `key=value` lines a session addon receives: hardware, network and
+ * language defaults first, then trusted per-session defaults, then the user's
+ * options with forbidden keys removed. Every engine (Windows/Linux/macOS
+ * native-view and the frame-copy helper) applies them in this order after its
+ * own built-in options, so an explicit user value remains authoritative.
  */
 export function resolveEmbeddedMpvSessionOptionArguments(
     value: ExternalPlayerArgumentsInput,
@@ -163,6 +174,7 @@ export function resolveEmbeddedMpvSessionOptionArguments(
         )
         .map((option) => `${option.key}=${option.value}`);
     return [
+        ...EMBEDDED_MPV_HARDWARE_DEFAULT_OPTIONS,
         ...EMBEDDED_MPV_NETWORK_DEFAULT_OPTIONS,
         ...EMBEDDED_MPV_LANGUAGE_DEFAULT_OPTIONS,
         ...managedDefaults,

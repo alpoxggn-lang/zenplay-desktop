@@ -668,10 +668,13 @@ At session creation the IPC handler reads the mirror through
 `readEmbeddedMpvSessionOptions()` and passes
 `resolveEmbeddedMpvSessionOptionArguments()` to
 `EmbeddedMpvNativeService.createSession(..., options)`. That list is ordered
-as network defaults, ZenPlay's Spanish audio priority (`alang`), trusted
-per-session defaults (the packaged Windows CA bundle when present), then the
-user's allowed lines. Every engine applies it after its own built-in options
-and before `mpv_initialize`, so an explicit user line remains authoritative:
+as the safe hardware-decoding preference (`hwdec=auto-safe`), network defaults,
+ZenPlay's Spanish audio priority (`alang`), trusted per-session defaults (the
+packaged Windows CA bundle when present), then the user's allowed lines. Every
+engine applies it after its own built-in options and before `mpv_initialize`,
+so an explicit user line remains authoritative. Hardware acceleration is a
+preference rather than a requirement: libmpv falls back to software decoding
+when the device, driver, or codec cannot provide a safe native path.
 
 | Engine              | Transport                                                                                                                                                                                                                                                                                                                                                                                                                |
 | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
