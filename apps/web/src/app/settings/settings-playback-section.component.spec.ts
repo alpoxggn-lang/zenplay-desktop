@@ -1,0 +1,478 @@
+import { ComponentFixture, TestBed } from '@angular/core/testing';
+import { FormControl, FormGroup, ReactiveFormsModule } from '@angular/forms';
+import { NoopAnimationsModule } from '@angular/platform-browser/animations';
+import { TranslateModule, TranslateService } from '@ngx-translate/core';
+import { StreamFormat, VideoPlayer } from '@iptvnator/shared/interfaces';
+import { SettingsPlaybackSectionComponent } from './settings-playback-section.component';
+
+const MPV_PATH_DESCRIPTION =
+    'Set the path to MPV. On macOS you can use the MPV app bundle, such as /Applications/mpv.app, or the executable path.';
+const MPV_COMPATIBLE_PLAYER_TIP =
+    'IINA can be launched as an MPV-compatible player on macOS, but use its executable path, such as /Applications/IINA.app/Contents/MacOS/iina-cli or /Applications/IINA.app/Contents/MacOS/IINA. IPTVnator controls, position polling, and reuse-instance behavior are guaranteed only for MPV IPC.';
+const VLC_PATH_DESCRIPTION =
+    'Set the path to VLC. On macOS you can use the VLC app bundle, such as /Applications/VLC.app, or the executable path.';
+const MPV_ARGUMENTS_PLACEHOLDER =
+    '--ontop\n--autofit=640x360\n--geometry=+80+80';
+const VLC_ARGUMENTS_PLACEHOLDER = '--video-on-top\n--width=640\n--height=360';
+const WEB_PLAYER_SHARED_CONTROLS_LABEL =
+    'Unified controls for web players (experimental)';
+
+describe('SettingsPlaybackSectionComponent', () => {
+    let fixture: ComponentFixture<SettingsPlaybackSectionComponent>;
+
+    const queryByTestId = (testId: string): Element | null =>
+        fixture.nativeElement.querySelector(`[data-test-id="${testId}"]`);
+
+    beforeEach(async () => {
+        await TestBed.configureTestingModule({
+            imports: [
+                SettingsPlaybackSectionComponent,
+                NoopAnimationsModule,
+                ReactiveFormsModule,
+                TranslateModule.forRoot(),
+            ],
+        }).compileComponents();
+
+        const translate = TestBed.inject(TranslateService);
+        translate.setTranslation(
+            'en',
+            {
+                SETTINGS: {
+                    MPV_PLAYER_PATH_DESCRIPTION: MPV_PATH_DESCRIPTION,
+                    MPV_COMPATIBLE_PLAYER_TIP: MPV_COMPATIBLE_PLAYER_TIP,
+                    VLC_PLAYER_PATH_DESCRIPTION: VLC_PATH_DESCRIPTION,
+                    WEB_PLAYER_SHARED_CONTROLS:
+                        WEB_PLAYER_SHARED_CONTROLS_LABEL,
+                },
+            },
+            true
+        );
+        translate.use('en');
+
+        fixture = TestBed.createComponent(SettingsPlaybackSectionComponent);
+        fixture.componentRef.setInput('form', createForm());
+        fixture.componentRef.setInput('players', [
+            {
+                id: VideoPlayer.VideoJs,
+                labelKey: 'SETTINGS.PLAYER_VIDEOJS',
+            },
+            {
+                id: VideoPlayer.MPV,
+                labelKey: 'SETTINGS.PLAYER_MPV',
+            },
+        ]);
+        fixture.componentRef.setInput('streamFormatEnum', StreamFormat);
+    });
+
+    it('hides the external-player double-click option when managed external players are unsupported', () => {
+        fixture.componentRef.setInput('form', createForm(VideoPlayer.MPV));
+        fixture.componentRef.setInput('isDesktop', true);
+        fixture.componentRef.setInput('supportsManagedExternalPlayers', false);
+        fixture.detectChanges();
+
+        expect(
+            queryByTestId('external-player-double-click-setting')
+        ).toBeNull();
+        expect(fixture.nativeElement.textContent).not.toContain(
+            'SETTINGS.OPEN_STREAM_ON_DOUBLE_CLICK'
+        );
+    });
+
+    it('hides the external-player double-click option for embedded players', () => {
+        fixture.componentRef.setInput('isDesktop', true);
+        fixture.componentRef.setInput('supportsManagedExternalPlayers', true);
+        fixture.detectChanges();
+
+        expect(
+            queryByTestId('external-player-double-click-setting')
+        ).toBeNull();
+    });
+
+    it.each([VideoPlayer.MPV, VideoPlayer.VLC])(
+        'labels the double-click option as external-player behavior when managed players are supported for %s',
+        (player) => {
+            fixture.componentRef.setInput('form', createForm(player));
+            fixture.componentRef.setInput('isDesktop', true);
+            fixture.componentRef.setInput(
+                'supportsManagedExternalPlayers',
+                true
+            );
+            fixture.detectChanges();
+
+            expect(
+                queryByTestId('external-player-double-click-setting')
+            ).not.toBeNull();
+            expect(fixture.nativeElement.textContent).toContain(
+                'SETTINGS.OPEN_EXTERNAL_PLAYER_ON_DOUBLE_CLICK'
+            );
+        }
+    );
+
+    it('updates the double-click option visibility when the selected player changes', () => {
+        const form = createForm();
+        fixture.componentRef.setInput('form', form);
+        fixture.componentRef.setInput('isDesktop', true);
+        fixture.componentRef.setInput('supportsManagedExternalPlayers', true);
+        fixture.detectChanges();
+
+        expect(
+            queryByTestId('external-player-double-click-setting')
+        ).toBeNull();
+
+        form.controls['player'].setValue(VideoPlayer.MPV);
+        fixture.detectChanges();
+
+        expect(
+            queryByTestId('external-player-double-click-setting')
+        ).not.toBeNull();
+    });
+
+    it('offers automatic Xtream stream format selection', async () => {
+        fixture.detectChanges();
+
+        fixture.nativeElement
+            .querySelector('[data-test-id="select-stream-format"]')
+            .click();
+        fixture.detectChanges();
+        await fixture.whenStable();
+
+        const option = document.body.querySelector('[data-test-id="auto"]');
+
+        expect(option).not.toBeNull();
+        expect(option?.textContent).toContain('auto');
+    });
+
+    it.each([
+        VideoPlayer.VideoJs,
+        VideoPlayer.Html5Player,
+        VideoPlayer.ArtPlayer,
+    ])('shows shared web controls for %s', (player) => {
+        fixture.componentRef.setInput('form', createForm(player));
+        fixture.detectChanges();
+
+        expect(
+            queryByTestId('web-player-shared-controls-setting')
+        ).not.toBeNull();
+    });
+
+    it.each([VideoPlayer.EmbeddedMpv, VideoPlayer.MPV, VideoPlayer.VLC])(
+        'hides shared web controls for %s',
+        (player) => {
+            fixture.componentRef.setInput('form', createForm(player));
+            fixture.detectChanges();
+
+            expect(
+                queryByTestId('web-player-shared-controls-setting')
+            ).toBeNull();
+        }
+    );
+
+    it('binds the shared web controls switch to the settings form', () => {
+        const form = createForm();
+        form.controls['webPlayerSharedControls'].setValue(true);
+        fixture.componentRef.setInput('form', form);
+        fixture.detectChanges();
+
+        const toggle = (
+            fixture.nativeElement as HTMLElement
+        ).querySelector<HTMLButtonElement>(
+            '[data-test-id="web-player-shared-controls-toggle"] button[role="switch"]'
+        );
+
+        expect(toggle?.getAttribute('aria-checked')).toBe('true');
+    });
+
+    it('labels the rendered shared web controls switch', () => {
+        fixture.detectChanges();
+
+        const toggle = (
+            fixture.nativeElement as HTMLElement
+        ).querySelector<HTMLButtonElement>(
+            '[data-test-id="web-player-shared-controls-toggle"] button[role="switch"]'
+        );
+
+        expect(toggle?.getAttribute('aria-label')).toBe(
+            WEB_PLAYER_SHARED_CONTROLS_LABEL
+        );
+    });
+
+    it('keeps the double-click option visible when path settings are unavailable', () => {
+        fixture.componentRef.setInput('form', createForm(VideoPlayer.MPV));
+        fixture.componentRef.setInput('isDesktop', true);
+        fixture.componentRef.setInput('supportsManagedExternalPlayers', true);
+        fixture.componentRef.setInput(
+            'supportsExternalPlayerPathSettings',
+            false
+        );
+        fixture.detectChanges();
+
+        expect(
+            queryByTestId('external-player-double-click-setting')
+        ).not.toBeNull();
+        expect(fixture.nativeElement.textContent).not.toContain(
+            MPV_PATH_DESCRIPTION
+        );
+        expect(queryByTestId('mpv-compatible-player-tip')).toBeNull();
+    });
+
+    it.each<[string, boolean, boolean, boolean, boolean]>([
+        ['shows the available desktop engine', true, true, false, true],
+        ['keeps a stale desktop opt-in clearable', true, false, true, true],
+        ['hides a stale opt-in in the PWA', false, false, true, false],
+    ])(
+        '%s',
+        (_description, isDesktop, frameCopyAvailable, stored, expected) => {
+            const form = createForm();
+            form.controls['embeddedMpvFrameCopy'].setValue(stored);
+            fixture.componentRef.setInput('form', form);
+            fixture.componentRef.setInput('isDesktop', isDesktop);
+            fixture.componentRef.setInput(
+                'frameCopyAvailable',
+                frameCopyAvailable
+            );
+            fixture.detectChanges();
+
+            const setting = queryByTestId('embedded-mpv-frame-copy-setting');
+            expect(Boolean(setting)).toBe(expected);
+        }
+    );
+
+    it('shows the recording folder setting only in desktop builds', () => {
+        fixture.componentRef.setInput('isDesktop', true);
+        fixture.detectChanges();
+
+        expect(queryByTestId('recording-folder-setting')).not.toBeNull();
+
+        fixture.componentRef.setInput('isDesktop', false);
+        fixture.detectChanges();
+
+        expect(queryByTestId('recording-folder-setting')).toBeNull();
+    });
+
+    it('shows MPV bundle guidance and the IINA executable tip for desktop MPV playback', () => {
+        fixture.componentRef.setInput('form', createForm(VideoPlayer.MPV));
+        fixture.componentRef.setInput('isDesktop', true);
+        fixture.componentRef.setInput(
+            'supportsExternalPlayerPathSettings',
+            true
+        );
+        fixture.detectChanges();
+
+        expect(fixture.nativeElement.textContent).toContain(
+            MPV_PATH_DESCRIPTION
+        );
+        expect(queryByTestId('mpv-compatible-player-tip')).not.toBeNull();
+        expect(fixture.nativeElement.textContent).toContain(
+            MPV_COMPATIBLE_PLAYER_TIP
+        );
+    });
+
+    it('hides MPV path guidance and the IINA executable tip when path settings are unsupported', () => {
+        fixture.componentRef.setInput('form', createForm(VideoPlayer.MPV));
+        fixture.componentRef.setInput('isDesktop', true);
+        fixture.componentRef.setInput('supportsManagedExternalPlayers', true);
+        fixture.componentRef.setInput(
+            'supportsExternalPlayerPathSettings',
+            false
+        );
+        fixture.detectChanges();
+
+        expect(fixture.nativeElement.textContent).not.toContain(
+            MPV_PATH_DESCRIPTION
+        );
+        expect(fixture.nativeElement.textContent).not.toContain(
+            MPV_COMPATIBLE_PLAYER_TIP
+        );
+        expect(queryByTestId('mpv-compatible-player-tip')).toBeNull();
+    });
+
+    it('shows VLC bundle guidance without the IINA tip for desktop VLC playback', () => {
+        fixture.componentRef.setInput('form', createForm(VideoPlayer.VLC));
+        fixture.componentRef.setInput('isDesktop', true);
+        fixture.componentRef.setInput(
+            'supportsExternalPlayerPathSettings',
+            true
+        );
+        fixture.detectChanges();
+
+        expect(fixture.nativeElement.textContent).toContain(
+            VLC_PATH_DESCRIPTION
+        );
+        expect(queryByTestId('mpv-compatible-player-tip')).toBeNull();
+        expect(fixture.nativeElement.textContent).not.toContain(
+            MPV_COMPATIBLE_PLAYER_TIP
+        );
+    });
+
+    it('hides VLC path guidance when path settings are unsupported', () => {
+        fixture.componentRef.setInput('form', createForm(VideoPlayer.VLC));
+        fixture.componentRef.setInput('isDesktop', true);
+        fixture.componentRef.setInput('supportsManagedExternalPlayers', true);
+        fixture.componentRef.setInput(
+            'supportsExternalPlayerPathSettings',
+            false
+        );
+        fixture.detectChanges();
+
+        expect(fixture.nativeElement.textContent).not.toContain(
+            VLC_PATH_DESCRIPTION
+        );
+        expect(queryByTestId('mpv-compatible-player-tip')).toBeNull();
+    });
+
+    it('does not show external-player path guidance for embedded players', () => {
+        fixture.componentRef.setInput('isDesktop', true);
+        fixture.componentRef.setInput(
+            'supportsExternalPlayerPathSettings',
+            true
+        );
+        fixture.detectChanges();
+
+        expect(fixture.nativeElement.textContent).not.toContain(
+            MPV_PATH_DESCRIPTION
+        );
+        expect(fixture.nativeElement.textContent).not.toContain(
+            VLC_PATH_DESCRIPTION
+        );
+        expect(queryByTestId('mpv-compatible-player-tip')).toBeNull();
+    });
+
+    it('shows MPV command-line arguments only when MPV is selected', () => {
+        fixture.componentRef.setInput('form', createForm(VideoPlayer.MPV));
+        fixture.componentRef.setInput('isDesktop', true);
+        fixture.componentRef.setInput(
+            'supportsExternalPlayerPathSettings',
+            true
+        );
+        fixture.detectChanges();
+
+        expect(queryByTestId('mpv-player-arguments-setting')).not.toBeNull();
+        expect(queryByTestId('vlc-player-arguments-setting')).toBeNull();
+        expect(fixture.nativeElement.textContent).toContain(
+            'SETTINGS.MPV_PLAYER_ARGUMENTS_LABEL'
+        );
+        expect(
+            (
+                fixture.nativeElement as HTMLElement
+            ).querySelector<HTMLTextAreaElement>('#mpvPlayerArguments')
+                ?.placeholder
+        ).toBe(MPV_ARGUMENTS_PLACEHOLDER);
+    });
+
+    it('shows VLC command-line arguments only when VLC is selected', () => {
+        fixture.componentRef.setInput('form', createForm(VideoPlayer.VLC));
+        fixture.componentRef.setInput('isDesktop', true);
+        fixture.componentRef.setInput(
+            'supportsExternalPlayerPathSettings',
+            true
+        );
+        fixture.detectChanges();
+
+        expect(queryByTestId('vlc-player-arguments-setting')).not.toBeNull();
+        expect(queryByTestId('mpv-player-arguments-setting')).toBeNull();
+        expect(fixture.nativeElement.textContent).toContain(
+            'SETTINGS.VLC_PLAYER_ARGUMENTS_LABEL'
+        );
+        expect(
+            (
+                fixture.nativeElement as HTMLElement
+            ).querySelector<HTMLTextAreaElement>('#vlcPlayerArguments')
+                ?.placeholder
+        ).toBe(VLC_ARGUMENTS_PLACEHOLDER);
+    });
+
+    it.each([
+        VideoPlayer.VideoJs,
+        VideoPlayer.Html5Player,
+        VideoPlayer.ArtPlayer,
+    ])(
+        'offers the fullscreen channel panel toggle for web player %s with shared controls',
+        (player) => {
+            const form = createForm(player);
+            form.get('webPlayerSharedControls')?.setValue(true);
+            fixture.componentRef.setInput('form', form);
+            fixture.detectChanges();
+
+            expect(
+                queryByTestId('fullscreen-channel-panel-setting')
+            ).not.toBeNull();
+        }
+    );
+
+    it('offers the fullscreen channel panel toggle for Embedded MPV regardless of the web preference', () => {
+        fixture.componentRef.setInput(
+            'form',
+            createForm(VideoPlayer.EmbeddedMpv)
+        );
+        fixture.detectChanges();
+
+        expect(
+            queryByTestId('fullscreen-channel-panel-setting')
+        ).not.toBeNull();
+    });
+
+    it('offers the up next card toggle for Embedded MPV only under the frame-copy engine', () => {
+        // The native-view engine never mounts the shared controls.
+        fixture.componentRef.setInput(
+            'form',
+            createForm(VideoPlayer.EmbeddedMpv)
+        );
+        fixture.detectChanges();
+        expect(queryByTestId('player-up-next-card-setting')).toBeNull();
+
+        fixture.componentRef.setInput('frameCopyActive', true);
+        fixture.detectChanges();
+        expect(queryByTestId('player-up-next-card-setting')).not.toBeNull();
+    });
+
+    it('hides the fullscreen channel panel toggle for a web player on the legacy vendor chrome', () => {
+        // The vendor chrome fullscreens the engine's own element, outside
+        // which the panel cannot render, so the toggle would do nothing.
+        const form = createForm(VideoPlayer.VideoJs);
+        form.get('webPlayerSharedControls')?.setValue(false);
+        fixture.componentRef.setInput('form', form);
+        fixture.detectChanges();
+
+        expect(queryByTestId('fullscreen-channel-panel-setting')).toBeNull();
+        expect(queryByTestId('player-up-next-card-setting')).toBeNull();
+    });
+
+    it.each([VideoPlayer.MPV, VideoPlayer.VLC])(
+        'hides the fullscreen channel panel toggle for external player %s',
+        (player) => {
+            const form = createForm(player);
+            form.get('webPlayerSharedControls')?.setValue(true);
+            fixture.componentRef.setInput('form', form);
+            fixture.detectChanges();
+
+            expect(
+                queryByTestId('fullscreen-channel-panel-setting')
+            ).toBeNull();
+        }
+    );
+});
+
+function createForm(player = VideoPlayer.VideoJs): FormGroup {
+    return new FormGroup({
+        player: new FormControl(player),
+        webPlayerSharedControls: new FormControl(false),
+        playerAmbientMode: new FormControl(false),
+        detailTrailerBackdrop: new FormControl(false),
+        showCaptions: new FormControl(false),
+        playerUpNextRail: new FormControl(true),
+        playerUpNextCard: new FormControl(true),
+        fullscreenChannelPanel: new FormControl(true),
+        streamFormat: new FormControl(StreamFormat.AutoStreamFormat),
+        openStreamOnDoubleClick: new FormControl(false),
+        showExternalPlaybackBar: new FormControl(true),
+        embeddedMpvFrameCopy: new FormControl(false),
+        mpvPlayerPath: new FormControl(''),
+        mpvPlayerArguments: new FormControl(''),
+        mpvReuseInstance: new FormControl(false),
+        vlcPlayerPath: new FormControl(''),
+        vlcPlayerArguments: new FormControl(''),
+        vlcReuseInstance: new FormControl(false),
+        recordingFolder: new FormControl(''),
+        vodAutoFailover: new FormControl(false),
+    });
+}

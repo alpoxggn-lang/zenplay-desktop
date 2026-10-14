@@ -1,0 +1,11 @@
+export * from './lib/diagnostics/playback-diagnostics.util';
+export * from './lib/diagnostics/shaka-error-classifier';
+export * from './lib/diagnostics/shaka-error-contract';
+export * from './lib/diagnostics/playback-stream-metadata';
+export * from './lib/diagnostics/shaka-error-lifecycle';
+export type * from './lib/diagnostics/shaka-error.types';
+export * from './lib/playback-recommendation.model';
+export * from './lib/playback-recommendation-policy';
+export * from './lib/playback-session-key';
+export * from './lib/playback-source-routing';
+export * from './lib/playback-target-capabilities';

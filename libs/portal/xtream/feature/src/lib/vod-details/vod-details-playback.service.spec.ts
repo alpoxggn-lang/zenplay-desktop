@@ -1,0 +1,786 @@
+import { signal } from '@angular/core';
+import { TestBed } from '@angular/core/testing';
+import {
+    PORTAL_EXTERNAL_PLAYBACK,
+    PORTAL_PLAYBACK_POSITIONS,
+    PORTAL_PLAYER,
+} from '@iptvnator/portal/shared/util';
+import {
+    XTREAM_DATA_SOURCE,
+    XtreamStore,
+} from '@iptvnator/portal/xtream/data-access';
+import {
+    PlaybackPositionRuntimeBridgeService,
+    RuntimeCapabilitiesService,
+} from '@iptvnator/services';
+import { PlaybackHistoryGate } from '@iptvnator/playback/data-access';
+import type {
+    PlaybackPositionData,
+    PlayerContentInfo,
+} from '@iptvnator/shared/interfaces';
+import { VodDetailsPlaybackService } from './vod-details-playback.service';
+
+/**
+ * Which external session this page owns.
+ *
+ * Multi-source can launch MPV/VLC for a movie in ANOTHER playlist, and the
+ * session then carries that playlist's ids — so the matcher decides whether
+ * the primary button can stop it or silently launches a second player.
+ */
+describe('VodDetailsPlaybackService — external session ownership', () => {
+    const ROUTE_PLAYLIST = 'playlist-1';
+    const ROUTE_VOD_ID = 650020;
+
+    let service: VodDetailsPlaybackService;
+    /** The bridge callback the service registers at construction. */
+    let positionListener: ((data: PlaybackPositionData) => void) | undefined;
+    const addRecentItem = jest.fn();
+    const xtreamDataSource = {
+        getContentByXtreamId: jest.fn(),
+        addRecentItem: jest.fn(),
+    };
+    const activeSession = signal<unknown>(null);
+    const closeSession = jest.fn().mockResolvedValue(undefined);
+    const openResolvedPlayback = jest.fn();
+    const openExternalPlayback = jest.fn();
+    const supersedePendingSwitch = jest.fn();
+    const activeSource = signal<PlayerContentInfo | null>(null);
+    const currentPlaylist = signal({ id: ROUTE_PLAYLIST });
+    const routeVodId = signal(ROUTE_VOD_ID);
+    const getPlaybackPosition = jest.fn();
+
+    function deferred<T>() {
+        let resolve!: (value: T) => void;
+        const promise = new Promise<T>((resolvePromise) => {
+            resolve = resolvePromise;
+        });
+
+        return { promise, resolve };
+    }
+
+    function positionFor(
+        playlistId: string,
+        contentXtreamId: number,
+        positionSeconds: number
+    ): PlaybackPositionData {
+        return {
+            playlistId,
+            contentXtreamId,
+            contentType: 'vod',
+            positionSeconds,
+            durationSeconds: 7744,
+        };
+    }
+
+    function sessionFor(playlistId: string, contentXtreamId: number) {
+        return {
+            player: 'mpv',
+            status: 'playing',
+            canClose: true,
+            contentInfo: {
+                playlistId,
+                contentXtreamId,
+                contentType: 'vod' as const,
+            },
+        };
+    }
+
+    beforeEach(() => {
+        activeSession.set(null);
+        activeSource.set(null);
+        currentPlaylist.set({ id: ROUTE_PLAYLIST });
+        routeVodId.set(ROUTE_VOD_ID);
+        positionListener = undefined;
+        addRecentItem.mockClear();
+        xtreamDataSource.getContentByXtreamId
+            .mockReset()
+            .mockResolvedValue({ id: 77 });
+        xtreamDataSource.addRecentItem.mockReset().mockResolvedValue(undefined);
+        closeSession.mockReset().mockResolvedValue(undefined);
+        openResolvedPlayback
+            .mockReset()
+            .mockResolvedValue(sessionFor(ROUTE_PLAYLIST, ROUTE_VOD_ID));
+        openExternalPlayback
+            .mockReset()
+            .mockResolvedValue(sessionFor(ROUTE_PLAYLIST, ROUTE_VOD_ID));
+        supersedePendingSwitch.mockClear();
+        getPlaybackPosition.mockReset();
+        getPlaybackPosition.mockResolvedValue(null);
+
+        TestBed.configureTestingModule({
+            providers: [
+                VodDetailsPlaybackService,
+                {
+                    provide: XtreamStore,
+                    useValue: {
+                        currentPlaylist,
+                        addRecentItem,
+                        constructVodStreamUrl: jest
+                            .fn()
+                            .mockReturnValue('https://example.com/route.mkv'),
+                    },
+                },
+                { provide: XTREAM_DATA_SOURCE, useValue: xtreamDataSource },
+                {
+                    provide: PORTAL_EXTERNAL_PLAYBACK,
+                    useValue: { activeSession, closeSession },
+                },
+                {
+                    provide: PORTAL_PLAYBACK_POSITIONS,
+                    useValue: {
+                        getPlaybackPosition,
+                        savePlaybackPosition: jest.fn(),
+                    },
+                },
+                {
+                    provide: PORTAL_PLAYER,
+                    useValue: {
+                        isEmbeddedPlayer: jest.fn().mockReturnValue(false),
+                        openResolvedPlayback,
+                        openExternalPlayback,
+                    },
+                },
+                {
+                    provide: PlaybackPositionRuntimeBridgeService,
+                    useValue: {
+                        onPlaybackPositionUpdate: (
+                            listener: (data: PlaybackPositionData) => void
+                        ) => {
+                            positionListener = listener;
+                            return () => undefined;
+                        },
+                    },
+                },
+            ],
+        });
+
+        service = TestBed.inject(VodDetailsPlaybackService);
+        service.bind({
+            vodId: routeVodId,
+            vodInfo: signal(null),
+            activeSource,
+            supersedePendingSwitch,
+        });
+    });
+
+    it('records the view when the menu opens the movie in MPV or VLC', async () => {
+        const movie = {
+            info: {},
+            movie_data: {
+                stream_id: ROUTE_VOD_ID,
+                name: 'Route movie',
+                container_extension: 'mkv',
+            },
+        } as never;
+        const launch = service.playVod(movie, 'vlc');
+        expect(launch).not.toBeNull();
+        await launch;
+
+        expect(openExternalPlayback).toHaveBeenCalledWith(
+            expect.objectContaining({
+                streamUrl: 'https://example.com/route.mkv',
+            }),
+            'vlc'
+        );
+        expect(addRecentItem).not.toHaveBeenCalled();
+        TestBed.inject(PlaybackHistoryGate).confirm({
+            streamUrls: ['https://example.com/route.mkv'],
+        });
+        expect(addRecentItem).toHaveBeenCalledWith(
+            expect.objectContaining({
+                xtreamId: ROUTE_VOD_ID,
+                contentType: 'movie',
+            })
+        );
+    });
+
+    it('replaces a running external session when the menu relaunches the movie', async () => {
+        const launched = sessionFor(ROUTE_PLAYLIST, ROUTE_VOD_ID);
+        await service.startResolvedPlayback({
+            streamUrl: 'https://example.com/route.mkv',
+            title: 'Route movie',
+            contentInfo: launched.contentInfo,
+        });
+        activeSession.set(launched);
+        closeSession.mockClear();
+        openExternalPlayback.mockClear();
+
+        await service.playVod(
+            {
+                info: {},
+                movie_data: {
+                    stream_id: ROUTE_VOD_ID,
+                    name: 'Route movie',
+                    container_extension: 'mkv',
+                },
+            } as never,
+            'mpv'
+        );
+
+        // Replaced, never doubled: the running player closes first.
+        expect(closeSession).toHaveBeenCalledWith(launched);
+        expect(closeSession.mock.invocationCallOrder[0]).toBeLessThan(
+            openExternalPlayback.mock.invocationCallOrder[0]
+        );
+        expect(openExternalPlayback).toHaveBeenCalledWith(
+            expect.objectContaining({
+                streamUrl: 'https://example.com/route.mkv',
+            }),
+            'mpv'
+        );
+    });
+
+    it('records the movie as recently viewed only once its stream played', async () => {
+        await service.startResolvedPlayback({
+            streamUrl: 'https://example.com/broken.mkv',
+            title: 'Broken source',
+        });
+        await service.startResolvedPlayback({
+            streamUrl: 'https://example.com/route.mkv',
+            title: 'Working source',
+        });
+        expect(addRecentItem).not.toHaveBeenCalled();
+
+        TestBed.inject(PlaybackHistoryGate).confirm({
+            streamUrls: ['https://example.com/route.mkv'],
+        });
+
+        expect(addRecentItem).toHaveBeenCalledTimes(1);
+        const [recentItem] = addRecentItem.mock.calls[0];
+        expect(recentItem).toEqual(
+            expect.objectContaining({
+                xtreamId: ROUTE_VOD_ID,
+                contentType: 'movie',
+            })
+        );
+        expect(recentItem.playlist()).toEqual({ id: ROUTE_PLAYLIST });
+    });
+
+    it('saves a confirmation that arrives after a playlist switch without touching the store', async () => {
+        // Only a slow MPV/VLC launch can confirm after the page is gone; the
+        // store's recent list belongs to the other playlist by then.
+        await service.startResolvedPlayback({
+            streamUrl: 'https://example.com/route.mkv',
+            title: 'Slow external launch',
+        });
+        currentPlaylist.set({ id: 'playlist-switched-meanwhile' });
+
+        TestBed.inject(PlaybackHistoryGate).confirm({
+            streamUrls: ['https://example.com/route.mkv'],
+        });
+        await Promise.resolve();
+
+        expect(addRecentItem).not.toHaveBeenCalled();
+        expect(xtreamDataSource.getContentByXtreamId).toHaveBeenCalledWith(
+            ROUTE_VOD_ID,
+            ROUTE_PLAYLIST,
+            'movie'
+        );
+        expect(xtreamDataSource.addRecentItem).toHaveBeenCalledWith(
+            { id: 77, type: 'movie' },
+            ROUTE_PLAYLIST,
+            undefined
+        );
+    });
+
+    it.each([
+        ['the API-only data source', false, 1],
+        ['the SQLite data source', true, 0],
+    ])(
+        'keys a late, uncached write by Xtream id only for %s',
+        async (_label, sqlite: boolean, saves: number) => {
+            // A partial Electron bridge still selects the API-only source.
+            jest.spyOn(
+                TestBed.inject(RuntimeCapabilitiesService),
+                'supportsXtreamSqliteDataSource',
+                'get'
+            ).mockReturnValue(sqlite);
+            xtreamDataSource.getContentByXtreamId.mockResolvedValue(null);
+            await service.startResolvedPlayback({
+                streamUrl: 'https://example.com/route.mkv',
+                title: 'Slow external launch',
+            });
+            currentPlaylist.set({ id: 'playlist-switched-meanwhile' });
+
+            TestBed.inject(PlaybackHistoryGate).confirm({
+                streamUrls: ['https://example.com/route.mkv'],
+            });
+            await Promise.resolve();
+            await Promise.resolve();
+
+            expect(xtreamDataSource.addRecentItem).toHaveBeenCalledTimes(saves);
+            if (saves) {
+                expect(xtreamDataSource.addRecentItem).toHaveBeenCalledWith(
+                    { id: ROUTE_VOD_ID, type: 'movie' },
+                    ROUTE_PLAYLIST,
+                    undefined
+                );
+            }
+        }
+    );
+
+    it('owns a session launched for the route’s own stream', () => {
+        activeSession.set(sessionFor(ROUTE_PLAYLIST, ROUTE_VOD_ID));
+
+        expect(service.matchedExternalPlayback()).not.toBeNull();
+        expect(service.isExternalStopAction()).toBe(true);
+    });
+
+    it('owns a session launched for the alternative it switched to', () => {
+        // Same movie, other playlist, other stream id. Before this the page
+        // disowned its own session: the button never became Stop, stopping
+        // found nothing to stop, and another click opened a second player.
+        activeSource.set({
+            playlistId: 'playlist-2',
+            contentXtreamId: 991,
+            contentType: 'vod',
+        });
+        activeSession.set(sessionFor('playlist-2', 991));
+
+        expect(service.matchedExternalPlayback()).not.toBeNull();
+        expect(service.isExternalStopAction()).toBe(true);
+    });
+
+    it('disowns a session belonging to some other movie entirely', () => {
+        activeSource.set({
+            playlistId: 'playlist-2',
+            contentXtreamId: 991,
+            contentType: 'vod',
+        });
+        activeSession.set(sessionFor('playlist-3', 12345));
+
+        expect(service.matchedExternalPlayback()).toBeNull();
+        expect(service.isExternalStopAction()).toBe(false);
+    });
+
+    it('disowns an alternative session once playback moved back', () => {
+        activeSession.set(sessionFor('playlist-2', 991));
+
+        // No active alternative: the switch was undone, so that session is
+        // no longer this page's to stop.
+        expect(service.matchedExternalPlayback()).toBeNull();
+    });
+
+    it('disowns its previous external launch when the routed movie changes', async () => {
+        const launched = sessionFor(ROUTE_PLAYLIST, ROUTE_VOD_ID);
+        await service.startResolvedPlayback({
+            streamUrl: 'https://example.com/route.mkv',
+            title: 'First movie',
+            contentInfo: launched.contentInfo,
+        });
+        activeSession.set(launched);
+
+        routeVodId.set(ROUTE_VOD_ID + 1);
+
+        expect(service.matchedExternalPlayback()).toBeNull();
+        expect(service.isExternalStopAction()).toBe(false);
+    });
+
+    it('closes the previous route launch before playing the new movie', async () => {
+        const launched = sessionFor(ROUTE_PLAYLIST, ROUTE_VOD_ID);
+        await service.startResolvedPlayback({
+            streamUrl: 'https://example.com/first.mkv',
+            title: 'First movie',
+            contentInfo: launched.contentInfo,
+        });
+        activeSession.set(launched);
+        routeVodId.set(ROUTE_VOD_ID + 1);
+        closeSession.mockClear();
+        openResolvedPlayback.mockClear();
+
+        service.playVod({
+            movie_data: {
+                stream_id: ROUTE_VOD_ID + 1,
+                name: 'Second movie',
+                container_extension: 'mkv',
+            },
+        } as never);
+        for (let attempt = 0; attempt < 10; attempt += 1) {
+            if (openResolvedPlayback.mock.calls.length > 0) break;
+            await Promise.resolve();
+        }
+
+        expect(closeSession).toHaveBeenCalledWith(launched);
+        expect(closeSession.mock.invocationCallOrder[0]).toBeLessThan(
+            openResolvedPlayback.mock.invocationCallOrder[0]
+        );
+    });
+
+    it('closes a diagnostic fallback before playing the next routed movie', async () => {
+        const launched = sessionFor(ROUTE_PLAYLIST, ROUTE_VOD_ID);
+        const launch = Promise.resolve(launched);
+        const trackLaunch = jest.fn();
+        openExternalPlayback.mockImplementationOnce(() => {
+            activeSession.set(launched);
+            expect(service.isExternalLaunchPending()).toBe(true);
+            expect(service.matchedExternalPlayback()).toBe(launched);
+            return launch;
+        });
+
+        service.handleExternalFallbackRequest({
+            player: 'mpv',
+            playback: {
+                streamUrl: 'https://example.com/first.mkv',
+                title: 'First movie',
+                contentInfo: launched.contentInfo,
+            },
+            diagnostic: {},
+            trackLaunch,
+        } as never);
+        expect(trackLaunch).toHaveBeenCalledWith(launch);
+        await launch;
+        await Promise.resolve();
+
+        routeVodId.set(ROUTE_VOD_ID + 1);
+        closeSession.mockClear();
+        openResolvedPlayback.mockClear();
+        service.playVod({
+            movie_data: {
+                stream_id: ROUTE_VOD_ID + 1,
+                name: 'Second movie',
+                container_extension: 'mkv',
+            },
+        } as never);
+        for (let attempt = 0; attempt < 10; attempt += 1) {
+            if (openResolvedPlayback.mock.calls.length > 0) break;
+            await Promise.resolve();
+        }
+
+        expect(closeSession).toHaveBeenCalledWith(launched);
+        expect(closeSession.mock.invocationCallOrder[0]).toBeLessThan(
+            openResolvedPlayback.mock.invocationCallOrder[0]
+        );
+    });
+
+    it('supersedes a pending source switch before starting a diagnostic fallback', () => {
+        const launched = sessionFor(ROUTE_PLAYLIST, ROUTE_VOD_ID);
+
+        service.handleExternalFallbackRequest({
+            player: 'mpv',
+            playback: {
+                streamUrl: 'https://example.com/first.mkv',
+                title: 'First movie',
+                contentInfo: launched.contentInfo,
+            },
+            diagnostic: {},
+            trackLaunch: jest.fn(),
+        } as never);
+
+        expect(supersedePendingSwitch).toHaveBeenCalledTimes(1);
+        expect(supersedePendingSwitch.mock.invocationCallOrder[0]).toBeLessThan(
+            openExternalPlayback.mock.invocationCallOrder[0]
+        );
+    });
+
+    it('closes a diagnostic fallback that resolves after its route changed', async () => {
+        const launched = sessionFor(ROUTE_PLAYLIST, ROUTE_VOD_ID);
+        const pending = deferred<typeof launched>();
+        const trackLaunch = jest.fn();
+        openExternalPlayback.mockReturnValueOnce(pending.promise);
+
+        service.handleExternalFallbackRequest({
+            player: 'mpv',
+            playback: {
+                streamUrl: 'https://example.com/first.mkv',
+                title: 'First movie',
+                contentInfo: launched.contentInfo,
+            },
+            diagnostic: {},
+            trackLaunch,
+        } as never);
+        routeVodId.set(ROUTE_VOD_ID + 1);
+        pending.resolve(launched);
+        await pending.promise;
+        await Promise.resolve();
+
+        expect(trackLaunch).toHaveBeenCalledWith(pending.promise);
+        expect(closeSession).toHaveBeenCalledWith(launched);
+    });
+
+    it('records a source started through multi-source as recently viewed', async () => {
+        // Playing an alternative from the picker, or letting a pin decide the
+        // primary Play, is still watching the movie — it belongs in Recently
+        // Viewed exactly as an ordinary Play does.
+        //
+        // Awaited: the handoff always yields once now, because replacing a
+        // running external player is a round-trip even when there is none.
+        await service.startResolvedPlayback({
+            streamUrl: 'https://example.com/alt.mkv',
+            title: 'Example Movie',
+            contentInfo: {
+                playlistId: 'playlist-2',
+                contentXtreamId: 991,
+                contentType: 'vod',
+            },
+        });
+        TestBed.inject(PlaybackHistoryGate).confirm({
+            streamUrls: ['https://example.com/alt.mkv'],
+        });
+
+        expect(addRecentItem).toHaveBeenCalled();
+    });
+
+    it('normalizes a PWA MKV selected through multi-source for inline playback', async () => {
+        const portalPlayer = TestBed.inject(PORTAL_PLAYER);
+        (portalPlayer.isEmbeddedPlayer as jest.Mock).mockReturnValue(true);
+
+        await service.startResolvedPlayback({
+            streamUrl: '/api/media/movie/991.mkv',
+            title: 'Example Movie',
+            contentInfo: {
+                playlistId: 'playlist-2',
+                contentXtreamId: 991,
+                contentType: 'vod',
+            },
+        });
+
+        expect(service.inlinePlayback()).toMatchObject({
+            streamUrl: '/api/media/adaptive/movie/991.mkv/master.m3u8',
+            webDirectFallbackUrl: '/api/media/movie/991.mkv',
+        });
+    });
+
+    it('gives up on a resume point the source cannot reach', () => {
+        // Carrying a two-hour position into a 90-minute cut: the engine can
+        // never report that time, so latching on it would suppress every save
+        // for the whole session and keep re-reporting the impossible start.
+        service.inlinePlayback.set({
+            streamUrl: 'https://example.com/short-cut.mkv',
+            title: 'Example Movie',
+            startTime: 7200,
+            contentInfo: {
+                playlistId: ROUTE_PLAYLIST,
+                contentXtreamId: ROUTE_VOD_ID,
+                contentType: 'vod',
+            },
+        });
+
+        expect(
+            service.handleInlineTimeUpdate({ currentTime: 12, duration: 5400 })
+        ).toBe(true);
+    });
+
+    it('still waits for a resume point the source can reach', () => {
+        service.inlinePlayback.set({
+            streamUrl: 'https://example.com/full.mkv',
+            title: 'Example Movie',
+            startTime: 2538,
+            contentInfo: {
+                playlistId: ROUTE_PLAYLIST,
+                contentXtreamId: ROUTE_VOD_ID,
+                contentType: 'vod',
+            },
+        });
+
+        expect(
+            service.handleInlineTimeUpdate({ currentTime: 12, duration: 7744 })
+        ).toBe(false);
+    });
+
+    describe('position updates from the bridge', () => {
+        function emit(playlistId: string, contentXtreamId: number, at: number) {
+            positionListener?.({
+                playlistId,
+                contentXtreamId,
+                contentType: 'vod',
+                positionSeconds: at,
+                durationSeconds: 7744,
+            });
+        }
+
+        it('keeps the route’s own resume point when an alternative plays', () => {
+            activeSource.set({
+                playlistId: 'playlist-2',
+                contentXtreamId: 991,
+                contentType: 'vod',
+            });
+
+            // An alternative's position arrives under ITS ids. Letting it stand in
+            // for the route copy's row would have Resume start the route stream at
+            // a timecode nobody ever reached in it.
+            emit('playlist-2', 991, 4200);
+
+            expect(service.vodPlaybackPosition()?.positionSeconds).toBe(4200);
+            expect(service.routePlaybackPosition()).toBeNull();
+            expect(service.hasPlaybackPosition()).toBe(false);
+
+            emit(ROUTE_PLAYLIST, ROUTE_VOD_ID, 60);
+            expect(service.routePlaybackPosition()?.positionSeconds).toBe(60);
+        });
+
+        it('takes the route stream’s progress', () => {
+            emit(ROUTE_PLAYLIST, ROUTE_VOD_ID, 120);
+
+            expect(service.vodPlaybackPosition()?.positionSeconds).toBe(120);
+        });
+
+        it('takes the progress of the alternative it switched to', () => {
+            activeSource.set({
+                playlistId: 'playlist-2',
+                contentXtreamId: 991,
+                contentType: 'vod',
+            });
+
+            // An external player running an alternative reports under THAT
+            // playlist's ids. Dropping these leaves the resume point where
+            // playback started, and a later switch rewinds the whole session.
+            emit('playlist-2', 991, 3600);
+
+            expect(service.vodPlaybackPosition()?.positionSeconds).toBe(3600);
+        });
+
+        it('ignores progress for a movie this page is not showing', () => {
+            emit('playlist-3', 12345, 900);
+
+            expect(service.vodPlaybackPosition()).toBeNull();
+        });
+    });
+
+    it('reports a start as pending until the previous player is closed', async () => {
+        const launched = sessionFor(ROUTE_PLAYLIST, ROUTE_VOD_ID);
+        activeSession.set(launched);
+        const closing = deferred<void>();
+        closeSession.mockReturnValueOnce(closing.promise);
+
+        const pending = service.startResolvedPlayback({
+            streamUrl: 'https://example.com/second.mkv',
+            title: 'Second movie',
+            contentInfo: launched.contentInfo,
+        });
+        expect(service.playbackStartPending()).toBe(true);
+
+        closing.resolve();
+        await pending;
+
+        expect(service.playbackStartPending()).toBe(false);
+    });
+
+    it('does not carry a pending start over to the next routed movie', async () => {
+        const launched = sessionFor(ROUTE_PLAYLIST, ROUTE_VOD_ID);
+        activeSession.set(launched);
+        const closing = deferred<void>();
+        closeSession.mockReturnValueOnce(closing.promise);
+
+        const pending = service.startResolvedPlayback({
+            streamUrl: 'https://example.com/second.mkv',
+            title: 'Second movie',
+            contentInfo: launched.contentInfo,
+        });
+        expect(service.playbackStartPending()).toBe(true);
+
+        routeVodId.set(ROUTE_VOD_ID + 1);
+        expect(service.playbackStartPending()).toBe(false);
+
+        closing.resolve();
+        await pending;
+        expect(service.playbackStartPending()).toBe(false);
+    });
+
+    describe('stored position loads', () => {
+        it('drops a result after the route changes without starting another load', async () => {
+            const oldLoad = deferred<PlaybackPositionData | null>();
+            getPlaybackPosition.mockReturnValueOnce(oldLoad.promise);
+            const pending = service.loadPosition(ROUTE_PLAYLIST, ROUTE_VOD_ID);
+
+            routeVodId.set(ROUTE_VOD_ID + 1);
+            oldLoad.resolve(positionFor(ROUTE_PLAYLIST, ROUTE_VOD_ID, 120));
+            await pending;
+
+            expect(service.vodPlaybackPosition()).toBeNull();
+            expect(service.routePlaybackPosition()).toBeNull();
+        });
+
+        it('drops a result for the same VOD id after the playlist changes', async () => {
+            const oldLoad = deferred<PlaybackPositionData | null>();
+            getPlaybackPosition.mockReturnValueOnce(oldLoad.promise);
+            const pending = service.loadPosition(ROUTE_PLAYLIST, ROUTE_VOD_ID);
+
+            currentPlaylist.set({ id: 'playlist-2' });
+            oldLoad.resolve(positionFor(ROUTE_PLAYLIST, ROUTE_VOD_ID, 120));
+            await pending;
+
+            expect(service.vodPlaybackPosition()).toBeNull();
+            expect(service.routePlaybackPosition()).toBeNull();
+        });
+
+        it('keeps the newest valid result when an older load finishes last', async () => {
+            const olderLoad = deferred<PlaybackPositionData | null>();
+            const newerLoad = deferred<PlaybackPositionData | null>();
+            getPlaybackPosition
+                .mockReturnValueOnce(olderLoad.promise)
+                .mockReturnValueOnce(newerLoad.promise);
+
+            const olderPending = service.loadPosition(
+                ROUTE_PLAYLIST,
+                ROUTE_VOD_ID
+            );
+            const newerPending = service.loadPosition(
+                ROUTE_PLAYLIST,
+                ROUTE_VOD_ID
+            );
+            newerLoad.resolve(positionFor(ROUTE_PLAYLIST, ROUTE_VOD_ID, 300));
+            await newerPending;
+            olderLoad.resolve(positionFor(ROUTE_PLAYLIST, ROUTE_VOD_ID, 120));
+            await olderPending;
+
+            expect(service.vodPlaybackPosition()?.positionSeconds).toBe(300);
+            expect(service.routePlaybackPosition()?.positionSeconds).toBe(300);
+        });
+
+        it('reports the row as loaded only once the read for the current route lands', async () => {
+            const load = deferred<PlaybackPositionData | null>();
+            getPlaybackPosition.mockReturnValueOnce(load.promise);
+            expect(service.positionLoaded()).toBe(false);
+
+            const pending = service.loadPosition(ROUTE_PLAYLIST, ROUTE_VOD_ID);
+            expect(service.positionLoaded()).toBe(false);
+            load.resolve(null);
+            await pending;
+            expect(service.positionLoaded()).toBe(true);
+
+            // A stale answer for a route that moved on never flips it back on.
+            const stale = deferred<PlaybackPositionData | null>();
+            getPlaybackPosition.mockReturnValueOnce(stale.promise);
+            const stalePending = service.loadPosition(
+                ROUTE_PLAYLIST,
+                ROUTE_VOD_ID
+            );
+            expect(service.positionLoaded()).toBe(false);
+            routeVodId.set(ROUTE_VOD_ID + 1);
+            stale.resolve(null);
+            await stalePending;
+            expect(service.positionLoaded()).toBe(false);
+        });
+
+        it('drops a pending result once a row was written since the read started', async () => {
+            const oldLoad = deferred<PlaybackPositionData | null>();
+            getPlaybackPosition.mockReturnValueOnce(oldLoad.promise);
+            const pending = service.loadPosition(ROUTE_PLAYLIST, ROUTE_VOD_ID);
+
+            // The manual watched toggle writes and applies a row meanwhile.
+            service.discardPendingPositionLoads();
+            const watched = positionFor(ROUTE_PLAYLIST, ROUTE_VOD_ID, 5400);
+            service.routePlaybackPosition.set(watched);
+            service.vodPlaybackPosition.set(watched);
+
+            oldLoad.resolve(null);
+            await pending;
+
+            expect(service.routePlaybackPosition()).toEqual(watched);
+            expect(service.vodPlaybackPosition()).toEqual(watched);
+        });
+
+        it('does not publish a pending result after destruction', async () => {
+            const oldLoad = deferred<PlaybackPositionData | null>();
+            getPlaybackPosition.mockReturnValueOnce(oldLoad.promise);
+            const pending = service.loadPosition(ROUTE_PLAYLIST, ROUTE_VOD_ID);
+
+            TestBed.resetTestingModule();
+            oldLoad.resolve(positionFor(ROUTE_PLAYLIST, ROUTE_VOD_ID, 120));
+            await pending;
+
+            expect(service.vodPlaybackPosition()).toBeNull();
+            expect(service.routePlaybackPosition()).toBeNull();
+        });
+    });
+});

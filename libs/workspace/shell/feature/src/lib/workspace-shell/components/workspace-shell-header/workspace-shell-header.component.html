@@ -1,0 +1,329 @@
+<header
+    class="workspace-header"
+    [class.is-settings-route]="isSettingsRoute()"
+    [appLayoutSlide]="leadingNavigationKey()"
+    [layoutSlideRecordOn]="controlsLayoutKey()"
+    layoutSlideTargets=".context-drawer-toggle, .playlist-switcher, .search-field, .header-actions"
+>
+    <!-- The page's Back, or browser history while an in-app previous page
+         exists, at the leading edge where desktop apps and Material's top
+         app bar keep navigation (beside the macOS traffic lights). The
+         header never scrolls, so the control stays put over long pages. -->
+    @if (backTarget(); as back) {
+        @let backLabel = back.label() || ('BACK' | translate);
+        <button
+            type="button"
+            class="header-back"
+            [class.header-back--yields]="backYieldsToDrawerToggle()"
+            mat-icon-button
+            data-test-id="workspace-header-back"
+            (click)="backRequested.emit()"
+            (keydown.escape)="onBackEscape($event)"
+            [matTooltip]="
+                back.escapeShortcut() ? backLabel + ' (Esc)' : backLabel
+            "
+            [attr.aria-label]="backLabel"
+            [attr.aria-keyshortcuts]="back.escapeShortcut() ? 'Escape' : null"
+        >
+            <mat-icon>arrow_back</mat-icon>
+        </button>
+    }
+
+    <!-- Phone-only (≤640px, CSS-hidden above): on phones the context panel
+         is an off-canvas drawer, and this button is the only way to open
+         it. A detail page's Back takes its slot (one navigation icon, as in
+         Material's top app bar); the list Back returns to shows it again.
+         Settings keeps both, and the history fallback yields to it. -->
+    @if (showDrawerToggle()) {
+        <button
+            #contextDrawerToggle
+            type="button"
+            class="context-drawer-toggle"
+            mat-icon-button
+            data-test-id="context-drawer-toggle"
+            (click)="onContextDrawerToggleRequested()"
+            [matTooltip]="contextDrawerTooltipKey() | translate"
+            [attr.aria-label]="contextDrawerToggleAriaKey() | translate"
+            [attr.aria-expanded]="isContextDrawerOpen()"
+        >
+            <mat-icon>menu_open</mat-icon>
+        </button>
+    }
+
+    <a
+        class="zenplay-brand"
+        routerLink="/workspace/dashboard"
+        aria-label="ZenPlay"
+    >
+        <img
+            src="assets/branding/zenplay-logo.png"
+            alt=""
+            width="40"
+            height="40"
+        />
+        <span>ZenPlay</span>
+    </a>
+
+    <div class="zenplay-header-actions">
+        <button
+            type="button"
+            mat-icon-button
+            data-test-id="zenplay-refresh"
+            [disabled]="!canRefreshPlaylist() || isRefreshingPlaylist()"
+            (click)="onRefreshPlaylistRequested()"
+            [matTooltip]="'WORKSPACE.SHELL.REFRESH_PLAYLIST' | translate"
+            [attr.aria-label]="
+                'WORKSPACE.SHELL.REFRESH_PLAYLIST' | translate
+            "
+        >
+            <mat-icon [class.is-spinning]="isRefreshingPlaylist()"
+                >refresh</mat-icon
+            >
+        </button>
+        <button
+            type="button"
+            mat-icon-button
+            data-test-id="zenplay-search"
+            [disabled]="!canUseSearch()"
+            (click)="openMobileSearch()"
+            [matTooltip]="'WORKSPACE.SHELL.SEARCH_LABEL' | translate"
+            [attr.aria-label]="'WORKSPACE.SHELL.SEARCH_LABEL' | translate"
+        >
+            <mat-icon>search</mat-icon>
+        </button>
+        <a
+            mat-icon-button
+            data-test-id="zenplay-settings"
+            routerLink="/workspace/settings"
+            [matTooltip]="'WORKSPACE.SHELL.OPEN_SETTINGS' | translate"
+            [attr.aria-label]="'WORKSPACE.SHELL.OPEN_SETTINGS' | translate"
+        >
+            <mat-icon>settings</mat-icon>
+        </a>
+        <a
+            mat-icon-button
+            data-test-id="zenplay-account"
+            routerLink="/profiles"
+            matTooltip="Perfiles"
+            aria-label="Perfiles"
+        >
+            <mat-icon>account_circle</mat-icon>
+        </a>
+    </div>
+
+    @if (mobileSearchOpen()) {
+        <label class="zenplay-mobile-search">
+            <mat-icon>search</mat-icon>
+            <input
+                #mobileSearchInput
+                data-test-id="zenplay-mobile-search-input"
+                type="search"
+                spellcheck="false"
+                [value]="searchQuery()"
+                [placeholder]="searchPlaceholder() | translate"
+                [attr.aria-label]="'WORKSPACE.SHELL.SEARCH_LABEL' | translate"
+                (input)="onSearchInput($event)"
+                (keydown.enter)="onSearchEnter($event)"
+                (keydown.escape)="closeMobileSearch()"
+            />
+            <button
+                type="button"
+                mat-icon-button
+                (click)="closeMobileSearch()"
+                [matTooltip]="'CLOSE' | translate"
+                [attr.aria-label]="'CLOSE' | translate"
+            >
+                <mat-icon>close</mat-icon>
+            </button>
+        </label>
+    }
+
+    <!-- Playlist switcher hidden on /settings: those controls are
+         playlist-scoped, but Settings is a global page. Per the UX
+         audit, leaving them visible implied switching playlists changes
+         which settings you're editing. -->
+    @if (!isSettingsRoute()) {
+        <app-playlist-switcher
+            class="playlist-switcher"
+            [currentTitle]="playlistTitle()"
+            [subtitle]="playlistSubtitle()"
+            [showPlaylistInfo]="canOpenPlaylistInfo()"
+            [showAccountInfo]="canOpenAccountInfo()"
+            [showAddPlaylist]="false"
+            [canRefreshActivePlaylist]="canRefreshPlaylist()"
+            [isRefreshingActivePlaylist]="isRefreshingPlaylist()"
+            (playlistInfoRequested)="onPlaylistInfoRequested()"
+            (accountInfoRequested)="onAccountInfoRequested()"
+            (accountInfoForPlaylistRequested)="
+                onAccountInfoForPlaylistRequested($event)
+            "
+            (addPlaylistRequested)="onAddPlaylistRequested()"
+            (refreshPlaylistRequested)="onRefreshPlaylistRequested()"
+        />
+    }
+
+    <!-- Settings search works without any playlist, so a fresh user can
+         find settings before importing a first source. -->
+    @if (!hasNoPlaylists() || isSettingsRoute()) {
+        <label class="search-field">
+            <mat-icon>search</mat-icon>
+            @if (searchScopeLabel()) {
+                <span class="search-chip search-chip--scope">
+                    {{ searchScopeLabel() }}
+                </span>
+            }
+            <input
+                #searchInput
+                type="search"
+                spellcheck="false"
+                [value]="searchQuery()"
+                (input)="onSearchInput($event)"
+                (keydown.enter)="onSearchEnter($event)"
+                [disabled]="!canUseSearch()"
+                [placeholder]="searchPlaceholder() | translate"
+                [attr.aria-label]="'WORKSPACE.SHELL.SEARCH_LABEL' | translate"
+            />
+            @if (searchStatusLabel()) {
+                <span class="search-chip search-chip--status">
+                    {{ searchStatusLabel() }}
+                </span>
+            }
+            <button
+                type="button"
+                class="command-trigger"
+                (click)="onCommandPaletteRequested()"
+                [matTooltip]="
+                    'WORKSPACE.SHELL.COMMAND_PALETTE_SHORTCUT' | translate
+                "
+                [attr.aria-label]="
+                    'WORKSPACE.SHELL.OPEN_COMMAND_PALETTE' | translate
+                "
+            >
+                <!-- The shortcut label is the affordance on a keyboard; on a
+                     phone it means nothing, but this button is the only way
+                     to open the palette, so it becomes an icon rather than
+                     disappearing. -->
+                <span class="command-trigger__shortcut">{{
+                    commandShortcutLabel
+                }}</span>
+                <mat-icon class="command-trigger__icon">bolt</mat-icon>
+            </button>
+        </label>
+    }
+
+    <!-- The "Add playlist" button stays visible on /settings — adding a
+         playlist is a global action, not playlist-scoped, so it must
+         remain reachable (e.g. a fresh user configuring the app before
+         importing their first source). Only the per-playlist shortcut
+         is hidden on Settings. -->
+    <div class="header-actions header-actions--leading">
+        <button
+            type="button"
+            class="shortcuts-trigger"
+            mat-icon-button
+            (click)="onShortcutsRequested()"
+            [matTooltip]="'WORKSPACE.SHORTCUTS.OPEN_TOOLTIP' | translate"
+            [attr.aria-label]="'WORKSPACE.SHORTCUTS.OPEN_ARIA' | translate"
+        >
+            <mat-icon>keyboard</mat-icon>
+        </button>
+        @if (parentalLockState() !== 'off') {
+            <button
+                type="button"
+                class="header-shortcut header-parental-lock"
+                mat-icon-button
+                data-test-id="header-parental-lock"
+                [class.is-active]="parentalLockState() === 'locked'"
+                (click)="parentalLockToggleRequested.emit()"
+                [matTooltip]="
+                    (parentalLockState() === 'locked'
+                        ? 'PARENTAL_LOCK.HEADER_UNLOCK'
+                        : 'PARENTAL_LOCK.HEADER_LOCK'
+                    ) | translate
+                "
+                [attr.aria-label]="
+                    (parentalLockState() === 'locked'
+                        ? 'PARENTAL_LOCK.HEADER_UNLOCK'
+                        : 'PARENTAL_LOCK.HEADER_LOCK'
+                    ) | translate
+                "
+                [attr.aria-pressed]="parentalLockState() === 'locked'"
+            >
+                <mat-icon>{{
+                    parentalLockState() === 'locked' ? 'lock' : 'lock_open'
+                }}</mat-icon>
+            </button>
+        }
+        @if (!isSettingsRoute()) {
+            @if (headerSidebarToggle(); as sidebarToggle) {
+                <button
+                    type="button"
+                    class="header-shortcut header-sidebar-toggle"
+                    [class.header-sidebar-toggle--collapsed]="
+                        !sidebarToggle.expanded
+                    "
+                    mat-icon-button
+                    (click)="onHeaderSidebarToggleRequested()"
+                    [matTooltip]="sidebarToggle.tooltip"
+                    [attr.aria-label]="sidebarToggle.ariaLabel"
+                    [attr.aria-pressed]="sidebarToggle.expanded"
+                >
+                    <mat-icon>view_sidebar</mat-icon>
+                </button>
+            }
+            @if (headerShortcut(); as action) {
+                <button
+                    type="button"
+                    class="header-shortcut"
+                    mat-icon-button
+                    [class.is-active]="action.active?.() ?? false"
+                    [disabled]="action.disabled?.() ?? false"
+                    [attr.aria-pressed]="action.active ? action.active() : null"
+                    (click)="onHeaderShortcutRequested()"
+                    [matTooltip]="action.tooltipKey | translate"
+                    [attr.aria-label]="action.ariaLabelKey | translate"
+                >
+                    <mat-icon>{{ action.icon }}</mat-icon>
+                </button>
+            }
+        }
+    </div>
+
+    @if (supportsDownloads()) {
+        <div class="header-actions header-actions--trailing">
+            <span class="download-btn-wrap">
+                @if (hasActiveDownloads()) {
+                    <span class="download-activity-bar" aria-hidden="true">
+                        <span class="download-activity-bar__fill"></span>
+                    </span>
+                }
+                @if (activeDownloadsCount() > 0) {
+                    <span
+                        class="download-count-badge"
+                        data-test-id="global-download-count"
+                        aria-hidden="true"
+                    >
+                        {{ activeDownloadsCount() }}
+                    </span>
+                }
+                <button
+                    type="button"
+                    class="header-shortcut"
+                    mat-icon-button
+                    [class.is-active]="isDownloadsView()"
+                    [class.has-activity]="hasActiveDownloads()"
+                    (click)="onDownloadsRequested()"
+                    [matTooltip]="'WORKSPACE.SHELL.RAIL_DOWNLOADS' | translate"
+                    [attr.aria-label]="
+                        ('WORKSPACE.SHELL.OPEN_DOWNLOADS' | translate) +
+                        (hasActiveDownloads()
+                            ? ' (' + activeDownloadsCount() + ')'
+                            : '')
+                    "
+                >
+                    <mat-icon>download</mat-icon>
+                </button>
+            </span>
+        </div>
+    }
+</header>

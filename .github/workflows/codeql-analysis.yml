@@ -1,0 +1,69 @@
+# For most projects, this workflow file will not need changing; you simply need
+# to commit it to your repository.
+#
+# You may wish to alter this file to override the set of languages analyzed,
+# or to provide custom queries or build logic.
+name: "CodeQL"
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master]
+  pull_request:
+    # The branches below must be a subset of the branches above
+    branches: [master]
+  schedule:
+    - cron: '0 20 * * 3'
+
+# A newer push to a pull request cancels that PR's still-running analysis:
+# only the latest commit's result matters, and superseded runs otherwise hold
+# runners the rest of the pipeline is queued for. Pushes to master, the weekly
+# schedule and manual dispatches get a unique group (run_id), so they are never
+# cancelled or replaced, the same pattern as ci.yml.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# Required so `codeql-action/analyze` can upload its SARIF results. Without an
+# explicit grant the default token is read-only and the upload fails with
+# "Resource not accessible by integration".
+permissions:
+  actions: read
+  contents: read
+  security-events: write
+
+jobs:
+  analyze:
+    name: Analyze
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # Override automatic language detection by changing the below list
+        # Supported options are ['csharp', 'cpp', 'go', 'java', 'javascript', 'python']
+        language: ['javascript']
+        # Learn more...
+        # https://docs.github.com/en/github/finding-security-vulnerabilities-and-errors-in-your-code/configuring-code-scanning#overriding-automatic-language-detection
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v7
+
+    # Initializes the CodeQL tools for scanning. PR runs analyze the merge
+    # commit checked out above (the modern default); JavaScript is
+    # interpreted, so no build step is needed before analysis.
+    - name: Initialize CodeQL
+      uses: github/codeql-action/init@v4.38.2
+      with:
+        languages: ${{ matrix.language }}
+        # Excludes the localhost dev/E2E mock servers from analysis; see the
+        # config file for why.
+        config-file: ./.github/codeql/codeql-config.yml
+        # If you wish to specify custom queries, you can do so here or in a config file.
+        # By default, queries listed here will override any specified in a config file.
+        # Prefix the list here with "+" to use these queries and those in the config file.
+        # queries: ./path/to/local/query, your-org/your-repo/queries@main
+
+    - name: Perform CodeQL Analysis
+      uses: github/codeql-action/analyze@v4.38.2

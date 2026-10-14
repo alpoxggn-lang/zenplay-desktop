@@ -1,0 +1,468 @@
+import { Component, input, output, signal } from '@angular/core';
+import { ComponentFixture, TestBed } from '@angular/core/testing';
+import { By } from '@angular/platform-browser';
+import { TranslateModule } from '@ngx-translate/core';
+import { SettingsStore } from '@iptvnator/services';
+import { ResolvedPortalPlayback } from '@iptvnator/shared/interfaces';
+import { PlaybackFallbackRequest } from '@iptvnator/playback/util';
+import type { PortalInlinePlayerComponent as PortalInlinePlayerComponentInstance } from './portal-inline-player.component';
+
+jest.unstable_mockModule('video.js', () => ({
+    default: jest.fn(),
+}));
+
+jest.unstable_mockModule('@yangkghjh/videojs-aspect-ratio-panel', () => ({}));
+jest.unstable_mockModule('videojs-contrib-quality-levels', () => ({}));
+jest.unstable_mockModule('videojs-quality-selector-hls', () => ({}));
+
+@Component({
+    selector: 'app-web-player-view',
+    standalone: true,
+    template: '<div data-test-id="stub-web-player-view"></div>',
+})
+class StubWebPlayerViewComponent {
+    readonly playbackSessionKey = input.required<string>();
+    readonly streamUrl = input.required<string>();
+    readonly title = input('');
+    readonly mediaTitle = input<unknown>(null);
+    readonly upNext = input<unknown>(null);
+    readonly playback = input<unknown>(null);
+    readonly volume = input(1);
+    readonly playerOverride = input<unknown>(null);
+    readonly startTime = input(0);
+    readonly seriesNavigation = input<unknown>(null);
+    readonly alternativeSources = input<unknown[]>([]);
+    readonly timeUpdate = output<{ currentTime: number; duration: number }>();
+    readonly externalFallbackRequested = output<PlaybackFallbackRequest>();
+    readonly alternativeSourceRequested = output<string>();
+    readonly playbackFailed = output<unknown>();
+    readonly playbackEnded = output<void>();
+    readonly previousEpisodeRequested = output<void>();
+    readonly nextEpisodeRequested = output<void>();
+}
+
+describe('PortalInlinePlayerComponent', () => {
+    let PortalInlinePlayerComponent: typeof import('./portal-inline-player.component').PortalInlinePlayerComponent;
+    let WebPlayerViewComponent: typeof import('../web-player-view/web-player-view.component').WebPlayerViewComponent;
+    let fixture: ComponentFixture<PortalInlinePlayerComponentInstance>;
+    let component: PortalInlinePlayerComponentInstance;
+
+    beforeAll(async () => {
+        ({ PortalInlinePlayerComponent } =
+            await import('./portal-inline-player.component'));
+        ({ WebPlayerViewComponent } =
+            await import('../web-player-view/web-player-view.component'));
+    });
+
+    beforeEach(async () => {
+        await TestBed.configureTestingModule({
+            imports: [PortalInlinePlayerComponent, TranslateModule.forRoot()],
+        })
+            .overrideComponent(PortalInlinePlayerComponent, {
+                remove: {
+                    imports: [WebPlayerViewComponent],
+                },
+                add: {
+                    imports: [StubWebPlayerViewComponent],
+                },
+            })
+            .compileComponents();
+
+        fixture = TestBed.createComponent(PortalInlinePlayerComponent);
+        component = fixture.componentInstance;
+        fixture.componentRef.setInput(
+            'playbackSessionKey',
+            'host-owned-session-key'
+        );
+    });
+
+    afterEach(() => {
+        fixture.destroy();
+    });
+
+    it('keeps the direct source for Copy URL when web playback is adaptive', () => {
+        fixture.componentRef.setInput('playback', {
+            streamUrl: '/api/media/adaptive/series/910850.mkv/master.m3u8',
+            webDirectFallbackUrl: '/api/media/series/910850.mkv',
+            title: 'Episode',
+        });
+        fixture.detectChanges();
+
+        expect(component.copyStreamUrl()).toBe('/api/media/series/910850.mkv');
+    });
+
+    it('forwards the adaptive duration-final marker unchanged', () => {
+        const updates: unknown[] = [];
+        component.timeUpdate.subscribe((event) => updates.push(event));
+
+        component.onTimeUpdate({
+            currentTime: 12,
+            duration: 15,
+            durationFinal: false,
+        });
+
+        expect(updates).toEqual([
+            { currentTime: 12, duration: 15, durationFinal: false },
+        ]);
+    });
+
+    it('renders episode metadata below the title and forwards embedded MPV navigation events', () => {
+        const events: string[] = [];
+        const seriesNavigation = {
+            canPrevious: true,
+            canNext: false,
+            autoplayEnabled: true,
+        };
+        fixture.componentRef.setInput('playback', {
+            streamUrl: 'https://example.test/series/1002.mp4',
+            title: 'Episode 2',
+            startTime: 12,
+        });
+        fixture.componentRef.setInput('episodeMetadata', {
+            label: 'S01E02',
+            title: 'Episode 2',
+            seasonNumber: 1,
+            episodeNumber: 2,
+        });
+        fixture.componentRef.setInput('seriesNavigation', seriesNavigation);
+        (
+            component as unknown as {
+                playbackEnded: { subscribe: (fn: () => void) => void };
+                previousEpisodeRequested: {
+                    subscribe: (fn: () => void) => void;
+                };
+                nextEpisodeRequested: { subscribe: (fn: () => void) => void };
+            }
+        ).playbackEnded.subscribe(() => events.push('ended'));
+        (
+            component as unknown as {
+                previousEpisodeRequested: {
+                    subscribe: (fn: () => void) => void;
+                };
+            }
+        ).previousEpisodeRequested.subscribe(() => events.push('previous'));
+        (
+            component as unknown as {
+                nextEpisodeRequested: { subscribe: (fn: () => void) => void };
+            }
+        ).nextEpisodeRequested.subscribe(() => events.push('next'));
+
+        fixture.detectChanges();
+
+        expect(fixture.nativeElement.textContent).toContain(
+            'S01E02 - Episode 2'
+        );
+
+        const webPlayer = fixture.debugElement.query(
+            By.directive(StubWebPlayerViewComponent)
+        ).componentInstance as StubWebPlayerViewComponent;
+        expect(webPlayer.seriesNavigation()).toBe(seriesNavigation);
+        expect(webPlayer.playbackSessionKey()).toBe('host-owned-session-key');
+
+        webPlayer.playbackEnded.emit();
+        webPlayer.previousEpisodeRequested.emit();
+        webPlayer.nextEpisodeRequested.emit();
+
+        expect(events).toEqual(['ended', 'previous', 'next']);
+    });
+
+    it('forwards the exact resolved playback fallback request unchanged', () => {
+        const playback: ResolvedPortalPlayback = {
+            streamUrl: 'https://example.test/live.m3u8',
+            title: 'Header-bearing live stream',
+            isLive: true,
+            headers: { Authorization: 'Bearer token' },
+        };
+        const request: PlaybackFallbackRequest = {
+            player: 'mpv',
+            playback,
+            diagnostic: {
+                code: 'network-error',
+                player: 'videojs',
+                source: 'hls',
+                sourceUrl: playback.streamUrl,
+                container: '',
+                mimeType: '',
+                videoCodecs: [],
+                audioCodecs: [],
+            },
+            trackLaunch: jest.fn(),
+        };
+        let forwarded: PlaybackFallbackRequest | undefined;
+        component.externalFallbackRequested.subscribe(
+            (value) => (forwarded = value)
+        );
+        fixture.componentRef.setInput('playback', playback);
+        fixture.detectChanges();
+
+        const webPlayer = fixture.debugElement.query(
+            By.directive(StubWebPlayerViewComponent)
+        ).componentInstance as StubWebPlayerViewComponent;
+        webPlayer.externalFallbackRequested.emit(request);
+
+        expect(forwarded).toBe(request);
+        expect(forwarded?.playback).toBe(playback);
+    });
+
+    describe('playerMediaTitle', () => {
+        it('uses the series title with the episode label for episode playback', () => {
+            fixture.componentRef.setInput('playback', {
+                streamUrl: 'https://example.test/series/1002.mp4',
+                title: 'Episode 2',
+            });
+            fixture.componentRef.setInput('episodeMetadata', {
+                label: 'S01E02',
+                title: 'Episode 2',
+                seasonNumber: 1,
+                episodeNumber: 2,
+            });
+            fixture.componentRef.setInput('seriesTitle', 'Breaking Code');
+            fixture.detectChanges();
+
+            expect(component.playerMediaTitle()).toEqual({
+                primary: 'Breaking Code',
+                secondary: 'S01E02',
+            });
+
+            const webPlayer = fixture.debugElement.query(
+                By.directive(StubWebPlayerViewComponent)
+            ).componentInstance as StubWebPlayerViewComponent;
+            expect(webPlayer.mediaTitle()).toEqual({
+                primary: 'Breaking Code',
+                secondary: 'S01E02',
+            });
+        });
+
+        it('falls back to the playback title when no series title is provided', () => {
+            fixture.componentRef.setInput('playback', {
+                streamUrl: 'https://example.test/series/1002.mp4',
+                title: 'Episode 2',
+            });
+            fixture.componentRef.setInput('episodeMetadata', {
+                label: 'S01E02',
+                seasonNumber: 1,
+                episodeNumber: 2,
+            });
+            fixture.detectChanges();
+
+            expect(component.playerMediaTitle()).toEqual({
+                primary: 'Episode 2',
+                secondary: 'S01E02',
+            });
+        });
+
+        it('is a single line for movie playback and ignores the series title', () => {
+            fixture.componentRef.setInput('playback', {
+                streamUrl: 'https://example.test/vod/1.mp4',
+                title: 'Some Movie',
+            });
+            fixture.componentRef.setInput('seriesTitle', 'Unrelated Series');
+            fixture.detectChanges();
+
+            expect(component.playerMediaTitle()).toEqual({
+                primary: 'Some Movie',
+                secondary: null,
+            });
+        });
+
+        it('is null without a playback title', () => {
+            fixture.componentRef.setInput('playback', {
+                streamUrl: 'https://example.test/vod/1.mp4',
+                title: '',
+            });
+            fixture.detectChanges();
+
+            expect(component.playerMediaTitle()).toBeNull();
+        });
+    });
+
+    it('offers no back arrow in the now-playing bar: leaving the page belongs to the detail shell', () => {
+        fixture.componentRef.setInput('playback', {
+            streamUrl: 'https://example.test/vod/1.mp4',
+            title: 'Movie',
+        });
+        fixture.detectChanges();
+
+        const header = fixture.nativeElement.querySelector(
+            '.player-shell__header'
+        ) as HTMLElement;
+        expect(header).toBeTruthy();
+        expect(header.querySelector('.player-shell__back')).toBeNull();
+        expect(
+            Array.from(header.querySelectorAll('mat-icon')).map((icon) =>
+                icon.textContent?.trim()
+            )
+        ).not.toContain('arrow_back');
+        expect('backClicked' in component).toBe(false);
+    });
+
+    describe('with strip country prefix enabled', () => {
+        beforeEach(async () => {
+            TestBed.resetTestingModule();
+            await TestBed.configureTestingModule({
+                imports: [
+                    PortalInlinePlayerComponent,
+                    TranslateModule.forRoot(),
+                ],
+                providers: [
+                    {
+                        provide: SettingsStore,
+                        useValue: { stripCountryPrefix: signal(true) },
+                    },
+                ],
+            })
+                .overrideComponent(PortalInlinePlayerComponent, {
+                    remove: {
+                        imports: [WebPlayerViewComponent],
+                    },
+                    add: {
+                        imports: [StubWebPlayerViewComponent],
+                    },
+                })
+                .compileComponents();
+
+            fixture = TestBed.createComponent(PortalInlinePlayerComponent);
+            fixture.componentRef.setInput(
+                'playbackSessionKey',
+                'host-owned-session-key'
+            );
+            component = fixture.componentInstance;
+        });
+
+        it('strips the prefix from live playback titles', () => {
+            fixture.componentRef.setInput('playback', {
+                streamUrl: 'https://example.com/live.m3u8',
+                title: 'US | CNN',
+                isLive: true,
+            });
+            fixture.detectChanges();
+
+            expect(component.title()).toBe('CNN');
+        });
+
+        it('keeps VOD titles untouched', () => {
+            fixture.componentRef.setInput('playback', {
+                streamUrl: 'https://example.com/movie.mp4',
+                title: 'US | Some Movie',
+            });
+            fixture.detectChanges();
+
+            expect(component.title()).toBe('US | Some Movie');
+        });
+    });
+
+    describe('ambient background fill', () => {
+        async function setup(
+            ambientEnabled: boolean,
+            player = 'videojs'
+        ): Promise<void> {
+            TestBed.resetTestingModule();
+            await TestBed.configureTestingModule({
+                imports: [
+                    PortalInlinePlayerComponent,
+                    TranslateModule.forRoot(),
+                ],
+                providers: [
+                    {
+                        provide: SettingsStore,
+                        useValue: {
+                            player: signal(player),
+                            playerAmbientMode: signal(ambientEnabled),
+                            stripCountryPrefix: signal(false),
+                        },
+                    },
+                ],
+            })
+                .overrideComponent(PortalInlinePlayerComponent, {
+                    remove: { imports: [WebPlayerViewComponent] },
+                    add: { imports: [StubWebPlayerViewComponent] },
+                })
+                .compileComponents();
+
+            fixture = TestBed.createComponent(PortalInlinePlayerComponent);
+            fixture.componentRef.setInput(
+                'playbackSessionKey',
+                'host-owned-session-key'
+            );
+            component = fixture.componentInstance;
+        }
+
+        const ambientEl = () =>
+            fixture.nativeElement.querySelector('.player-shell__ambient');
+
+        it('renders a poster-backed ambient layer for VOD when enabled', async () => {
+            await setup(true);
+            fixture.componentRef.setInput('playback', {
+                streamUrl: 'https://example.com/movie.mp4',
+                title: 'Some Movie',
+                thumbnail: 'https://cdn.example.com/poster.jpg',
+            });
+            fixture.detectChanges();
+
+            const layer = ambientEl() as HTMLElement | null;
+            expect(component.ambientEnabled()).toBe(true);
+            expect(layer).toBeTruthy();
+            expect(layer?.style.getPropertyValue('--ambient-image')).toBe(
+                'url("https://cdn.example.com/poster.jpg")'
+            );
+        });
+
+        it('does not render the ambient layer when the setting is off', async () => {
+            await setup(false);
+            fixture.componentRef.setInput('playback', {
+                streamUrl: 'https://example.com/movie.mp4',
+                title: 'Some Movie',
+                thumbnail: 'https://cdn.example.com/poster.jpg',
+            });
+            fixture.detectChanges();
+
+            expect(component.ambientEnabled()).toBe(false);
+            expect(ambientEl()).toBeNull();
+        });
+
+        it('skips the ambient layer for live channels and without a poster', async () => {
+            await setup(true);
+            fixture.componentRef.setInput('playback', {
+                streamUrl: 'https://example.com/live.m3u8',
+                title: 'CNN',
+                thumbnail: 'https://cdn.example.com/logo.png',
+                isLive: true,
+            });
+            fixture.detectChanges();
+            expect(ambientEl()).toBeNull();
+
+            fixture.componentRef.setInput('playback', {
+                streamUrl: 'https://example.com/movie.mp4',
+                title: 'No Poster Movie',
+            });
+            fixture.detectChanges();
+            expect(ambientEl()).toBeNull();
+        });
+
+        it('keeps the ambient layer off for non-web engines like embedded MPV', async () => {
+            await setup(true, 'embedded-mpv');
+            fixture.componentRef.setInput('playback', {
+                streamUrl: 'https://example.com/movie.mp4',
+                title: 'Some Movie',
+                thumbnail: 'https://cdn.example.com/poster.jpg',
+            });
+            fixture.detectChanges();
+
+            expect(component.ambientEnabled()).toBe(false);
+            expect(ambientEl()).toBeNull();
+        });
+
+        it('rejects non-http(s) poster URLs to avoid CSS breakout', async () => {
+            await setup(true);
+            fixture.componentRef.setInput('playback', {
+                streamUrl: 'https://example.com/movie.mp4',
+                title: 'Sneaky',
+                thumbnail: 'javascript:alert(1)',
+            });
+            fixture.detectChanges();
+
+            expect(component.ambientImageStyle()).toBeNull();
+            expect(ambientEl()).toBeNull();
+        });
+    });
+});

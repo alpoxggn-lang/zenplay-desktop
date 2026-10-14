@@ -1,0 +1,30 @@
+<div #playerRoot class="html-video-player-shell">
+    <video
+        #videoPlayer
+        id="video-player"
+        autoplay
+        playsinline
+        [controls]="!sharedControls"
+    ></video>
+
+    @if (sharedControls) {
+        <app-player-controls
+            [controller]="controlsAdapter"
+            [playerSurface]="playerRoot"
+            [fullscreenTarget]="fullscreenTarget()"
+            [mediaTitle]="mediaTitle()"
+            [upNext]="upNext()"
+            [timelineSegments]="timelineSegments()"
+            [showControls]="interactionEnabled()"
+            [shortcutsEnabled]="interactionEnabled()"
+            (previousEpisodeRequested)="previousEpisodeRequested.emit()"
+            (nextEpisodeRequested)="nextEpisodeRequested.emit()"
+        />
+    } @else {
+        <app-series-playback-navigation-controls
+            [navigation]="seriesNavigation"
+            (previousEpisodeRequested)="previousEpisodeRequested.emit()"
+            (nextEpisodeRequested)="nextEpisodeRequested.emit()"
+        />
+    }
+</div>

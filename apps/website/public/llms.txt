@@ -1,0 +1,56 @@
+# IPTVnator
+
+> IPTVnator is an open-source cross-platform IPTV player (desktop + web) that supports M3U/M3U8 playlists, Xtream Codes API, Stalker portals, and XMLTV EPG.
+
+## Canonical URLs
+
+- Website: https://4gray.github.io/iptvnator/
+- Blog: https://4gray.github.io/iptvnator/blog/
+- Guides by task: https://4gray.github.io/iptvnator/guides/
+- Latest Release: https://github.com/4gray/iptvnator/releases/latest
+- Downloads overview: https://4gray.github.io/iptvnator/download/
+- Download for Windows: https://4gray.github.io/iptvnator/download/windows/
+- Download for macOS: https://4gray.github.io/iptvnator/download/macos/
+- Download for Linux: https://4gray.github.io/iptvnator/download/linux/
+- Self-host the browser version with Docker: https://4gray.github.io/iptvnator/download/docker/
+- Blog topic, all guides: https://4gray.github.io/iptvnator/blog/tag/guide/
+- Blog topic, release notes: https://4gray.github.io/iptvnator/blog/tag/release/
+- Blog topic, troubleshooting: https://4gray.github.io/iptvnator/blog/tag/troubleshooting/
+- Guide, Xtream Codes setup: https://4gray.github.io/iptvnator/blog/xtream-codes-setup-guide/
+- Guide, Stalker/Ministra portal setup: https://4gray.github.io/iptvnator/blog/stalker-portal-setup-guide/
+- Guide, M3U playlist and EPG setup: https://4gray.github.io/iptvnator/blog/m3u-playlist-epg-setup-guide/
+- Guide, offline viewing with the download manager (desktop): https://4gray.github.io/iptvnator/blog/offline-downloads-guide/
+- Guide, alternative sources for a movie across your own playlists (desktop): https://4gray.github.io/iptvnator/blog/alternative-sources-guide/
+- Guide, phone remote control setup (desktop): https://4gray.github.io/iptvnator/blog/remote-control-guide/
+- Troubleshooting, EPG shows the wrong program or nothing (channel mapping, time offset): https://4gray.github.io/iptvnator/blog/epg-wrong-program-fix/
+- Guide, optional TMDB metadata enrichment (what is sent, API key, cache): https://4gray.github.io/iptvnator/blog/tmdb-metadata-guide/
+- Features overview: https://4gray.github.io/iptvnator/features/
+- Feature, M3U playlist player: https://4gray.github.io/iptvnator/features/m3u-player/
+- Feature, Xtream Codes player: https://4gray.github.io/iptvnator/features/xtream-codes-player/
+- Feature, Stalker portal player: https://4gray.github.io/iptvnator/features/stalker-portal-player/
+- Feature, TV guide (EPG): https://4gray.github.io/iptvnator/features/epg/
+- Feature, phone remote control: https://4gray.github.io/iptvnator/features/remote-control/
+- Comparisons overview: https://4gray.github.io/iptvnator/compare/
+- Compare, M3U vs Xtream Codes vs Stalker portal: https://4gray.github.io/iptvnator/compare/m3u-vs-xtream-vs-stalker/
+- Compare, playback engines (built-in vs MPV/VLC vs embedded MPV): https://4gray.github.io/iptvnator/compare/playback-engines/
+- Compare, desktop app vs self-hosted browser version: https://4gray.github.io/iptvnator/compare/desktop-vs-browser/
+- Compare, IPTVnator vs VLC (when a general media player is enough): https://4gray.github.io/iptvnator/compare/iptvnator-vs-vlc/
+- Compare, IPTVnator vs Kodi (media center with a PVR add-on vs dedicated player): https://4gray.github.io/iptvnator/compare/iptvnator-vs-kodi/
+- Compare, IPTV on a computer vs on a TV box (which room does what): https://4gray.github.io/iptvnator/compare/computer-vs-tv-box/
+- Release Notes (v0.18): https://4gray.github.io/iptvnator/blog/v0-18-release-notes/
+- Troubleshooting (macOS app damaged fix): https://4gray.github.io/iptvnator/blog/macos-arm-app-damaged-fix/
+- Source Code: https://github.com/4gray/iptvnator
+- Telegram: https://t.me/iptvnator
+- GitHub Sponsors: https://github.com/sponsors/4gray
+- Ko-fi: https://ko-fi.com/4gray
+
+## Product Scope
+
+- IPTVnator is a media player application.
+- It does not provide, host, or sell playlists, channels, or media content.
+- Any channel names or metadata shown in screenshots/posts are demo examples only.
+
+## Machine-readable Discovery
+
+- Sitemap: https://4gray.github.io/iptvnator/sitemap-index.xml
+- Robots: https://4gray.github.io/iptvnator/robots.txt

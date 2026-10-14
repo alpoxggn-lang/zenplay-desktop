@@ -1,0 +1,113 @@
+/**
+ * Minimal structural typings for the lazily imported `shaka-player` module.
+ *
+ * The vendor package ships clutz-generated global namespace typings that are
+ * awkward to consume from an ESM library. These interfaces cover exactly the
+ * surface the app uses and double as the seam for unit-test fakes: the session
+ * accepts any {@link ShakaModuleLoader}, so specs never touch the real module.
+ */
+
+export interface ShakaAudioTrackLike {
+    active: boolean;
+    language: string;
+    label: string | null;
+    roles: string[];
+}
+
+export interface ShakaTextTrackLike {
+    id: number;
+    active: boolean;
+    language: string;
+    label: string | null;
+    kind: string | null;
+}
+
+export interface ShakaVariantTrackLike {
+    id: number;
+    active: boolean;
+    language: string;
+    label: string | null;
+    height: number | null;
+    width: number | null;
+    bandwidth: number;
+    /**
+     * Identifies the exact audio stream inside the variant. Two same-language
+     * audio tracks (main vs. commentary, stereo vs. 5.1) have different ids,
+     * so quality filtering pins to it rather than to `language`.
+     */
+    audioId?: number | null;
+    // Descriptive fields the stream-info popover reads. Optional because
+    // Shaka leaves them null for streams whose manifest does not declare them.
+    videoCodec?: string | null;
+    audioCodec?: string | null;
+    videoBandwidth?: number | null;
+    audioBandwidth?: number | null;
+    channelsCount?: number | null;
+    audioSamplingRate?: number | null;
+    frameRate?: number | null;
+    mimeType?: string | null;
+}
+
+export type { ShakaErrorLike } from '@iptvnator/playback/util';
+
+export type ShakaResponseFilter = (
+    type: number,
+    response: { data: BufferSource }
+) => void;
+
+export interface ShakaNetworkingEngineLike {
+    registerResponseFilter(filter: ShakaResponseFilter): void;
+    unregisterResponseFilter(filter: ShakaResponseFilter): void;
+}
+
+export interface ShakaPlayerLike {
+    getNetworkingEngine?(): ShakaNetworkingEngineLike | null;
+    attach(mediaElement: HTMLMediaElement): Promise<unknown>;
+    configure(config: Record<string, unknown>): boolean;
+    load(assetUri: string): Promise<unknown>;
+    destroy(): Promise<unknown>;
+    addEventListener(type: string, listener: (event: Event) => void): void;
+    removeEventListener(type: string, listener: (event: Event) => void): void;
+    getAudioTracks(): ShakaAudioTrackLike[];
+    selectAudioTrack(track: ShakaAudioTrackLike): void;
+    getVariantTracks(): ShakaVariantTrackLike[];
+    /**
+     * Manual quality selection. Callers must disable ABR first via
+     * `configure({abr: {enabled: false}})` or the ABR manager immediately
+     * overrides the choice. `clearBuffer` keeps the switch immediate.
+     */
+    selectVariantTrack(
+        track: ShakaVariantTrackLike,
+        clearBuffer?: boolean
+    ): void;
+    getTextTracks(): ShakaTextTrackLike[];
+    /**
+     * Shaka 5 visibility model: selecting a track shows it, `null` unloads
+     * the active track (subtitles off). There is no separate visibility API.
+     */
+    selectTextTrack(track: ShakaTextTrackLike | null): void;
+    isLive(): boolean;
+}
+
+export interface ShakaModuleLike {
+    Player: {
+        new (): ShakaPlayerLike;
+        isBrowserSupported(): boolean;
+    };
+    polyfill: {
+        installAll(): void;
+    };
+}
+
+export type ShakaModuleLoader = () => Promise<ShakaModuleLike>;
+
+/**
+ * Default production loader. The dynamic import keeps shaka-player (~267 KB
+ * gzip) out of the main bundle until the first `.mpd` stream starts.
+ */
+export const loadShakaModule: ShakaModuleLoader = async () => {
+    const module = (await import('shaka-player')) as unknown as
+        { default?: ShakaModuleLike } | ShakaModuleLike;
+    return ((module as { default?: ShakaModuleLike }).default ??
+        module) as ShakaModuleLike;
+};

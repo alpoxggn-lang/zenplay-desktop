@@ -1,0 +1,80 @@
+---
+import { getCollection } from 'astro:content';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import FeaturedBlogPost from '../../components/FeaturedBlogPost.astro';
+import BlogPostCard from '../../components/BlogPostCard.astro';
+import BlogTagRail from '../../components/BlogTagRail.astro';
+
+const includeDrafts = import.meta.env.DEV || import.meta.env.PUBLIC_INCLUDE_DRAFTS === 'true';
+
+const posts = (await getCollection('blog'))
+  .filter((post) => includeDrafts || !post.data.draft)
+  .sort((a, b) => b.data.pubDate.valueOf() - a.data.pubDate.valueOf());
+
+const featuredPost = posts.find((post) => post.data.featured) ?? posts[0];
+const remainingPosts = featuredPost ? posts.filter((post) => post.id !== featuredPost.id) : [];
+---
+
+<BaseLayout
+  title="Blog | IPTVnator"
+  description="Release notes, tutorials, and project updates from the IPTVnator team."
+  keywords={['IPTVnator blog', 'IPTV release notes', 'EPG, Archive setup', 'Xtream Codes Player (XC)', 'Stalker Player Support (STB)']}
+>
+  <section class="pt-36 pb-24">
+    <div class="mx-auto max-w-6xl px-6">
+      <!-- Header -->
+      <div class="max-w-2xl">
+        <span class="font-mono text-xs uppercase tracking-[0.2em] text-accent-500">
+          Blog
+        </span>
+        <h1 class="mt-4 font-display text-3xl font-bold tracking-tight text-surface-50 sm:text-4xl">
+          Blog
+        </h1>
+        <p class="mt-4 text-lg text-surface-400">
+          Release notes, tutorials, and project updates.
+        </p>
+        <p class="mt-4 text-sm text-surface-400">
+          Looking for a how-to? <a href="/iptvnator/guides/" class="text-accent-400 underline decoration-accent-500/30 underline-offset-4 hover:text-accent-300">Browse guides by task →</a>
+        </p>
+      </div>
+
+      <BlogTagRail posts={posts} class="mt-8" />
+
+      {posts.length > 0 ? (
+        <>
+          {/* Featured post */}
+          {featuredPost && (
+            <div class="mt-14">
+              <FeaturedBlogPost
+                title={featuredPost.data.title}
+                description={featuredPost.data.description}
+                pubDate={featuredPost.data.pubDate}
+                slug={featuredPost.id}
+                tags={featuredPost.data.tags}
+                heroImage={featuredPost.data.heroImage}
+              />
+            </div>
+          )}
+
+          {/* Remaining posts grid */}
+          {remainingPosts.length > 0 && (
+            <div class="mt-10 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+              {remainingPosts.map((post) => (
+                <BlogPostCard
+                  title={post.data.title}
+                  description={post.data.description}
+                  pubDate={post.data.pubDate}
+                  slug={post.id}
+                  tags={post.data.tags}
+                  heroImage={post.data.heroImage}
+                />
+              ))}
+            </div>
+          )}
+        </>
+      ) : (
+        <p class="mt-14 text-center text-surface-500">No posts yet. Check back soon!</p>
+      )}
+    </div>
+  </section>
+</BaseLayout>

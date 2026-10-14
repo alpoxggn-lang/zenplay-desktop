@@ -1,0 +1,17 @@
+@use '../../../../../../ui/styles/detail-view' as detail-view;
+
+@include detail-view.base();
+
+:host {
+    display: block;
+    flex: 1;
+    height: 100%;
+    min-height: 0;
+    min-width: 0;
+    overflow: hidden;
+}
+
+app-portal-detail-shell {
+    display: block;
+    height: 100%;
+}

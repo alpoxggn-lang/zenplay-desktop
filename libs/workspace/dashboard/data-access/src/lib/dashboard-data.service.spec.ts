@@ -1,0 +1,3265 @@
+import { signal } from '@angular/core';
+import { TestBed } from '@angular/core/testing';
+import { Store } from '@ngrx/store';
+import { TranslateService } from '@ngx-translate/core';
+import {
+    selectAllPlaylistsMeta,
+    selectPlaylistsLoadingFlag,
+} from '@iptvnator/m3u-state';
+import { EMPTY, of, Subject } from 'rxjs';
+import { DatabaseService, PlaylistsService } from '@iptvnator/services';
+import {
+    PlaybackPositionData,
+    Playlist,
+    PlaylistMeta,
+} from '@iptvnator/shared/interfaces';
+import { PORTAL_PLAYBACK_POSITIONS } from '@iptvnator/portal/shared/util';
+import { XTREAM_DATA_SOURCE } from '@iptvnator/portal/xtream/data-access';
+import {
+    DashboardDataService,
+    DashboardFavoriteItem,
+    GlobalRecentItem,
+} from './dashboard-data.service';
+import {
+    CONTINUE_WATCHING_SERIES_LOOKUP_LIMIT,
+    CONTINUE_WATCHING_VISIBLE_ITEMS,
+    CONTINUE_WATCHING_SERIES_LOOKUP_WAIT_MS,
+} from './dashboard-series-continuation.util';
+import {
+    DashboardSeriesEpisodesService,
+    dashboardSeriesEpisodesKey,
+    type DashboardSeriesEpisodes,
+    type DashboardSeriesEpisodesRequest,
+} from './dashboard-series-episodes.service';
+
+describe('DashboardDataService', () => {
+    let service: DashboardDataService;
+    const playlistsLoadedSignal = signal(true);
+
+    const waitForMockCall = async (mock: jest.Mock, attempts = 10) => {
+        for (let index = 0; index < attempts; index++) {
+            if (mock.mock.calls.length > 0) {
+                return;
+            }
+            await Promise.resolve();
+        }
+
+        throw new Error('Expected mock to be called');
+    };
+
+    const createPendingItems = <T = never>() => {
+        let resolvePending: (items: T[]) => void = () => {
+            throw new Error('Pending item promise resolved before init');
+        };
+        const promise = new Promise<T[]>((resolve) => {
+            resolvePending = resolve;
+        });
+
+        return {
+            promise,
+            resolve: resolvePending,
+        };
+    };
+
+    const createDefaultPlaylists = (): PlaylistMeta[] => [
+        {
+            _id: 'm3u-1',
+            title: 'M3U Playlist',
+            count: 1,
+            importDate: '2026-01-01T00:00:00.000Z',
+            autoRefresh: false,
+            favorites: ['channel-1', 'https://example.com/stream-2.m3u8'],
+            recentlyViewed: [
+                {
+                    source: 'm3u',
+                    id: 'https://example.com/stream-1.m3u8',
+                    url: 'https://example.com/stream-1.m3u8',
+                    title: 'Channel One',
+                    channel_id: 'channel-1',
+                    poster_url: 'https://example.com/logo-1.png',
+                    tvg_id: 'tvg-1',
+                    tvg_name: 'Channel One',
+                    group_title: 'News',
+                    category_id: 'live',
+                    added_at: '2026-02-01T12:00:00.000Z',
+                },
+            ],
+        },
+        {
+            _id: 'xtream-1',
+            title: 'Xtream Playlist',
+            count: 1,
+            importDate: '2026-01-01T00:00:00.000Z',
+            autoRefresh: false,
+            serverUrl: 'https://example.com',
+        },
+    ];
+
+    const playlistsSignal = signal<PlaylistMeta[]>(createDefaultPlaylists());
+
+    const storeMock = {
+        selectSignal: jest.fn((selector: unknown) => {
+            if (selector === selectAllPlaylistsMeta) {
+                return playlistsSignal;
+            }
+            if (selector === selectPlaylistsLoadingFlag) {
+                return playlistsLoadedSignal;
+            }
+            return signal(null);
+        }),
+        dispatch: jest.fn(),
+    };
+
+    const dbServiceMock = {
+        getGlobalRecentlyAdded: jest.fn().mockResolvedValue([]),
+        getGlobalRecentlyViewed: jest.fn().mockResolvedValue([]),
+        getAllGlobalFavorites: jest.fn().mockResolvedValue([]),
+        removeFromFavorites: jest.fn().mockResolvedValue(undefined),
+        removeRecentItem: jest.fn().mockResolvedValue(undefined),
+    };
+    const xtreamDataSourceMock = {
+        getContent: jest.fn().mockResolvedValue([]),
+        getFavorites: jest.fn().mockResolvedValue([]),
+        getRecentItems: jest.fn().mockResolvedValue([]),
+        removeFavorite: jest.fn().mockResolvedValue(undefined),
+        removeRecentItem: jest.fn().mockResolvedValue(undefined),
+    };
+    const playlistMock: Playlist = {
+        _id: 'm3u-1',
+        title: 'M3U Playlist',
+        count: 2,
+        importDate: '2026-01-01T00:00:00.000Z',
+        lastUsage: '2026-01-01T00:00:00.000Z',
+        autoRefresh: false,
+        favorites: ['channel-1', 'https://example.com/stream-2.m3u8'],
+        playlist: {
+            items: [
+                {
+                    id: 'channel-1',
+                    name: 'Channel One',
+                    url: 'https://example.com/stream-1.m3u8',
+                    tvg: {
+                        logo: 'https://example.com/logo-1.png',
+                        id: 'tvg-1',
+                        name: 'Channel One',
+                    },
+                },
+                {
+                    id: 'channel-2',
+                    name: 'Channel Two',
+                    url: 'https://example.com/stream-2.m3u8',
+                    tvg: {
+                        logo: 'https://example.com/logo-2.png',
+                        id: 'tvg-2',
+                        name: 'Channel Two',
+                    },
+                },
+            ],
+        },
+    } as Playlist;
+    const playlistsServiceMock = {
+        getM3uFavoriteChannels: jest.fn().mockReturnValue(of(null)),
+        getPlaylistById: jest.fn().mockReturnValue(of(playlistMock)),
+        transformPlaylistFavorites: jest.fn().mockReturnValue(of(playlistMock)),
+        removeFromM3uRecentlyViewed: jest.fn().mockReturnValue(
+            of({
+                ...playlistMock,
+                recentlyViewed: [],
+            })
+        ),
+    };
+
+    const playbackPositionsMock = {
+        savePlaybackPosition: jest.fn().mockResolvedValue(undefined),
+        savePlaybackPositionOrThrow: jest.fn().mockResolvedValue(undefined),
+        getPlaybackPosition: jest.fn().mockResolvedValue(null),
+        getSeriesPlaybackPositions: jest.fn().mockResolvedValue([]),
+        getAllPlaybackPositions: jest
+            .fn<Promise<PlaybackPositionData[]>, [string]>()
+            .mockResolvedValue([]),
+        clearPlaybackPosition: jest.fn().mockResolvedValue(undefined),
+    };
+
+    // Episode lists answer from `seriesEpisodeAnswers`; a series with no
+    // answer stays loading, as a slow portal would.
+    const seriesEpisodeEntries = signal<
+        ReadonlyMap<string, DashboardSeriesEpisodes>
+    >(new Map());
+    const seriesEpisodeAnswers = new Map<string, DashboardSeriesEpisodes>();
+    const seriesEpisodesMock = {
+        episodes: seriesEpisodeEntries.asReadonly(),
+        request: jest.fn((requests: DashboardSeriesEpisodesRequest[]) => {
+            seriesEpisodeEntries.update((entries) => {
+                const next = new Map(entries);
+                for (const { playlistId, seriesId } of requests) {
+                    const key = dashboardSeriesEpisodesKey(
+                        playlistId,
+                        seriesId
+                    );
+                    next.set(
+                        key,
+                        seriesEpisodeAnswers.get(key) ?? { status: 'loading' }
+                    );
+                }
+                return next;
+            });
+        }),
+    };
+
+    const createTestingModuleProviders = () => ({
+        providers: [
+            DashboardDataService,
+            { provide: Store, useValue: storeMock },
+            { provide: DatabaseService, useValue: dbServiceMock },
+            {
+                provide: XTREAM_DATA_SOURCE,
+                useValue: xtreamDataSourceMock,
+            },
+            {
+                provide: PlaylistsService,
+                useValue: playlistsServiceMock,
+            },
+            {
+                provide: TranslateService,
+                useValue: {
+                    instant: (key: string) => key,
+                    onLangChange: of(null),
+                    onDefaultLangChange: EMPTY,
+                    onTranslationChange: EMPTY,
+                    currentLang: 'en',
+                    defaultLang: 'en',
+                },
+            },
+            {
+                provide: PORTAL_PLAYBACK_POSITIONS,
+                useValue: playbackPositionsMock,
+            },
+            {
+                provide: DashboardSeriesEpisodesService,
+                useValue: seriesEpisodesMock,
+            },
+        ],
+    });
+
+    beforeEach(() => {
+        Object.defineProperty(window, 'electron', {
+            value: {
+                dbGetRecentlyViewed: jest.fn(),
+                dbClearRecentlyViewed: jest.fn(),
+                dbGetAllGlobalFavorites: jest.fn(),
+                dbGetGlobalRecentlyAdded: jest.fn(),
+                dbAddFavorite: jest.fn(),
+                dbRemoveRecentItem: jest.fn(),
+                dbRemoveFavorite: jest.fn(),
+                dbGetFavorites: jest.fn(),
+                dbReorderGlobalFavorites: jest.fn(),
+                dbGetRecentItems: jest.fn(),
+                dbAddRecentItem: jest.fn(),
+                dbClearPlaylistRecentItems: jest.fn(),
+                dbRemoveRecentItemsBatch: jest.fn(),
+                dbGetContentByXtreamId: jest.fn(),
+            } as unknown as Window['electron'],
+            configurable: true,
+        });
+        playlistsLoadedSignal.set(true);
+        playlistsSignal.set(createDefaultPlaylists());
+        playlistsServiceMock.getM3uFavoriteChannels.mockClear();
+        playlistsServiceMock.getM3uFavoriteChannels.mockReturnValue(of(null));
+        playlistsServiceMock.getPlaylistById.mockClear();
+        playlistsServiceMock.getPlaylistById.mockReturnValue(of(playlistMock));
+        playlistsServiceMock.transformPlaylistFavorites.mockClear();
+        playlistsServiceMock.transformPlaylistFavorites.mockReturnValue(
+            of(playlistMock)
+        );
+        playlistsServiceMock.removeFromM3uRecentlyViewed.mockClear();
+        playlistsServiceMock.removeFromM3uRecentlyViewed.mockReturnValue(
+            of({
+                ...playlistMock,
+                recentlyViewed: [],
+            })
+        );
+        dbServiceMock.getAllGlobalFavorites.mockClear();
+        dbServiceMock.getAllGlobalFavorites.mockResolvedValue([]);
+        dbServiceMock.getGlobalRecentlyAdded.mockClear();
+        dbServiceMock.getGlobalRecentlyAdded.mockResolvedValue([]);
+        dbServiceMock.getGlobalRecentlyViewed.mockClear();
+        dbServiceMock.getGlobalRecentlyViewed.mockResolvedValue([]);
+        dbServiceMock.removeFromFavorites.mockClear();
+        dbServiceMock.removeRecentItem.mockClear();
+        xtreamDataSourceMock.getContent.mockClear();
+        xtreamDataSourceMock.getContent.mockResolvedValue([]);
+        xtreamDataSourceMock.getFavorites.mockClear();
+        xtreamDataSourceMock.getFavorites.mockResolvedValue([]);
+        xtreamDataSourceMock.getRecentItems.mockClear();
+        xtreamDataSourceMock.getRecentItems.mockResolvedValue([]);
+        xtreamDataSourceMock.removeFavorite.mockClear();
+        xtreamDataSourceMock.removeFavorite.mockResolvedValue(undefined);
+        xtreamDataSourceMock.removeRecentItem.mockClear();
+        xtreamDataSourceMock.removeRecentItem.mockResolvedValue(undefined);
+        storeMock.dispatch.mockClear();
+
+        playbackPositionsMock.getAllPlaybackPositions.mockClear();
+        playbackPositionsMock.getAllPlaybackPositions.mockResolvedValue([]);
+        seriesEpisodeEntries.set(new Map());
+        seriesEpisodeAnswers.clear();
+        seriesEpisodesMock.request.mockClear();
+
+        TestBed.configureTestingModule(createTestingModuleProviders());
+        service = TestBed.inject(DashboardDataService);
+    });
+
+    afterEach(() => {
+        jest.clearAllMocks();
+    });
+
+    it('does not eagerly load dashboard datasets on construction', () => {
+        expect(dbServiceMock.getGlobalRecentlyViewed).not.toHaveBeenCalled();
+        expect(dbServiceMock.getAllGlobalFavorites).not.toHaveBeenCalled();
+        expect(dbServiceMock.getGlobalRecentlyAdded).not.toHaveBeenCalled();
+        expect(playlistsServiceMock.getPlaylistById).not.toHaveBeenCalled();
+        expect(service.globalFavoritesLoaded()).toBe(false);
+        expect(service.globalFavoritesLoading()).toBe(true);
+        expect(service.dashboardReady()).toBe(false);
+    });
+
+    it('keeps dashboardReady false until xtream recently added finishes its first load', async () => {
+        expect(service.dashboardReady()).toBe(false);
+
+        await service.reloadGlobalRecentItems();
+        expect(service.dashboardReady()).toBe(false);
+
+        await service.reloadGlobalFavorites();
+        expect(service.dashboardReady()).toBe(false);
+
+        await service.reloadXtreamRecentlyAddedItems();
+        expect(service.dashboardReady()).toBe(true);
+    });
+
+    it('does not wait on xtream recently added when no xtream playlists exist', async () => {
+        playlistsSignal.set([
+            {
+                _id: 'm3u-1',
+                title: 'M3U Playlist',
+                count: 1,
+                importDate: '2026-01-01T00:00:00.000Z',
+                autoRefresh: false,
+                favorites: [],
+                recentlyViewed: [],
+            },
+        ]);
+
+        await service.reloadGlobalRecentItems();
+        expect(service.dashboardReady()).toBe(false);
+
+        await service.reloadGlobalFavorites();
+        expect(service.dashboardReady()).toBe(true);
+    });
+
+    it('keeps xtream recently added loading until the playlist inventory has loaded', async () => {
+        // Startup: the dashboard exists before the inventory, which is empty
+        // until it loads, so "no Xtream playlists" is not known yet.
+        TestBed.resetTestingModule();
+        playlistsLoadedSignal.set(false);
+        playlistsSignal.set([]);
+        TestBed.configureTestingModule(createTestingModuleProviders());
+        service = TestBed.inject(DashboardDataService);
+        TestBed.tick();
+        expect(service.xtreamRecentlyAddedLoading()).toBe(true);
+        expect(service.xtreamRecentlyAddedLoaded()).toBe(false);
+
+        playlistsSignal.set(createDefaultPlaylists());
+        playlistsLoadedSignal.set(true);
+        TestBed.tick();
+        expect(service.xtreamRecentlyAddedLoading()).toBe(true);
+
+        await service.reloadXtreamRecentlyAddedItems();
+        expect(service.xtreamRecentlyAddedLoading()).toBe(false);
+        expect(service.xtreamRecentlyAddedLoaded()).toBe(true);
+    });
+
+    it('settles xtream recently added once the loaded inventory has no xtream playlists', () => {
+        TestBed.resetTestingModule();
+        playlistsLoadedSignal.set(false);
+        playlistsSignal.set([]);
+        TestBed.configureTestingModule(createTestingModuleProviders());
+        service = TestBed.inject(DashboardDataService);
+        TestBed.tick();
+        expect(service.xtreamRecentlyAddedLoading()).toBe(true);
+
+        playlistsLoadedSignal.set(true);
+        TestBed.tick();
+        expect(service.xtreamRecentlyAddedLoading()).toBe(false);
+        expect(service.xtreamRecentlyAddedLoaded()).toBe(true);
+    });
+
+    it('includes M3U favorites in global favorite items', async () => {
+        await service.reloadGlobalFavorites();
+
+        expect(service.globalFavoriteItems()).toEqual(
+            expect.arrayContaining([
+                expect.objectContaining({
+                    id: 'channel-1',
+                    title: 'Channel One',
+                    type: 'live',
+                    playlist_id: 'm3u-1',
+                    source: 'm3u',
+                    poster_url: 'https://example.com/logo-1.png',
+                    epg_lookup_key: 'tvg-1',
+                }),
+                expect.objectContaining({
+                    id: 'https://example.com/stream-2.m3u8',
+                    title: 'Channel Two',
+                    type: 'live',
+                    playlist_id: 'm3u-1',
+                    source: 'm3u',
+                    poster_url: 'https://example.com/logo-2.png',
+                    epg_lookup_key: 'tvg-2',
+                }),
+            ])
+        );
+    });
+
+    it('uses resolved M3U favorite channels when Electron can provide them without loading the full playlist payload', async () => {
+        playlistsServiceMock.getM3uFavoriteChannels.mockReturnValue(
+            of([
+                {
+                    favoriteId: 'channel-1',
+                    favoriteIndex: 0,
+                    channel: playlistMock.playlist.items[0],
+                },
+                {
+                    favoriteId: 'https://example.com/stream-2.m3u8',
+                    favoriteIndex: 1,
+                    channel: playlistMock.playlist.items[1],
+                },
+            ])
+        );
+
+        await service.reloadGlobalFavorites();
+
+        expect(
+            playlistsServiceMock.getM3uFavoriteChannels
+        ).toHaveBeenCalledWith('m3u-1');
+        expect(playlistsServiceMock.getPlaylistById).not.toHaveBeenCalled();
+        expect(service.globalFavoriteItems()).toEqual(
+            expect.arrayContaining([
+                expect.objectContaining({
+                    id: 'channel-1',
+                    title: 'Channel One',
+                    source: 'm3u',
+                }),
+                expect.objectContaining({
+                    id: 'https://example.com/stream-2.m3u8',
+                    title: 'Channel Two',
+                    source: 'm3u',
+                }),
+            ])
+        );
+    });
+
+    it('keeps initial global favorites loading until playlist-backed favorites finish loading', async () => {
+        const pendingM3uPlaylist = new Subject<Playlist>();
+        playlistsServiceMock.getPlaylistById.mockReturnValue(
+            pendingM3uPlaylist.asObservable()
+        );
+
+        dbServiceMock.getAllGlobalFavorites.mockResolvedValue([
+            {
+                id: 501,
+                category_id: 19,
+                title: 'Fast Xtream Channel',
+                added_at: '2026-04-22T10:00:00.000Z',
+                poster_url: 'https://example.com/fav-channel.png',
+                xtream_id: 5501,
+                type: 'live',
+                playlist_id: 'xtream-1',
+                playlist_name: 'Xtream Playlist',
+            },
+        ]);
+
+        const reload = service.reloadGlobalFavorites();
+        await Promise.resolve();
+        await waitForMockCall(playlistsServiceMock.getPlaylistById);
+
+        expect(service.globalFavoriteLiveItems()).toEqual([
+            expect.objectContaining({ title: 'Fast Xtream Channel' }),
+        ]);
+        expect(service.globalFavoritesLoaded()).toBe(false);
+        expect(service.globalFavoritesLoading()).toBe(true);
+
+        pendingM3uPlaylist.next(playlistMock);
+        pendingM3uPlaylist.complete();
+        await reload;
+
+        expect(service.globalFavoritesLoaded()).toBe(true);
+        expect(service.globalFavoritesLoading()).toBe(false);
+        expect(service.globalFavoriteLiveItems()).toEqual(
+            expect.arrayContaining([
+                expect.objectContaining({ title: 'Fast Xtream Channel' }),
+                expect.objectContaining({ title: 'Channel One' }),
+                expect.objectContaining({ title: 'Channel Two' }),
+            ])
+        );
+    });
+
+    it('reloads M3U favorites when playlists finish loading before the first global favorites reload completes', async () => {
+        playlistsLoadedSignal.set(false);
+        playlistsSignal.set([]);
+        TestBed.flushEffects();
+
+        const pendingXtreamFavorites = createPendingItems();
+        dbServiceMock.getAllGlobalFavorites.mockReturnValue(
+            pendingXtreamFavorites.promise
+        );
+
+        const reload = service.reloadGlobalFavorites();
+        await Promise.resolve();
+
+        expect(playlistsServiceMock.getPlaylistById).not.toHaveBeenCalled();
+
+        playlistsSignal.set(createDefaultPlaylists());
+        playlistsLoadedSignal.set(true);
+        TestBed.flushEffects();
+        await Promise.resolve();
+
+        expect(playlistsServiceMock.getPlaylistById).not.toHaveBeenCalled();
+
+        pendingXtreamFavorites.resolve([]);
+        await reload;
+        TestBed.flushEffects();
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+
+        expect(playlistsServiceMock.getPlaylistById).toHaveBeenCalledWith(
+            'm3u-1'
+        );
+        expect(service.globalFavoriteLiveItems()).toEqual(
+            expect.arrayContaining([
+                expect.objectContaining({ title: 'Channel One' }),
+                expect.objectContaining({ title: 'Channel Two' }),
+            ])
+        );
+        expect(service.globalFavoritesLoaded()).toBe(true);
+        expect(service.globalFavoritesLoading()).toBe(false);
+    });
+
+    it('keeps the earliest matching M3U favorite id when channel id and URL both match', async () => {
+        const channel = playlistMock.playlist.items[0];
+        const channelUrl = channel.url;
+        const channelId = channel.id;
+
+        playlistsSignal.set([
+            {
+                ...createDefaultPlaylists()[0],
+                favorites: [channelUrl, channelId],
+            },
+        ]);
+        playlistsServiceMock.getPlaylistById.mockReturnValue(
+            of({
+                ...playlistMock,
+                favorites: [channelUrl, channelId],
+                playlist: {
+                    items: [channel],
+                },
+            } as Playlist)
+        );
+
+        await service.reloadGlobalFavorites();
+
+        expect(
+            service.globalFavoriteItems().find((item) => item.source === 'm3u')
+        ).toEqual(
+            expect.objectContaining({
+                id: channelUrl,
+                title: 'Channel One',
+            })
+        );
+    });
+
+    it('includes Xtream movies and series in global favorite items', async () => {
+        dbServiceMock.getAllGlobalFavorites.mockResolvedValue([
+            {
+                id: 51,
+                category_id: 12,
+                title: 'Action Movie',
+                rating: '8.0',
+                added_at: '2026-02-02T10:00:00.000Z',
+                poster_url: 'https://example.com/movie.png',
+                xtream_id: 5001,
+                type: 'movie',
+                playlist_id: 'xtream-1',
+                playlist_name: 'Xtream Playlist',
+            },
+            {
+                id: 52,
+                category_id: 13,
+                title: 'Sci-Fi Series',
+                rating: '8.7',
+                added_at: '2026-02-03T10:00:00.000Z',
+                poster_url: 'https://example.com/series.png',
+                xtream_id: 5002,
+                type: 'series',
+                playlist_id: 'xtream-1',
+                playlist_name: 'Xtream Playlist',
+            },
+        ]);
+
+        await service.reloadGlobalFavorites();
+
+        expect(service.globalFavoriteItems()).toEqual(
+            expect.arrayContaining([
+                expect.objectContaining({
+                    id: 51,
+                    title: 'Action Movie',
+                    type: 'movie',
+                    source: 'xtream',
+                }),
+                expect.objectContaining({
+                    id: 52,
+                    title: 'Sci-Fi Series',
+                    type: 'series',
+                    source: 'xtream',
+                }),
+            ])
+        );
+        expect(
+            service
+                .globalFavoriteItems()
+                .filter((item) => item.type === 'movie')
+        ).toHaveLength(1);
+        expect(
+            service
+                .globalFavoriteItems()
+                .filter((item) => item.type === 'series')
+        ).toHaveLength(1);
+    });
+
+    it('includes PWA Xtream favorites from the active data source', async () => {
+        Object.defineProperty(window, 'electron', {
+            value: undefined,
+            configurable: true,
+        });
+        xtreamDataSourceMock.getFavorites.mockResolvedValue([
+            {
+                id: 51,
+                category_id: 12,
+                title: 'Action Movie',
+                rating: '8.0',
+                added_at: '2026-02-02T10:00:00.000Z',
+                poster_url: 'https://example.com/movie.png',
+                xtream_id: 5001,
+                type: 'movie',
+            },
+        ]);
+
+        await service.reloadGlobalFavorites();
+
+        expect(xtreamDataSourceMock.getFavorites).toHaveBeenCalledWith(
+            'xtream-1'
+        );
+        expect(dbServiceMock.getAllGlobalFavorites).not.toHaveBeenCalled();
+        expect(service.globalFavoriteItems()).toEqual(
+            expect.arrayContaining([
+                expect.objectContaining({
+                    id: 51,
+                    title: 'Action Movie',
+                    type: 'movie',
+                    playlist_id: 'xtream-1',
+                    playlist_name: 'Xtream Playlist',
+                    source: 'xtream',
+                }),
+            ])
+        );
+    });
+
+    it('loads PWA Xtream favorites for multiple playlists in parallel', async () => {
+        Object.defineProperty(window, 'electron', {
+            value: undefined,
+            configurable: true,
+        });
+        playlistsSignal.set([
+            {
+                _id: 'xtream-1',
+                title: 'Xtream One',
+                count: 0,
+                importDate: '2026-01-01T00:00:00.000Z',
+                autoRefresh: false,
+                serverUrl: 'https://one.example.com',
+            },
+            {
+                _id: 'xtream-2',
+                title: 'Xtream Two',
+                count: 0,
+                importDate: '2026-01-01T00:00:00.000Z',
+                autoRefresh: false,
+                serverUrl: 'https://two.example.com',
+            },
+        ]);
+        const firstFavorites = createPendingItems();
+        xtreamDataSourceMock.getFavorites.mockImplementation((playlistId) =>
+            playlistId === 'xtream-1'
+                ? firstFavorites.promise
+                : Promise.resolve([])
+        );
+
+        const reload = service.reloadGlobalFavorites();
+        await Promise.resolve();
+
+        expect(xtreamDataSourceMock.getFavorites).toHaveBeenCalledWith(
+            'xtream-1'
+        );
+        expect(xtreamDataSourceMock.getFavorites).toHaveBeenCalledWith(
+            'xtream-2'
+        );
+
+        firstFavorites.resolve([]);
+        await reload;
+    });
+
+    it('uses the epoch fallback for PWA Xtream favorites with empty added dates', async () => {
+        Object.defineProperty(window, 'electron', {
+            value: undefined,
+            configurable: true,
+        });
+        xtreamDataSourceMock.getFavorites.mockResolvedValue([
+            {
+                id: 52,
+                category_id: 12,
+                title: 'Undated Movie',
+                rating: '8.0',
+                added: '',
+                poster_url: 'https://example.com/movie.png',
+                xtream_id: 5002,
+                type: 'movie',
+            },
+        ]);
+
+        await service.reloadGlobalFavorites();
+
+        expect(service.globalFavoriteItems()).toEqual(
+            expect.arrayContaining([
+                expect.objectContaining({
+                    id: 52,
+                    added_at: new Date(0).toISOString(),
+                }),
+            ])
+        );
+    });
+
+    it('does not load Stalker playlists through the PWA Xtream favorites path', async () => {
+        Object.defineProperty(window, 'electron', {
+            value: undefined,
+            configurable: true,
+        });
+        playlistsSignal.set([
+            {
+                _id: 'xtream-1',
+                title: 'Xtream Playlist',
+                count: 0,
+                importDate: '2026-01-01T00:00:00.000Z',
+                autoRefresh: false,
+                serverUrl: 'https://xtream.example.com',
+            },
+            {
+                _id: 'stalker-1',
+                title: 'Stalker Playlist',
+                count: 0,
+                importDate: '2026-01-01T00:00:00.000Z',
+                autoRefresh: false,
+                serverUrl: 'https://stalker.example.com',
+                macAddress: '00:11:22:33:44:55',
+            },
+        ]);
+
+        await service.reloadGlobalFavorites();
+
+        expect(xtreamDataSourceMock.getFavorites).toHaveBeenCalledTimes(1);
+        expect(xtreamDataSourceMock.getFavorites).toHaveBeenCalledWith(
+            'xtream-1'
+        );
+    });
+
+    it('builds the M3U favorites route', async () => {
+        await service.reloadGlobalFavorites();
+        const m3uItem = service
+            .globalFavoriteItems()
+            .find((item) => item.source === 'm3u');
+
+        expect(m3uItem).toBeDefined();
+        expect(service.getGlobalFavoriteLink(m3uItem!)).toEqual([
+            '/workspace',
+            'playlists',
+            'm3u-1',
+            'favorites',
+        ]);
+        expect(service.getGlobalFavoriteNavigationState(m3uItem!)).toEqual({
+            openLiveCollectionItem: {
+                contentType: 'live',
+                sourceType: 'm3u',
+                playlistId: 'm3u-1',
+                itemId: 'channel-1',
+                title: 'Channel One',
+                imageUrl: 'https://example.com/logo-1.png',
+            },
+        });
+    });
+
+    it('routes Xtream non-live favorites through the global favorites page with inline detail state', async () => {
+        dbServiceMock.getAllGlobalFavorites.mockResolvedValue([
+            {
+                id: 51,
+                category_id: 12,
+                title: 'Action Movie',
+                rating: '8.0',
+                added_at: '2026-02-02T10:00:00.000Z',
+                poster_url: 'https://example.com/movie.png',
+                xtream_id: 5001,
+                type: 'movie',
+                playlist_id: 'xtream-1',
+                playlist_name: 'Xtream Playlist',
+            },
+        ]);
+
+        await service.reloadGlobalFavorites();
+        const movieItem = service
+            .globalFavoriteItems()
+            .find((item) => item.type === 'movie');
+
+        expect(movieItem).toBeDefined();
+        expect(service.getGlobalFavoriteLink(movieItem!)).toEqual([
+            '/workspace',
+            'global-favorites',
+        ]);
+        expect(service.getGlobalFavoriteNavigationState(movieItem!)).toEqual({
+            openCollectionDetailItem: {
+                item: expect.objectContaining({
+                    uid: 'xtream::xtream-1::movie:5001',
+                    name: 'Action Movie',
+                    contentType: 'movie',
+                    sourceType: 'xtream',
+                    playlistId: 'xtream-1',
+                }),
+            },
+        });
+    });
+
+    it('removes M3U favorites via PlaylistsService', async () => {
+        await service.reloadGlobalFavorites();
+        const m3uItem = service
+            .globalFavoriteItems()
+            .find((item) => item.id === 'channel-1');
+
+        expect(m3uItem).toBeDefined();
+
+        await service.removeGlobalFavorite(m3uItem!);
+
+        expect(
+            playlistsServiceMock.transformPlaylistFavorites
+        ).toHaveBeenCalledWith('m3u-1', expect.any(Function));
+        const [, transform] =
+            playlistsServiceMock.transformPlaylistFavorites.mock.calls[0];
+        expect(
+            transform(['channel-1', 'https://example.com/stream-2.m3u8'])
+        ).toEqual(['https://example.com/stream-2.m3u8']);
+    });
+
+    it('removes PWA Xtream favorites through the active data source', async () => {
+        Object.defineProperty(window, 'electron', {
+            value: undefined,
+            configurable: true,
+        });
+        const item = {
+            id: 51,
+            category_id: 12,
+            title: 'Action Movie',
+            poster_url: 'https://example.com/movie.png',
+            xtream_id: 5001,
+            type: 'movie',
+            playlist_id: 'xtream-1',
+            playlist_name: 'Xtream Playlist',
+            source: 'xtream',
+            added_at: '2026-01-01T00:00:00.000Z',
+        } satisfies DashboardFavoriteItem;
+
+        await service.removeGlobalFavorite(item);
+
+        expect(xtreamDataSourceMock.removeFavorite).toHaveBeenCalledWith(
+            { id: 51, type: 'movie' },
+            'xtream-1'
+        );
+        expect(dbServiceMock.removeFromFavorites).not.toHaveBeenCalled();
+        expect(xtreamDataSourceMock.getFavorites).toHaveBeenCalledWith(
+            'xtream-1'
+        );
+    });
+
+    it('includes M3U recently viewed items in global recent items', () => {
+        expect(service.globalRecentItems()).toEqual(
+            expect.arrayContaining([
+                expect.objectContaining({
+                    id: 'https://example.com/stream-1.m3u8',
+                    title: 'Channel One',
+                    type: 'live',
+                    playlist_id: 'm3u-1',
+                    source: 'm3u',
+                    xtream_id: 'https://example.com/stream-1.m3u8',
+                    epg_lookup_key: 'tvg-1',
+                }),
+            ])
+        );
+    });
+
+    it('splits global recent items into VOD and live computed signals so the dashboard can render two rails', async () => {
+        // Seed an Xtream movie and an Xtream series alongside the M3U live
+        // channel already present in defaultPlaylists, then verify the
+        // splits land on the right computed signal.
+        dbServiceMock.getGlobalRecentlyViewed.mockResolvedValue([
+            {
+                id: 401,
+                category_id: 18,
+                title: 'Recent Movie',
+                rating: '7.8',
+                viewed_at: '2026-04-21T10:00:00.000Z',
+                poster_url: 'https://example.com/recent-movie.png',
+                xtream_id: 7001,
+                type: 'movie',
+                playlist_id: 'xtream-1',
+                playlist_name: 'Xtream Playlist',
+            },
+            {
+                id: 402,
+                category_id: 19,
+                title: 'Recent Series',
+                rating: '8.1',
+                viewed_at: '2026-04-22T10:00:00.000Z',
+                poster_url: 'https://example.com/recent-series.png',
+                xtream_id: 7002,
+                type: 'series',
+                playlist_id: 'xtream-1',
+                playlist_name: 'Xtream Playlist',
+            },
+        ]);
+
+        playlistsSignal.set([
+            ...playlistsSignal(),
+            {
+                _id: 'xtream-1',
+                title: 'Xtream Playlist',
+                count: 1,
+                importDate: '2026-01-01T00:00:00.000Z',
+                autoRefresh: false,
+                serverUrl: 'https://example.com',
+            },
+        ]);
+
+        await service.reloadGlobalRecentItems();
+
+        const vodTitles = service
+            .globalRecentVodItems()
+            .map((item) => item.title);
+        const liveTitles = service
+            .globalRecentLiveItems()
+            .map((item) => item.title);
+
+        expect(vodTitles).toEqual(
+            expect.arrayContaining(['Recent Movie', 'Recent Series'])
+        );
+        expect(vodTitles).not.toContain('Channel One');
+
+        expect(liveTitles).toContain('Channel One');
+        expect(liveTitles).not.toEqual(
+            expect.arrayContaining(['Recent Movie', 'Recent Series'])
+        );
+
+        // Splits stay mutually exclusive — sum of partitions equals the whole.
+        expect(
+            service.globalRecentVodItems().length +
+                service.globalRecentLiveItems().length
+        ).toBe(service.globalRecentItems().length);
+    });
+
+    it('loads playback positions for every playlist that owns VOD/series recent items and exposes them by content key', async () => {
+        dbServiceMock.getGlobalRecentlyViewed.mockResolvedValue([
+            {
+                id: 101,
+                category_id: 18,
+                title: 'Atlantic City',
+                rating: '7.3',
+                viewed_at: '2026-04-21T10:00:00.000Z',
+                poster_url: 'https://example.com/atlantic.png',
+                xtream_id: 4242,
+                type: 'movie',
+                playlist_id: 'xtream-A',
+                playlist_name: 'Xtream A',
+            },
+            {
+                id: 102,
+                category_id: 19,
+                title: 'Color Orchard S02E04',
+                rating: '8.1',
+                viewed_at: '2026-04-22T10:00:00.000Z',
+                poster_url: 'https://example.com/orchard.png',
+                xtream_id: 909,
+                type: 'series',
+                playlist_id: 'xtream-B',
+                playlist_name: 'Xtream B',
+            },
+        ]);
+
+        playlistsSignal.set([
+            ...playlistsSignal(),
+            {
+                _id: 'xtream-A',
+                title: 'Xtream A',
+                count: 1,
+                importDate: '2026-01-01T00:00:00.000Z',
+                autoRefresh: false,
+                serverUrl: 'https://a.example.com',
+            },
+            {
+                _id: 'xtream-B',
+                title: 'Xtream B',
+                count: 1,
+                importDate: '2026-01-01T00:00:00.000Z',
+                autoRefresh: false,
+                serverUrl: 'https://b.example.com',
+            },
+        ]);
+
+        playbackPositionsMock.getAllPlaybackPositions.mockImplementation(
+            (playlistId: string) => {
+                if (playlistId === 'xtream-A') {
+                    return Promise.resolve([
+                        {
+                            contentXtreamId: 4242,
+                            contentType: 'vod',
+                            positionSeconds: 3600,
+                            durationSeconds: 6000,
+                            playlistId,
+                        } as PlaybackPositionData,
+                    ]);
+                }
+                if (playlistId === 'xtream-B') {
+                    return Promise.resolve([
+                        {
+                            contentXtreamId: 909,
+                            contentType: 'episode',
+                            seriesXtreamId: 900,
+                            seasonNumber: 2,
+                            episodeNumber: 4,
+                            positionSeconds: 720,
+                            durationSeconds: 1800,
+                            playlistId,
+                        } as PlaybackPositionData,
+                    ]);
+                }
+                return Promise.resolve([]);
+            }
+        );
+
+        await service.reloadGlobalRecentItems();
+        await service.reloadPlaybackPositions();
+
+        // Bulk fetched once per playlist that owns a tracked item — and ONLY
+        // for the playlists that own VOD/series recent items. The default M3U
+        // playlist (live channel) must not be queried.
+        const queriedPlaylists =
+            playbackPositionsMock.getAllPlaybackPositions.mock.calls.map(
+                (call) => call[0]
+            );
+        expect(new Set(queriedPlaylists)).toEqual(
+            new Set(['xtream-A', 'xtream-B'])
+        );
+
+        const vodItems = service.globalRecentVodItems();
+        const movie = vodItems.find((item) => item.title === 'Atlantic City');
+        const series = vodItems.find(
+            (item) => item.title === 'Color Orchard S02E04'
+        );
+        if (!series) {
+            throw new Error('expected the series recent item');
+        }
+
+        // Movie: vod position with 60% watched.
+        const moviePos = service.getPlaybackPositionForItem(movie!);
+        expect(moviePos?.positionSeconds).toBe(3600);
+        expect(moviePos?.contentType).toBe('vod');
+
+        // Series: episode position keyed by the recent item's xtream_id (the
+        // episode id, not the series id).
+        const seriesPos = service.getPlaybackPositionForItem(series);
+        expect(seriesPos?.contentType).toBe('episode');
+        expect(seriesPos?.positionSeconds).toBe(720);
+        // Season/episode metadata travels with the position so cards can
+        // render an "S2 · E5" badge without an extra round-trip.
+        expect(seriesPos?.seasonNumber).toBe(2);
+        expect(seriesPos?.episodeNumber).toBe(4);
+        expect(service.getRecentItemNavigationState(series)).toEqual({
+            openCollectionDetailItem: {
+                item: expect.objectContaining({
+                    contentType: 'series',
+                    xtreamId: 900,
+                }),
+                seriesResume: {
+                    seriesXtreamId: 900,
+                    contentXtreamId: 909,
+                    seasonNumber: 2,
+                    episodeNumber: 4,
+                },
+            },
+        });
+    });
+
+    it('asks every playlist for its playback positions at once, not one after another', async () => {
+        dbServiceMock.getGlobalRecentlyViewed.mockResolvedValue([
+            {
+                id: 101,
+                category_id: 18,
+                title: 'Atlantic City',
+                rating: '7.3',
+                viewed_at: '2026-04-21T10:00:00.000Z',
+                poster_url: 'https://example.com/atlantic.png',
+                xtream_id: 4242,
+                type: 'movie',
+                playlist_id: 'xtream-A',
+                playlist_name: 'Xtream A',
+            },
+            {
+                id: 102,
+                category_id: 19,
+                title: 'Color Orchard S02E04',
+                rating: '8.1',
+                viewed_at: '2026-04-22T10:00:00.000Z',
+                poster_url: 'https://example.com/orchard.png',
+                xtream_id: 909,
+                type: 'series',
+                playlist_id: 'xtream-B',
+                playlist_name: 'Xtream B',
+            },
+        ]);
+
+        // Hold every answer: asked one after another, the second playlist
+        // would not be asked until the first had answered, and a DB worker
+        // busy with a long request would delay the set once per playlist.
+        const pending = new Map<
+            string,
+            (rows: PlaybackPositionData[]) => void
+        >();
+        playbackPositionsMock.getAllPlaybackPositions.mockImplementation(
+            (playlistId: string) =>
+                new Promise<PlaybackPositionData[]>((resolve) => {
+                    pending.set(playlistId, resolve);
+                })
+        );
+
+        await service.reloadGlobalRecentItems();
+        const reload = service.reloadPlaybackPositions();
+
+        expect(new Set(pending.keys())).toEqual(
+            new Set(['xtream-A', 'xtream-B'])
+        );
+
+        pending.get('xtream-A')?.([
+            {
+                contentXtreamId: 4242,
+                contentType: 'vod',
+                positionSeconds: 3600,
+                durationSeconds: 6000,
+                playlistId: 'xtream-A',
+            } as PlaybackPositionData,
+        ]);
+        pending.get('xtream-B')?.([]);
+        await reload;
+
+        const movie = service
+            .globalRecentVodItems()
+            .find((item) => item.playlist_id === 'xtream-A');
+        expect(movie).toBeDefined();
+        expect(
+            service.getPlaybackPositionForItem(movie as GlobalRecentItem)
+        ).toMatchObject({ contentXtreamId: 4242, positionSeconds: 3600 });
+    });
+
+    it('resolves episode metadata for a Stalker VOD is_series recent item', async () => {
+        playlistsSignal.set([
+            ...createDefaultPlaylists(),
+            {
+                _id: 'stalker-series',
+                title: 'Ministra Portal',
+                count: 1,
+                importDate: '2026-01-01T00:00:00.000Z',
+                autoRefresh: false,
+                macAddress: '00:11:22:33:44:55',
+                recentlyViewed: [
+                    {
+                        id: '50001',
+                        title: 'VOD Flagged Series',
+                        category_id: 'vod',
+                        is_series: '1',
+                        added_at: '2026-07-20T12:00:00.000Z',
+                    },
+                ],
+            },
+        ]);
+        playbackPositionsMock.getAllPlaybackPositions.mockImplementation(
+            async (playlistId: string) =>
+                playlistId === 'stalker-series'
+                    ? [
+                          {
+                              playlistId,
+                              contentXtreamId: 5000101,
+                              contentType: 'episode',
+                              seriesXtreamId: 50001,
+                              seasonNumber: 1,
+                              episodeNumber: 1,
+                              positionSeconds: 120,
+                              durationSeconds: 1800,
+                          },
+                      ]
+                    : []
+        );
+
+        await service.reloadPlaybackPositions();
+
+        const item = service
+            .globalRecentItems()
+            .find((recent) => recent.playlist_id === 'stalker-series');
+        if (!item) {
+            throw new Error('expected the Stalker is_series recent item');
+        }
+
+        expect(item.type).toBe('series');
+        expect(service.getPlaybackPositionForItem(item)).toEqual(
+            expect.objectContaining({
+                seasonNumber: 1,
+                episodeNumber: 1,
+            })
+        );
+    });
+
+    it('resolves episode progress for a Stalker embedded-VOD show stored without is_series', async () => {
+        // Real stored shape (RUcolor-style portal): the recent entry keeps
+        // the `series[]` episode array and a numeric VOD category, but no
+        // `is_series` flag. It must keep routing as a movie while its
+        // progress, badge, and resume handoff come from the episode rows
+        // saved under the parent id.
+        playlistsSignal.set([
+            ...createDefaultPlaylists(),
+            {
+                _id: 'stalker-embedded',
+                title: 'RUcolor.tv',
+                count: 1,
+                importDate: '2026-01-01T00:00:00.000Z',
+                autoRefresh: false,
+                macAddress: '00:11:22:33:44:55',
+                recentlyViewed: [
+                    {
+                        id: '17572',
+                        title: 'Fake (10 episodes)',
+                        category_id: '7',
+                        cmd: '/media/17572.mpg',
+                        series: [1, 2, 3, 4, 5, 6, 7, 8],
+                        added_at: '2026-09-19T16:13:50.000Z',
+                    },
+                ],
+            },
+        ]);
+        playbackPositionsMock.getAllPlaybackPositions.mockImplementation(
+            async (playlistId: string) =>
+                playlistId === 'stalker-embedded'
+                    ? [
+                          {
+                              playlistId,
+                              contentXtreamId: 1750797719,
+                              contentType: 'episode',
+                              seriesXtreamId: 17572,
+                              seasonNumber: 1,
+                              episodeNumber: 2,
+                              positionSeconds: 2673,
+                              durationSeconds: 2761,
+                              updatedAt: '2026-09-17T10:55:35.000Z',
+                          },
+                          {
+                              playlistId,
+                              contentXtreamId: 1750797722,
+                              contentType: 'episode',
+                              seriesXtreamId: 17572,
+                              seasonNumber: 1,
+                              episodeNumber: 5,
+                              positionSeconds: 2306,
+                              durationSeconds: 2920,
+                              updatedAt: '2026-09-18T21:45:56.000Z',
+                          },
+                      ]
+                    : []
+        );
+
+        await service.reloadPlaybackPositions();
+
+        const item = service
+            .globalRecentItems()
+            .find((recent) => recent.playlist_id === 'stalker-embedded');
+        if (!item) {
+            throw new Error('expected the Stalker embedded-series recent item');
+        }
+
+        expect(item.type).toBe('movie');
+        expect(item.watch_kind).toBe('series');
+        expect(service.getPlaybackPositionForItem(item)).toEqual(
+            expect.objectContaining({
+                contentType: 'episode',
+                seasonNumber: 1,
+                episodeNumber: 5,
+                positionSeconds: 2306,
+            })
+        );
+        expect(service.getRecentItemResumeNavigation(item)).toEqual(
+            expect.objectContaining({
+                link: ['/workspace', 'global-recent'],
+                state: {
+                    openCollectionDetailItem: expect.objectContaining({
+                        item: expect.objectContaining({
+                            sourceType: 'stalker',
+                            contentType: 'movie',
+                        }),
+                        seriesResume: {
+                            seriesXtreamId: 17572,
+                            contentXtreamId: 1750797722,
+                            seasonNumber: 1,
+                            episodeNumber: 5,
+                        },
+                    }),
+                },
+            })
+        );
+    });
+
+    it('keeps legacy episode-keyed recents detail-only when the position row lacks the parent series id', async () => {
+        dbServiceMock.getGlobalRecentlyViewed.mockResolvedValue([
+            {
+                id: 103,
+                category_id: 19,
+                title: 'Legacy Orchard S02E04',
+                rating: '8.1',
+                viewed_at: '2026-04-22T10:00:00.000Z',
+                poster_url: 'https://example.com/legacy-orchard.png',
+                xtream_id: 909,
+                type: 'series',
+                playlist_id: 'xtream-L',
+                playlist_name: 'Xtream Legacy',
+            },
+        ]);
+
+        playlistsSignal.set([
+            ...playlistsSignal(),
+            {
+                _id: 'xtream-L',
+                title: 'Xtream Legacy',
+                count: 1,
+                importDate: '2026-01-01T00:00:00.000Z',
+                autoRefresh: false,
+                serverUrl: 'https://legacy.example.com',
+            },
+        ]);
+
+        // Rows saved before seriesXtreamId existed: keyed by the episode id
+        // with no pointer back to the parent series.
+        playbackPositionsMock.getAllPlaybackPositions.mockResolvedValue([
+            {
+                contentXtreamId: 909,
+                contentType: 'episode',
+                seasonNumber: 2,
+                episodeNumber: 4,
+                positionSeconds: 720,
+                durationSeconds: 1800,
+                playlistId: 'xtream-L',
+            } as PlaybackPositionData,
+        ]);
+
+        await service.reloadGlobalRecentItems();
+        await service.reloadPlaybackPositions();
+
+        const series = service
+            .globalRecentVodItems()
+            .find((item) => item.title === 'Legacy Orchard S02E04');
+        if (!series) {
+            throw new Error('expected the series recent item');
+        }
+
+        // The episode id must not be promoted to a series id: no resume
+        // target, and the detail item keeps its original identifier.
+        expect(service.getRecentItemNavigationState(series)).toEqual({
+            openCollectionDetailItem: {
+                item: expect.objectContaining({
+                    contentType: 'series',
+                    xtreamId: 909,
+                }),
+            },
+        });
+    });
+
+    it('resolves the latest episode position for series whose recent_items row carries the series id', async () => {
+        // The Xtream series landing page records the recent item with the
+        // SERIES id, while each played episode saves its position keyed by
+        // the EPISODE id (with seriesXtreamId pointing back). The lookup
+        // must follow seriesXtreamId so both card shapes show progress.
+        dbServiceMock.getGlobalRecentlyViewed.mockResolvedValue([
+            {
+                id: 200,
+                category_id: 30,
+                title: 'Shadow Bay',
+                rating: '7.5',
+                viewed_at: '2026-05-01T09:00:00.000Z',
+                poster_url: 'https://example.com/shadow-bay.png',
+                xtream_id: 4000, // series id
+                type: 'series',
+                playlist_id: 'xtream-C',
+                playlist_name: 'Xtream C',
+            },
+        ]);
+        playlistsSignal.set([
+            ...playlistsSignal(),
+            {
+                _id: 'xtream-C',
+                title: 'Xtream C',
+                count: 1,
+                importDate: '2026-01-01T00:00:00.000Z',
+                autoRefresh: false,
+                serverUrl: 'https://c.example.com',
+            },
+        ]);
+        playbackPositionsMock.getAllPlaybackPositions.mockImplementation(
+            (playlistId: string) => {
+                if (playlistId === 'xtream-C') {
+                    return Promise.resolve([
+                        // Earlier episode — should NOT win even if it also
+                        // matches the series, because the newer one is more
+                        // relevant for "where you left off".
+                        {
+                            contentXtreamId: 4001,
+                            contentType: 'episode',
+                            seriesXtreamId: 4000,
+                            seasonNumber: 1,
+                            episodeNumber: 1,
+                            positionSeconds: 60,
+                            durationSeconds: 1800,
+                            playlistId,
+                            updatedAt: '2026-04-25T12:00:00.000Z',
+                        } as PlaybackPositionData,
+                        {
+                            contentXtreamId: 4007,
+                            contentType: 'episode',
+                            seriesXtreamId: 4000,
+                            seasonNumber: 3,
+                            episodeNumber: 7,
+                            positionSeconds: 540,
+                            durationSeconds: 1800,
+                            playlistId,
+                            updatedAt: '2026-05-01T09:30:00.000Z',
+                        } as PlaybackPositionData,
+                    ]);
+                }
+                return Promise.resolve([]);
+            }
+        );
+
+        await service.reloadGlobalRecentItems();
+        await service.reloadPlaybackPositions();
+
+        const series = service
+            .globalRecentVodItems()
+            .find((item) => item.title === 'Shadow Bay');
+        const positionsMap = service.playbackPositions$();
+        const failOnLinearScan = jest.fn(() => {
+            throw new Error('series lookup should not scan all positions');
+        });
+        (
+            positionsMap as unknown as {
+                values: () => IterableIterator<PlaybackPositionData>;
+            }
+        ).values =
+            failOnLinearScan as unknown as () => IterableIterator<PlaybackPositionData>;
+
+        expect(series).toBeDefined();
+        if (!series) {
+            throw new Error('expected Shadow Bay recent item');
+        }
+
+        const position = service.getPlaybackPositionForItem(series);
+        expect(position?.contentType).toBe('episode');
+        expect(position?.seasonNumber).toBe(3);
+        expect(position?.episodeNumber).toBe(7);
+        expect(service.getRecentItemNavigationState(series)).toEqual({
+            openCollectionDetailItem: {
+                item: expect.objectContaining({
+                    contentType: 'series',
+                    sourceType: 'xtream',
+                    xtreamId: 4000,
+                }),
+                seriesResume: {
+                    seriesXtreamId: 4000,
+                    contentXtreamId: 4007,
+                    seasonNumber: 3,
+                    episodeNumber: 7,
+                },
+            },
+        });
+        expect(failOnLinearScan).not.toHaveBeenCalled();
+    });
+
+    describe('Continue Watching', () => {
+        const PLAYLIST = 'xtream-cw';
+
+        const recentRow = (
+            id: number,
+            title: string,
+            type: 'movie' | 'series',
+            xtreamId: number,
+            viewedAt: string,
+            playlistId = PLAYLIST
+        ) => ({
+            id,
+            category_id: 1,
+            title,
+            rating: '7.0',
+            viewed_at: viewedAt,
+            poster_url: `https://example.com/${xtreamId}.png`,
+            xtream_id: xtreamId,
+            type,
+            playlist_id: playlistId,
+            playlist_name: 'Xtream CW',
+        });
+        const vodPosition = (
+            contentXtreamId: number,
+            positionSeconds: number,
+            durationSeconds: number
+        ): PlaybackPositionData => ({
+            contentXtreamId,
+            contentType: 'vod',
+            positionSeconds,
+            durationSeconds,
+            playlistId: PLAYLIST,
+        });
+        const episodePosition = (
+            contentXtreamId: number,
+            seriesXtreamId: number,
+            positionSeconds: number,
+            durationSeconds: number,
+            updatedAt: string
+        ): PlaybackPositionData => ({
+            contentXtreamId,
+            contentType: 'episode',
+            seriesXtreamId,
+            seasonNumber: 1,
+            episodeNumber: contentXtreamId % 100,
+            positionSeconds,
+            durationSeconds,
+            playlistId: PLAYLIST,
+            updatedAt,
+        });
+        const titles = () =>
+            service.continueWatchingItems().map((item) => item.title);
+        /** The portal's episode list for a series: season 1, these ids. */
+        const answerEpisodes = (seriesId: number, ids: number[]) =>
+            seriesEpisodeAnswers.set(
+                dashboardSeriesEpisodesKey(PLAYLIST, seriesId),
+                {
+                    status: 'loaded',
+                    seasons: {
+                        '1': ids.map((id, index) => ({
+                            id: String(id),
+                            season: 1,
+                            episode_num: index + 1,
+                            title: `Episode ${index + 1}`,
+                        })) as never,
+                    },
+                }
+            );
+        /** History, then positions, then the episode lookups they trigger. */
+        const loadDashboard = async () => {
+            await service.reloadGlobalRecentItems();
+            await service.reloadPlaybackPositions();
+            TestBed.tick();
+        };
+
+        beforeEach(() => {
+            playbackPositionsMock.savePlaybackPositionOrThrow.mockResolvedValue(
+                undefined
+            );
+            playlistsSignal.set([
+                ...playlistsSignal(),
+                {
+                    _id: PLAYLIST,
+                    title: 'Xtream CW',
+                    count: 1,
+                    importDate: '2026-01-01T00:00:00.000Z',
+                    autoRefresh: false,
+                    serverUrl: 'https://cw.example.com',
+                    username: 'cw-user',
+                    password: 'cw-pass',
+                },
+            ]);
+        });
+
+        it('lists only the titles the user has not finished', async () => {
+            dbServiceMock.getGlobalRecentlyViewed.mockResolvedValue([
+                recentRow(
+                    1,
+                    'Credits Movie',
+                    'movie',
+                    101,
+                    '2026-10-04T10:00:00Z'
+                ),
+                recentRow(
+                    2,
+                    'Halfway Movie',
+                    'movie',
+                    102,
+                    '2026-10-04T09:00:00Z'
+                ),
+                recentRow(
+                    3,
+                    'Next Episode Series',
+                    'series',
+                    200,
+                    '2026-10-04T08:30:00Z'
+                ),
+                recentRow(
+                    4,
+                    'Ongoing Series',
+                    'series',
+                    300,
+                    '2026-10-04T08:00:00Z'
+                ),
+                recentRow(
+                    5,
+                    'Finished Series',
+                    'series',
+                    400,
+                    '2026-10-04T07:30:00Z'
+                ),
+                recentRow(
+                    6,
+                    'Threshold Movie',
+                    'movie',
+                    103,
+                    '2026-10-04T06:00:00Z'
+                ),
+                recentRow(
+                    7,
+                    'Almost Movie',
+                    'movie',
+                    104,
+                    '2026-10-04T05:00:00Z'
+                ),
+            ]);
+            playbackPositionsMock.getAllPlaybackPositions.mockResolvedValue([
+                // Stopped while the credits rolled: 61 s of 59 min left.
+                vodPosition(101, 3491, 3552),
+                vodPosition(102, 2700, 5400),
+                // Episodes 1 and 2 watched; episode 3 is next.
+                episodePosition(201, 200, 1887, 1942, '2026-10-03T08:00:00Z'),
+                episodePosition(202, 200, 1887, 1942, '2026-10-04T08:00:00Z'),
+                // Latest episode started after an earlier one was finished.
+                episodePosition(301, 300, 1887, 1942, '2026-10-02T08:00:00Z'),
+                episodePosition(302, 300, 600, 1942, '2026-10-04T07:00:00Z'),
+                // Every episode watched.
+                episodePosition(401, 400, 1887, 1942, '2026-10-03T07:00:00Z'),
+                episodePosition(402, 400, 1887, 1942, '2026-10-04T07:00:00Z'),
+                vodPosition(103, 4860, 5400), // 90%
+                vodPosition(104, 4800, 5400), // 89%
+            ]);
+            answerEpisodes(200, [201, 202, 203]);
+            answerEpisodes(400, [401, 402]);
+
+            await loadDashboard();
+
+            expect(titles()).toEqual([
+                'Halfway Movie',
+                'Next Episode Series',
+                'Ongoing Series',
+                'Almost Movie',
+            ]);
+            // Finished titles stay in the watch history.
+            expect(service.globalRecentVodItems()).toHaveLength(7);
+            // Only series whose newest episode is watched are looked up.
+            expect(seriesEpisodesMock.request).toHaveBeenCalledWith(
+                [
+                    expect.objectContaining({ seriesId: 200 }),
+                    expect.objectContaining({ seriesId: 400 }),
+                ],
+                expect.any(Number)
+            );
+
+            // The series goes on with episode 3, from the beginning.
+            const nextEpisode = service
+                .continueWatchingItems()
+                .find((item) => item.title === 'Next Episode Series');
+            if (!nextEpisode) {
+                throw new Error('expected the series with a next episode');
+            }
+            const position = service.getPlaybackPositionForItem(nextEpisode);
+            expect(position).toMatchObject({
+                contentXtreamId: 203,
+                contentType: 'episode',
+                seriesXtreamId: 200,
+                seasonNumber: 1,
+                episodeNumber: 3,
+                positionSeconds: 0,
+            });
+            expect(position?.durationSeconds).toBeUndefined();
+            expect(
+                service.getRecentItemResumeNavigation(nextEpisode)?.state
+            ).toMatchObject({
+                openCollectionDetailItem: {
+                    seriesResume: {
+                        seriesXtreamId: 200,
+                        contentXtreamId: 203,
+                        seasonNumber: 1,
+                        episodeNumber: 3,
+                    },
+                },
+            });
+        });
+
+        describe('a series whose newest episode is watched', () => {
+            beforeEach(() => {
+                dbServiceMock.getGlobalRecentlyViewed.mockResolvedValue([
+                    recentRow(
+                        3,
+                        'The Penguin',
+                        'series',
+                        200,
+                        '2026-10-04T08:30:00Z'
+                    ),
+                ]);
+                playbackPositionsMock.getAllPlaybackPositions.mockResolvedValue(
+                    // Episodes 1-4 watched, the newest last night.
+                    [201, 202, 203, 204].map((id) =>
+                        episodePosition(
+                            id,
+                            200,
+                            3491,
+                            3552,
+                            `2026-10-0${id - 200}T08:00:00Z`
+                        )
+                    )
+                );
+            });
+
+            it('asks the portal for its episodes with the playlist credentials', async () => {
+                answerEpisodes(200, [201, 202, 203, 204, 205]);
+
+                await loadDashboard();
+
+                expect(seriesEpisodesMock.request).toHaveBeenCalledWith(
+                    [
+                        {
+                            playlistId: PLAYLIST,
+                            seriesId: 200,
+                            credentials: {
+                                serverUrl: 'https://cw.example.com',
+                                username: 'cw-user',
+                                password: 'cw-pass',
+                            },
+                        },
+                    ],
+                    expect.any(Number)
+                );
+                expect(titles()).toEqual(['The Penguin']);
+                expect(
+                    service.getPlaybackPositionForItem(
+                        service.continueWatchingItems()[0]
+                    )
+                ).toMatchObject({
+                    contentXtreamId: 205,
+                    seasonNumber: 1,
+                    episodeNumber: 5,
+                });
+            });
+
+            it('asks for the list again when it predates the episode watched last', async () => {
+                // The cached list ends before the newest episode played: it
+                // cannot tell "finale" from "a 5th episode is out now".
+                answerEpisodes(200, [201, 202, 203]);
+
+                await loadDashboard();
+
+                expect(titles()).toEqual(['The Penguin']);
+                expect(
+                    service.getPlaybackPositionForItem(
+                        service.continueWatchingItems()[0]
+                    )
+                ).toMatchObject({ contentXtreamId: 204 });
+                expect(seriesEpisodesMock.request).toHaveBeenLastCalledWith(
+                    [expect.objectContaining({ seriesId: 200, refresh: true })],
+                    expect.any(Number)
+                );
+            });
+
+            it('waits for the episode list on first open, for a bounded time', async () => {
+                jest.useFakeTimers();
+                try {
+                    await loadDashboard();
+
+                    // The answer decides between "next episode" and "gone".
+                    expect(service.continueWatchingSettled()).toBe(false);
+                    expect(titles()).toEqual([]);
+
+                    jest.advanceTimersByTime(
+                        CONTINUE_WATCHING_SERIES_LOOKUP_WAIT_MS
+                    );
+
+                    // Still unknown: the series keeps its place and its
+                    // newest episode.
+                    expect(service.continueWatchingSettled()).toBe(true);
+                    expect(titles()).toEqual(['The Penguin']);
+                    expect(
+                        service.getPlaybackPositionForItem(
+                            service.continueWatchingItems()[0]
+                        )
+                    ).toMatchObject({ contentXtreamId: 204 });
+                } finally {
+                    jest.useRealTimers();
+                }
+            });
+
+            it('keeps its place when the episode list cannot be loaded', async () => {
+                seriesEpisodeAnswers.set(
+                    dashboardSeriesEpisodesKey(PLAYLIST, 200),
+                    { status: 'failed' }
+                );
+
+                await loadDashboard();
+
+                expect(service.continueWatchingSettled()).toBe(true);
+                expect(titles()).toEqual(['The Penguin']);
+            });
+
+            it('looks a failed list up again only when positions reload', async () => {
+                const key = dashboardSeriesEpisodesKey(PLAYLIST, 200);
+                seriesEpisodeAnswers.set(key, { status: 'failed' });
+                await loadDashboard();
+                expect(seriesEpisodesMock.request).toHaveBeenCalledTimes(1);
+
+                // Playlist store churn elsewhere in the app: an M3U
+                // playlist added, every playlist object replaced.
+                playlistsSignal.set([
+                    ...playlistsSignal().map((playlist) => ({ ...playlist })),
+                    {
+                        _id: 'm3u-new',
+                        title: 'New M3U',
+                        count: 1,
+                        importDate: '2026-10-04T00:00:00.000Z',
+                        autoRefresh: false,
+                    } as never,
+                ]);
+                TestBed.tick();
+                expect(seriesEpisodesMock.request).toHaveBeenCalledTimes(1);
+
+                // The dashboard is opened again: the portal answers now.
+                answerEpisodes(200, [201, 202, 203, 204, 205]);
+                await service.reloadPlaybackPositions();
+                TestBed.tick();
+
+                expect(seriesEpisodesMock.request).toHaveBeenCalledTimes(2);
+                expect(
+                    service.getPlaybackPositionForItem(
+                        service.continueWatchingItems()[0]
+                    )
+                ).toMatchObject({ contentXtreamId: 205 });
+            });
+
+            it('looks the list up again with the credentials of an edited playlist', async () => {
+                seriesEpisodeAnswers.set(
+                    dashboardSeriesEpisodesKey(PLAYLIST, 200),
+                    { status: 'failed' }
+                );
+                await loadDashboard();
+
+                playlistsSignal.set(
+                    playlistsSignal().map((playlist) =>
+                        playlist._id === PLAYLIST
+                            ? { ...playlist, password: 'new-pass' }
+                            : playlist
+                    )
+                );
+                TestBed.tick();
+
+                expect(seriesEpisodesMock.request).toHaveBeenCalledTimes(2);
+                expect(seriesEpisodesMock.request).toHaveBeenLastCalledWith(
+                    [
+                        expect.objectContaining({
+                            credentials: expect.objectContaining({
+                                password: 'new-pass',
+                            }),
+                        }),
+                    ],
+                    expect.any(Number)
+                );
+            });
+
+            it('leaves once its last episode is watched', async () => {
+                answerEpisodes(200, [201, 202, 203, 204]);
+
+                await loadDashboard();
+
+                expect(titles()).toEqual([]);
+                expect(service.globalRecentVodItems()).toHaveLength(1);
+            });
+
+            it('keeps to the run when an extra left unfinished is the newest activity', async () => {
+                playbackPositionsMock.getAllPlaybackPositions.mockResolvedValue(
+                    [
+                        episodePosition(
+                            201,
+                            200,
+                            3491,
+                            3552,
+                            '2026-10-01T08:00:00Z'
+                        ),
+                        {
+                            ...episodePosition(
+                                290,
+                                200,
+                                600,
+                                1800,
+                                '2026-10-02T08:00:00Z'
+                            ),
+                            seasonNumber: 0,
+                            episodeNumber: 1,
+                        },
+                    ]
+                );
+                seriesEpisodeAnswers.set(
+                    dashboardSeriesEpisodesKey(PLAYLIST, 200),
+                    {
+                        status: 'loaded',
+                        seasons: {
+                            '0': [
+                                {
+                                    id: '290',
+                                    season: 0,
+                                    episode_num: 1,
+                                    title: 'Behind the scenes',
+                                },
+                            ],
+                            '1': [201, 202].map((id, index) => ({
+                                id: String(id),
+                                season: 1,
+                                episode_num: index + 1,
+                                title: `Episode ${index + 1}`,
+                            })),
+                        } as never,
+                    }
+                );
+
+                await loadDashboard();
+
+                expect(seriesEpisodesMock.request).toHaveBeenCalledWith(
+                    [expect.objectContaining({ seriesId: 200 })],
+                    expect.any(Number)
+                );
+                expect(
+                    service.getPlaybackPositionForItem(
+                        service.continueWatchingItems()[0]
+                    )
+                ).toMatchObject({ contentXtreamId: 202, positionSeconds: 0 });
+            });
+
+            it('takes the later episode as the newest when two were saved in the same second', async () => {
+                // Episode 5 left early, then episode 6 finished within the
+                // same second (the database keeps whole seconds).
+                playbackPositionsMock.getAllPlaybackPositions.mockResolvedValue(
+                    [
+                        episodePosition(
+                            205,
+                            200,
+                            30,
+                            3552,
+                            '2026-10-05 08:00:00'
+                        ),
+                        episodePosition(
+                            206,
+                            200,
+                            3491,
+                            3552,
+                            '2026-10-05 08:00:00'
+                        ),
+                    ]
+                );
+                answerEpisodes(200, [201, 202, 203, 204, 205, 206, 207]);
+
+                await loadDashboard();
+
+                expect(
+                    service.getPlaybackPositionForItem(
+                        service.continueWatchingItems()[0]
+                    )
+                ).toMatchObject({ contentXtreamId: 207 });
+            });
+        });
+
+        describe('with more series to look up than the rail shows', () => {
+            /** `count` series, newest first, each with episode x1 watched. */
+            const historyOfSeries = (count: number) => {
+                const seriesIds = Array.from(
+                    { length: count },
+                    (_, i) => 500 + i
+                );
+                dbServiceMock.getGlobalRecentlyViewed.mockResolvedValue(
+                    seriesIds.map((seriesId, i) =>
+                        recentRow(
+                            seriesId,
+                            `Series ${i}`,
+                            'series',
+                            seriesId,
+                            new Date(
+                                Date.UTC(2026, 9, 4, 12) - i * 60_000
+                            ).toISOString()
+                        )
+                    )
+                );
+                playbackPositionsMock.getAllPlaybackPositions.mockResolvedValue(
+                    seriesIds.map((seriesId) =>
+                        episodePosition(
+                            seriesId * 10 + 1,
+                            seriesId,
+                            3491,
+                            3552,
+                            '2026-10-04T08:00:00Z'
+                        )
+                    )
+                );
+                return seriesIds;
+            };
+            /** Lookups answer at once here: let the window grow. */
+            const settleLookups = () => {
+                for (let i = 0; i < 5; i++) {
+                    TestBed.tick();
+                }
+            };
+            const finished = (seriesId: number) =>
+                answerEpisodes(seriesId, [seriesId * 10 + 1]);
+            const continuing = (seriesId: number) =>
+                answerEpisodes(seriesId, [
+                    seriesId * 10 + 1,
+                    seriesId * 10 + 2,
+                ]);
+
+            it('looks up series until the rail is filled, and keeps older ones in place', async () => {
+                const seriesIds = historyOfSeries(
+                    CONTINUE_WATCHING_VISIBLE_ITEMS + 1
+                );
+                seriesIds.forEach(continuing);
+
+                await loadDashboard();
+                settleLookups();
+
+                expect(seriesEpisodesMock.request).toHaveBeenCalledTimes(1);
+                expect(
+                    seriesEpisodesMock.request.mock.calls[0][0]
+                ).toHaveLength(CONTINUE_WATCHING_VISIBLE_ITEMS);
+                // Not looked up: it keeps its place, never hidden on a guess.
+                expect(titles()).toEqual(
+                    seriesIds.map((_, i) => `Series ${i}`)
+                );
+            });
+
+            it('looks past finished series for one that goes on, in the same round', async () => {
+                const seriesIds = historyOfSeries(
+                    CONTINUE_WATCHING_VISIBLE_ITEMS + 1
+                );
+                seriesIds.slice(0, -1).forEach(finished);
+                continuing(seriesIds[seriesIds.length - 1]);
+
+                await loadDashboard();
+                settleLookups();
+
+                expect(titles()).toEqual([
+                    `Series ${CONTINUE_WATCHING_VISIBLE_ITEMS}`,
+                ]);
+                const calls = seriesEpisodesMock.request.mock.calls;
+                expect(calls[calls.length - 1][0]).toHaveLength(
+                    seriesIds.length
+                );
+                // Growing the window is no new round: nothing is retried.
+                const rounds = calls.map((call) => (call as unknown[])[1]);
+                expect(new Set(rounds).size).toBe(1);
+            });
+
+            it(`looks up ${CONTINUE_WATCHING_SERIES_LOOKUP_LIMIT} series at most and keeps the rest in place`, async () => {
+                const seriesIds = historyOfSeries(
+                    CONTINUE_WATCHING_SERIES_LOOKUP_LIMIT + 5
+                );
+                seriesIds.forEach(finished);
+
+                await loadDashboard();
+                settleLookups();
+
+                const calls = seriesEpisodesMock.request.mock.calls;
+                expect(calls[calls.length - 1][0]).toHaveLength(
+                    CONTINUE_WATCHING_SERIES_LOOKUP_LIMIT
+                );
+                expect(titles()).toEqual(
+                    seriesIds
+                        .slice(CONTINUE_WATCHING_SERIES_LOOKUP_LIMIT)
+                        .map(
+                            (_, i) =>
+                                `Series ${CONTINUE_WATCHING_SERIES_LOOKUP_LIMIT + i}`
+                        )
+                );
+            });
+        });
+
+        it('lists nothing until the positions of every recent playlist have loaded', async () => {
+            dbServiceMock.getGlobalRecentlyViewed.mockResolvedValue([
+                recentRow(
+                    1,
+                    'Credits Movie',
+                    'movie',
+                    101,
+                    '2026-10-04T10:00:00Z'
+                ),
+                recentRow(
+                    2,
+                    'Halfway Movie',
+                    'movie',
+                    102,
+                    '2026-10-04T09:00:00Z'
+                ),
+            ]);
+            playbackPositionsMock.getAllPlaybackPositions.mockResolvedValue([
+                vodPosition(101, 3491, 3552),
+                vodPosition(102, 2700, 5400),
+            ]);
+
+            await service.reloadGlobalRecentItems();
+
+            // Without positions a finished title looks like an unfinished one.
+            expect(service.continueWatchingSettled()).toBe(false);
+            expect(titles()).toEqual([]);
+
+            await service.reloadPlaybackPositions();
+
+            expect(service.continueWatchingSettled()).toBe(true);
+            expect(titles()).toEqual(['Halfway Movie']);
+
+            // Once settled, a title from a not yet loaded playlist shows at
+            // once instead of holding the whole rail back again.
+            dbServiceMock.getGlobalRecentlyViewed.mockResolvedValue([
+                recentRow(
+                    3,
+                    'Other Source Movie',
+                    'movie',
+                    501,
+                    '2026-10-04T11:00:00Z',
+                    'xtream-1'
+                ),
+                recentRow(
+                    1,
+                    'Credits Movie',
+                    'movie',
+                    101,
+                    '2026-10-04T10:00:00Z'
+                ),
+                recentRow(
+                    2,
+                    'Halfway Movie',
+                    'movie',
+                    102,
+                    '2026-10-04T09:00:00Z'
+                ),
+            ]);
+            await service.reloadGlobalRecentItems();
+
+            expect(service.continueWatchingSettled()).toBe(true);
+            expect(titles()).toEqual(['Other Source Movie', 'Halfway Movie']);
+        });
+
+        it('settles at once when the history holds no movies or series', async () => {
+            await service.reloadGlobalRecentItems();
+
+            expect(service.continueWatchingSettled()).toBe(true);
+            expect(titles()).toEqual([]);
+        });
+
+        describe('in the PWA', () => {
+            const pwaRow = (id: number, title: string, xtreamId: number) => ({
+                id,
+                category_id: 1,
+                title,
+                viewed_at: '2026-10-04T09:00:00.000Z',
+                poster_url: `https://example.com/${xtreamId}.png`,
+                xtream_id: xtreamId,
+                type: 'movie',
+            });
+
+            beforeEach(() => {
+                // Constructed without the Electron bridge: the history comes
+                // from the Xtream data source, after the playlists are in.
+                Object.defineProperty(window, 'electron', {
+                    value: undefined,
+                    configurable: true,
+                });
+                TestBed.resetTestingModule();
+                TestBed.configureTestingModule(createTestingModuleProviders());
+                service = TestBed.inject(DashboardDataService);
+                TestBed.tick();
+            });
+
+            it('waits for the history read before listing anything', async () => {
+                const pending = createPendingItems<ReturnType<typeof pwaRow>>();
+                xtreamDataSourceMock.getRecentItems.mockImplementation(
+                    (playlistId: string) =>
+                        playlistId === PLAYLIST
+                            ? pending.promise
+                            : Promise.resolve([])
+                );
+                playbackPositionsMock.getAllPlaybackPositions.mockResolvedValue(
+                    [vodPosition(101, 3491, 3552), vodPosition(102, 2700, 5400)]
+                );
+
+                const reload = service.reloadGlobalRecentItems();
+                TestBed.tick();
+                // The playlists alone used to count as the loaded history:
+                // with no movie known yet the rail settled empty, then listed
+                // the finished one until its position arrived.
+                expect(service.globalRecentLoaded()).toBe(false);
+                expect(service.continueWatchingSettled()).toBe(false);
+
+                pending.resolve([
+                    pwaRow(1, 'Credits Movie', 101),
+                    pwaRow(2, 'Halfway Movie', 102),
+                ]);
+                await reload;
+                expect(service.globalRecentLoaded()).toBe(true);
+                expect(titles()).toEqual([]);
+
+                await service.reloadPlaybackPositions();
+                expect(titles()).toEqual(['Halfway Movie']);
+            });
+
+            it('settles when the history read fails', async () => {
+                xtreamDataSourceMock.getRecentItems.mockRejectedValue(
+                    new Error('IndexedDB unavailable')
+                );
+
+                await expect(
+                    service.reloadGlobalRecentItems()
+                ).resolves.toBeUndefined();
+
+                expect(service.globalRecentLoaded()).toBe(true);
+                expect(service.globalRecentLoading()).toBe(false);
+                expect(service.continueWatchingSettled()).toBe(true);
+            });
+        });
+
+        it('keeps the newest positions when an older reload finishes last', async () => {
+            dbServiceMock.getGlobalRecentlyViewed.mockResolvedValue([
+                recentRow(
+                    1,
+                    'Credits Movie',
+                    'movie',
+                    101,
+                    '2026-10-04T10:00:00Z'
+                ),
+            ]);
+            await service.reloadGlobalRecentItems();
+            let resolveStale: (rows: PlaybackPositionData[]) => void = () =>
+                undefined;
+            playbackPositionsMock.getAllPlaybackPositions
+                .mockImplementationOnce(
+                    () =>
+                        new Promise<PlaybackPositionData[]>((resolve) => {
+                            resolveStale = resolve;
+                        })
+                )
+                .mockResolvedValueOnce([vodPosition(101, 3491, 3552)]);
+
+            const staleReload = service.reloadPlaybackPositions();
+            await service.reloadPlaybackPositions();
+            expect(titles()).toEqual([]);
+
+            // The older read answers last, from before the movie finished.
+            resolveStale([vodPosition(101, 1800, 3552)]);
+            await staleReload;
+
+            const [movie] = service.globalRecentVodItems();
+            expect(
+                service.getPlaybackPositionForItem(movie)?.positionSeconds
+            ).toBe(3491);
+            expect(titles()).toEqual([]);
+        });
+
+        it('drops a title the user marks as watched', async () => {
+            dbServiceMock.getGlobalRecentlyViewed.mockResolvedValue([
+                recentRow(
+                    2,
+                    'Halfway Movie',
+                    'movie',
+                    102,
+                    '2026-10-04T09:00:00Z'
+                ),
+            ]);
+            let stored = vodPosition(102, 2700, 5400);
+            playbackPositionsMock.getAllPlaybackPositions.mockImplementation(
+                () => Promise.resolve([stored])
+            );
+            playbackPositionsMock.savePlaybackPositionOrThrow.mockImplementation(
+                (_playlistId: string, data: PlaybackPositionData) => {
+                    stored = data;
+                    return Promise.resolve();
+                }
+            );
+            await service.reloadGlobalRecentItems();
+            await service.reloadPlaybackPositions();
+            expect(titles()).toEqual(['Halfway Movie']);
+
+            await expect(
+                service.markRecentItemWatched(
+                    service.continueWatchingItems()[0]
+                )
+            ).resolves.toBe(true);
+
+            expect(titles()).toEqual([]);
+        });
+    });
+
+    it('exposes a live-only slice of global favorites so the dashboard can promote favorited channels into the Live rail', async () => {
+        // Seed two favorites: a movie and a live channel.
+        dbServiceMock.getAllGlobalFavorites.mockResolvedValue([
+            {
+                id: 500,
+                category_id: 18,
+                title: 'Favorite Movie',
+                rating: '7.0',
+                added_at: '2026-04-21T10:00:00.000Z',
+                poster_url: 'https://example.com/fav-movie.png',
+                xtream_id: 5500,
+                type: 'movie',
+                playlist_id: 'xtream-1',
+                playlist_name: 'Xtream Playlist',
+            },
+            {
+                id: 501,
+                category_id: 19,
+                title: 'Favorite Channel HD',
+                rating: '0',
+                added_at: '2026-04-22T10:00:00.000Z',
+                poster_url: 'https://example.com/fav-channel.png',
+                xtream_id: 5501,
+                type: 'live',
+                playlist_id: 'xtream-1',
+                playlist_name: 'Xtream Playlist',
+            },
+        ]);
+        playlistsSignal.set([
+            ...playlistsSignal(),
+            {
+                _id: 'xtream-1',
+                title: 'Xtream Playlist',
+                count: 2,
+                importDate: '2026-01-01T00:00:00.000Z',
+                autoRefresh: false,
+                serverUrl: 'https://example.com',
+            },
+        ]);
+
+        await service.reloadGlobalFavorites();
+
+        const liveOnly = service.globalFavoriteLiveItems();
+        // Includes the Xtream "Favorite Channel HD" plus the two M3U live
+        // favorites already seeded by the default fixture.
+        expect(liveOnly.map((it) => it.title)).toEqual(
+            expect.arrayContaining([
+                'Favorite Channel HD',
+                'Channel One',
+                'Channel Two',
+            ])
+        );
+
+        // Crucially, the movie favorite is excluded — the rail source must
+        // never leak VOD posters into the channel layout.
+        expect(liveOnly.map((it) => it.title)).not.toContain('Favorite Movie');
+        expect(
+            service.globalFavoriteLiveItems().every((it) => it.type === 'live')
+        ).toBe(true);
+    });
+
+    it('returns null playback position for live channels (no position tracking in schema)', async () => {
+        // The default M3U playlist contains a live channel. Without
+        // reloading playback positions the lookup still gracefully returns
+        // null — and `reloadPlaybackPositions` should skip the IPC entirely.
+        const liveItem = service
+            .globalRecentItems()
+            .find((item) => item.type === 'live');
+        expect(liveItem).toBeDefined();
+        expect(service.getPlaybackPositionForItem(liveItem!)).toBeNull();
+
+        await service.reloadPlaybackPositions();
+        expect(
+            playbackPositionsMock.getAllPlaybackPositions
+        ).not.toHaveBeenCalled();
+    });
+
+    it('prioritizes recently used Xtream sources over newer imported M3U sources', async () => {
+        playlistsSignal.set([
+            {
+                _id: 'm3u-fresh',
+                title: 'Fresh Import',
+                count: 1,
+                importDate: '2026-04-20T12:00:00.000Z',
+                autoRefresh: false,
+                favorites: [],
+                recentlyViewed: [],
+            },
+            {
+                _id: 'xtream-1',
+                title: 'Xtream Playlist',
+                count: 1,
+                importDate: '2026-01-01T00:00:00.000Z',
+                autoRefresh: false,
+                serverUrl: 'https://example.com',
+            },
+        ]);
+        dbServiceMock.getGlobalRecentlyViewed.mockResolvedValue([
+            {
+                id: 91,
+                category_id: 18,
+                title: 'Recent Movie',
+                rating: '7.8',
+                viewed_at: '2026-04-21T10:00:00.000Z',
+                poster_url: 'https://example.com/recent-movie.png',
+                xtream_id: 7001,
+                type: 'movie',
+                playlist_id: 'xtream-1',
+                playlist_name: 'Xtream Playlist',
+            },
+        ]);
+
+        await service.reloadGlobalRecentItems();
+
+        expect(
+            service.recentPlaylists().map((playlist) => playlist._id)
+        ).toEqual(['xtream-1', 'm3u-fresh']);
+    });
+
+    it('includes M3U, Xtream, and Stalker sources when all have recent activity', async () => {
+        playlistsSignal.set([
+            {
+                _id: 'm3u-1',
+                title: 'M3U Playlist',
+                count: 1,
+                importDate: '2026-01-01T00:00:00.000Z',
+                autoRefresh: false,
+                favorites: [],
+                recentlyViewed: [
+                    {
+                        source: 'm3u',
+                        id: 'https://example.com/stream-1.m3u8',
+                        url: 'https://example.com/stream-1.m3u8',
+                        title: 'Channel One',
+                        category_id: 'live',
+                        added_at: '2026-04-19T10:00:00.000Z',
+                    },
+                ],
+            },
+            {
+                _id: 'stalker-1',
+                title: 'Stalker Playlist',
+                count: 1,
+                importDate: '2026-01-01T00:00:00.000Z',
+                autoRefresh: false,
+                macAddress: '00:11:22:33:44:55',
+                recentlyViewed: [
+                    {
+                        id: 'stalker-item-1',
+                        name: 'Stalker Movie',
+                        category_id: 'vod',
+                        added_at: '2026-04-20T10:00:00.000Z',
+                    },
+                ],
+            },
+            {
+                _id: 'xtream-1',
+                title: 'Xtream Playlist',
+                count: 1,
+                importDate: '2026-01-01T00:00:00.000Z',
+                autoRefresh: false,
+                serverUrl: 'https://example.com',
+            },
+        ]);
+        dbServiceMock.getGlobalRecentlyViewed.mockResolvedValue([
+            {
+                id: 91,
+                category_id: 18,
+                title: 'Recent Movie',
+                rating: '7.8',
+                viewed_at: '2026-04-21T10:00:00.000Z',
+                poster_url: 'https://example.com/recent-movie.png',
+                xtream_id: 7001,
+                type: 'movie',
+                playlist_id: 'xtream-1',
+                playlist_name: 'Xtream Playlist',
+            },
+        ]);
+
+        await service.reloadGlobalRecentItems();
+
+        expect(
+            service.recentPlaylists().map((playlist) => playlist._id)
+        ).toEqual(['xtream-1', 'stalker-1', 'm3u-1']);
+    });
+
+    it('includes PWA Xtream recent items from the active data source', async () => {
+        Object.defineProperty(window, 'electron', {
+            value: undefined,
+            configurable: true,
+        });
+        xtreamDataSourceMock.getRecentItems.mockResolvedValue([
+            {
+                id: 91,
+                category_id: 18,
+                title: 'Recent Movie',
+                rating: '7.8',
+                viewed_at: '2026-04-21T10:00:00.000Z',
+                poster_url: 'https://example.com/recent-movie.png',
+                xtream_id: 7001,
+                type: 'movie',
+            },
+        ]);
+
+        await service.reloadGlobalRecentItems();
+
+        expect(xtreamDataSourceMock.getRecentItems).toHaveBeenCalledWith(
+            'xtream-1'
+        );
+        expect(dbServiceMock.getGlobalRecentlyViewed).not.toHaveBeenCalled();
+        expect(service.globalRecentItems()).toEqual(
+            expect.arrayContaining([
+                expect.objectContaining({
+                    id: 91,
+                    title: 'Recent Movie',
+                    type: 'movie',
+                    playlist_id: 'xtream-1',
+                    playlist_name: 'Xtream Playlist',
+                    source: 'xtream',
+                    viewed_at: '2026-04-21T10:00:00.000Z',
+                }),
+            ])
+        );
+    });
+
+    it('loads PWA Xtream recent items for multiple playlists in parallel', async () => {
+        Object.defineProperty(window, 'electron', {
+            value: undefined,
+            configurable: true,
+        });
+        playlistsSignal.set([
+            {
+                _id: 'xtream-1',
+                title: 'Xtream One',
+                count: 0,
+                importDate: '2026-01-01T00:00:00.000Z',
+                autoRefresh: false,
+                serverUrl: 'https://one.example.com',
+            },
+            {
+                _id: 'xtream-2',
+                title: 'Xtream Two',
+                count: 0,
+                importDate: '2026-01-01T00:00:00.000Z',
+                autoRefresh: false,
+                serverUrl: 'https://two.example.com',
+            },
+        ]);
+        const firstRecentItems = createPendingItems();
+        xtreamDataSourceMock.getRecentItems.mockImplementation((playlistId) =>
+            playlistId === 'xtream-1'
+                ? firstRecentItems.promise
+                : Promise.resolve([])
+        );
+
+        const reload = service.reloadGlobalRecentItems();
+        await Promise.resolve();
+
+        expect(xtreamDataSourceMock.getRecentItems).toHaveBeenCalledWith(
+            'xtream-1'
+        );
+        expect(xtreamDataSourceMock.getRecentItems).toHaveBeenCalledWith(
+            'xtream-2'
+        );
+
+        firstRecentItems.resolve([]);
+        await reload;
+    });
+
+    it('does not load Stalker playlists through the PWA Xtream recent path', async () => {
+        Object.defineProperty(window, 'electron', {
+            value: undefined,
+            configurable: true,
+        });
+        playlistsSignal.set([
+            {
+                _id: 'xtream-1',
+                title: 'Xtream Playlist',
+                count: 0,
+                importDate: '2026-01-01T00:00:00.000Z',
+                autoRefresh: false,
+                serverUrl: 'https://xtream.example.com',
+            },
+            {
+                _id: 'stalker-1',
+                title: 'Stalker Playlist',
+                count: 0,
+                importDate: '2026-01-01T00:00:00.000Z',
+                autoRefresh: false,
+                serverUrl: 'https://stalker.example.com',
+                macAddress: '00:11:22:33:44:55',
+            },
+        ]);
+
+        await service.reloadGlobalRecentItems();
+
+        expect(xtreamDataSourceMock.getRecentItems).toHaveBeenCalledTimes(1);
+        expect(xtreamDataSourceMock.getRecentItems).toHaveBeenCalledWith(
+            'xtream-1'
+        );
+    });
+
+    it('falls back to playlist metadata ordering when sources have no recent activity', async () => {
+        playlistsSignal.set([
+            {
+                _id: 'xtream-1',
+                title: 'Xtream Playlist',
+                count: 1,
+                importDate: '2026-01-01T00:00:00.000Z',
+                autoRefresh: false,
+                serverUrl: 'https://example.com',
+            },
+            {
+                _id: 'stalker-1',
+                title: 'Stalker Playlist',
+                count: 1,
+                importDate: '2026-03-01T00:00:00.000Z',
+                autoRefresh: false,
+                macAddress: '00:11:22:33:44:55',
+                recentlyViewed: [],
+            },
+            {
+                _id: 'm3u-1',
+                title: 'M3U Playlist',
+                count: 1,
+                importDate: '2026-02-01T00:00:00.000Z',
+                updateDate: Date.parse('2026-04-01T00:00:00.000Z'),
+                autoRefresh: false,
+                favorites: [],
+                recentlyViewed: [],
+            },
+        ]);
+        dbServiceMock.getGlobalRecentlyViewed.mockResolvedValue([]);
+
+        await service.reloadGlobalRecentItems();
+
+        expect(
+            service.recentPlaylists().map((playlist) => playlist._id)
+        ).toEqual(['m3u-1', 'stalker-1', 'xtream-1']);
+    });
+
+    it('maps recently added Xtream rows for the widget', async () => {
+        dbServiceMock.getGlobalRecentlyAdded.mockResolvedValue([
+            {
+                id: 11,
+                category_id: 77,
+                title: 'Fresh Movie',
+                rating: '8.1',
+                added: '1774298340',
+                added_at: '1774298340',
+                poster_url: 'https://example.com/poster.png',
+                xtream_id: 501,
+                type: 'movie',
+                playlist_id: 'xtream-1',
+                playlist_name: 'Xtream Playlist',
+            },
+        ]);
+
+        await expect(
+            service.getGlobalRecentlyAddedItems('all', 25)
+        ).resolves.toEqual([
+            expect.objectContaining({
+                id: 11,
+                title: 'Fresh Movie',
+                type: 'movie',
+                playlist_id: 'xtream-1',
+                source: 'xtream',
+                added_at: expect.any(String),
+                rating: 8.1,
+            }),
+        ]);
+        expect(dbServiceMock.getGlobalRecentlyAdded).toHaveBeenCalledWith(
+            'all',
+            25
+        );
+    });
+
+    it('loads real recently-added movie and series catalogs in PWA mode', async () => {
+        Object.defineProperty(window, 'electron', {
+            value: undefined,
+            configurable: true,
+        });
+        playlistsSignal.set([
+            {
+                _id: 'xtream-1',
+                title: 'ZenPlay',
+                count: 0,
+                importDate: '2026-01-01T00:00:00.000Z',
+                autoRefresh: false,
+                serverUrl: ' https://panel.example.com ',
+                username: ' viewer ',
+                password: ' secret ',
+                serverTimezone: 'America/Tijuana',
+            },
+        ]);
+        xtreamDataSourceMock.getContent.mockImplementation(
+            (
+                _playlistId: string,
+                _credentials: unknown,
+                type: 'movie' | 'series'
+            ) => {
+                if (type === 'movie') {
+                    return Promise.resolve([
+                        {
+                            id: 501,
+                            stream_id: 501,
+                            name: 'Fresh Movie (2026)',
+                            added: '1774298340',
+                            category_id: '77',
+                            stream_icon: 'https://example.com/movie.png',
+                            rating: '8.4',
+                        },
+                        {
+                            id: 501,
+                            stream_id: 501,
+                            name: 'Duplicate Movie',
+                            added: '1700000000',
+                            category_id: '77',
+                        },
+                        {
+                            id: -1,
+                            stream_id: -1,
+                            name: 'Invalid Movie',
+                            added: '1775000000',
+                            category_id: '77',
+                        },
+                    ]);
+                }
+
+                return Promise.resolve([
+                    {
+                        id: 601,
+                        series_id: 601,
+                        name: 'Fresh Series',
+                        last_modified: '1774384740',
+                        category_id: 88,
+                        cover: 'https://example.com/series.png',
+                        backdrop_path: [
+                            'https://example.com/series-backdrop.png',
+                        ],
+                        rating: '',
+                        rating_5based: 4.5,
+                        releaseDate: '2026-03-24',
+                    },
+                ]);
+            }
+        );
+
+        await service.reloadXtreamRecentlyAddedItems(6);
+
+        const credentials = {
+            serverUrl: 'https://panel.example.com',
+            username: 'viewer',
+            password: 'secret',
+            serverTimezone: 'America/Tijuana',
+        };
+        expect(xtreamDataSourceMock.getContent).toHaveBeenCalledTimes(2);
+        expect(xtreamDataSourceMock.getContent).toHaveBeenCalledWith(
+            'xtream-1',
+            credentials,
+            'movie'
+        );
+        expect(xtreamDataSourceMock.getContent).toHaveBeenCalledWith(
+            'xtream-1',
+            credentials,
+            'series'
+        );
+        expect(dbServiceMock.getGlobalRecentlyAdded).not.toHaveBeenCalled();
+        expect(service.xtreamRecentlyAddedItems()).toEqual([
+            expect.objectContaining({
+                id: 601,
+                xtream_id: 601,
+                title: 'Fresh Series',
+                type: 'series',
+                rating: 9,
+                release_year: 2026,
+                backdrop_url: 'https://example.com/series-backdrop.png',
+            }),
+            expect.objectContaining({
+                id: 501,
+                xtream_id: 501,
+                title: 'Fresh Movie (2026)',
+                type: 'movie',
+                rating: 8.4,
+                release_year: 2026,
+            }),
+        ]);
+        expect(service.xtreamRecentlyAddedLoaded()).toBe(true);
+        expect(service.xtreamRecentlyAddedLoading()).toBe(false);
+    });
+
+    it('coalesces concurrent PWA recently-added reloads into one catalog request', async () => {
+        Object.defineProperty(window, 'electron', {
+            value: undefined,
+            configurable: true,
+        });
+        playlistsSignal.set([
+            {
+                _id: 'xtream-1',
+                title: 'ZenPlay',
+                count: 0,
+                importDate: '2026-01-01T00:00:00.000Z',
+                autoRefresh: false,
+                serverUrl: 'https://panel.example.com',
+                username: 'viewer',
+                password: 'secret',
+            },
+        ]);
+        const movies = createPendingItems<{
+            id: number;
+            stream_id: number;
+            name: string;
+            added: string;
+            category_id: number;
+        }>();
+        const series = createPendingItems<{
+            id: number;
+            series_id: number;
+            name: string;
+            added: string;
+            category_id: number;
+        }>();
+        xtreamDataSourceMock.getContent.mockImplementation(
+            (
+                _playlistId: string,
+                _credentials: unknown,
+                type: 'movie' | 'series'
+            ) => (type === 'movie' ? movies.promise : series.promise)
+        );
+
+        const first = service.reloadXtreamRecentlyAddedItems(24);
+        const second = service.reloadXtreamRecentlyAddedItems(48);
+
+        expect(second).toBe(first);
+        expect(service.xtreamRecentlyAddedLoading()).toBe(true);
+        expect(xtreamDataSourceMock.getContent).toHaveBeenCalledTimes(2);
+
+        movies.resolve([
+            {
+                id: 501,
+                stream_id: 501,
+                name: 'Fresh Movie',
+                added: '1774298340',
+                category_id: 77,
+            },
+        ]);
+        series.resolve([
+            {
+                id: 601,
+                series_id: 601,
+                name: 'Fresh Series',
+                added: '1774384740',
+                category_id: 88,
+            },
+        ]);
+        await Promise.all([first, second]);
+
+        expect(xtreamDataSourceMock.getContent).toHaveBeenCalledTimes(2);
+        expect(service.xtreamRecentlyAddedItems()).toHaveLength(2);
+        expect(service.xtreamRecentlyAddedLoading()).toBe(false);
+    });
+
+    it('keeps the previous PWA catalog when a later refresh fails', async () => {
+        Object.defineProperty(window, 'electron', {
+            value: undefined,
+            configurable: true,
+        });
+        playlistsSignal.set([
+            {
+                _id: 'xtream-1',
+                title: 'ZenPlay',
+                count: 0,
+                importDate: '2026-01-01T00:00:00.000Z',
+                autoRefresh: false,
+                serverUrl: 'https://panel.example.com',
+                username: 'viewer',
+                password: 'secret',
+            },
+        ]);
+        xtreamDataSourceMock.getContent.mockImplementation(
+            (
+                _playlistId: string,
+                _credentials: unknown,
+                type: 'movie' | 'series'
+            ) =>
+                Promise.resolve(
+                    type === 'movie'
+                        ? [
+                              {
+                                  id: 501,
+                                  stream_id: 501,
+                                  name: 'Stable Movie',
+                                  added: '1774298340',
+                                  category_id: 77,
+                              },
+                          ]
+                        : []
+                )
+        );
+        await service.reloadXtreamRecentlyAddedItems(24);
+        const previousCatalog = service.xtreamRecentlyAddedItems();
+        const warn = jest
+            .spyOn(console, 'warn')
+            .mockImplementation(() => undefined);
+        xtreamDataSourceMock.getContent.mockRejectedValue(
+            new Error('provider unavailable')
+        );
+
+        await service.reloadXtreamRecentlyAddedItems(24);
+
+        expect(service.xtreamRecentlyAddedItems()).toBe(previousCatalog);
+        expect(service.xtreamRecentlyAddedItems()).toEqual([
+            expect.objectContaining({ title: 'Stable Movie' }),
+        ]);
+        expect(service.xtreamRecentlyAddedLoaded()).toBe(true);
+        expect(service.xtreamRecentlyAddedLoading()).toBe(false);
+        expect(warn).toHaveBeenCalledWith(
+            '[DashboardData] Failed to reload Xtream recently added items',
+            expect.any(Error)
+        );
+        warn.mockRestore();
+    });
+
+    it('keeps enough PWA catalog rows for separate 24-item movie and series rails', async () => {
+        Object.defineProperty(window, 'electron', {
+            value: undefined,
+            configurable: true,
+        });
+        playlistsSignal.set([
+            {
+                _id: 'xtream-1',
+                title: 'ZenPlay',
+                count: 0,
+                importDate: '2026-01-01T00:00:00.000Z',
+                autoRefresh: false,
+                serverUrl: 'https://panel.example.com',
+                username: 'viewer',
+                password: 'secret',
+            },
+        ]);
+        xtreamDataSourceMock.getContent.mockImplementation(
+            (
+                _playlistId: string,
+                _credentials: unknown,
+                type: 'movie' | 'series'
+            ) =>
+                Promise.resolve(
+                    Array.from({ length: 30 }, (_, index) => ({
+                        id: (type === 'movie' ? 1000 : 2000) + index,
+                        stream_id: type === 'movie' ? 1000 + index : undefined,
+                        series_id: type === 'series' ? 2000 + index : undefined,
+                        name: `${type} ${index}`,
+                        added: String(1_770_000_000 + index),
+                        category_id: type === 'movie' ? 10 : 20,
+                    }))
+                )
+        );
+
+        await service.reloadXtreamRecentlyAddedItems(48);
+
+        const items = service.xtreamRecentlyAddedItems();
+        expect(items).toHaveLength(48);
+        expect(items.filter((item) => item.type === 'movie')).toHaveLength(24);
+        expect(items.filter((item) => item.type === 'series')).toHaveLength(24);
+        expect(
+            xtreamDataSourceMock.getContent.mock.calls.map((call) => call[2])
+        ).toEqual(expect.arrayContaining(['movie', 'series']));
+        expect(
+            xtreamDataSourceMock.getContent.mock.calls.map((call) => call[2])
+        ).not.toContain('live');
+    });
+
+    it('retains current-year trending candidates behind more than 150 newer old-title imports', async () => {
+        Object.defineProperty(window, 'electron', {
+            value: undefined,
+            configurable: true,
+        });
+        playlistsSignal.set([
+            {
+                _id: 'xtream-1',
+                title: 'ZenPlay',
+                count: 0,
+                importDate: '2026-01-01T00:00:00.000Z',
+                autoRefresh: false,
+                serverUrl: 'https://panel.example.com',
+                username: 'viewer',
+                password: 'secret',
+            },
+        ]);
+        const currentYear = new Date().getFullYear();
+        xtreamDataSourceMock.getContent.mockImplementation(
+            (
+                _playlistId: string,
+                _credentials: unknown,
+                type: 'movie' | 'series'
+            ) => {
+                const offset = type === 'movie' ? 1000 : 2000;
+                const idKey = type === 'movie' ? 'stream_id' : 'series_id';
+                const oldReimports = Array.from(
+                    { length: 170 },
+                    (_, index) => ({
+                        id: offset + index,
+                        [idKey]: offset + index,
+                        name: `Old ${type} ${index} (${currentYear - 1})`,
+                        added: String(1_900_000_000 + index),
+                        category_id: type === 'movie' ? 10 : 20,
+                        release_year: currentYear - 1,
+                    })
+                );
+                const trendingCount = type === 'movie' ? 8 : 6;
+                const currentTitles = Array.from(
+                    { length: trendingCount },
+                    (_, index) => ({
+                        id: offset + 500 + index,
+                        [idKey]: offset + 500 + index,
+                        name: `Current ${type} ${index} (${currentYear})`,
+                        added: String(1_700_000_000 + index),
+                        category_id: type === 'movie' ? 10 : 20,
+                        release_year: currentYear,
+                    })
+                );
+                return Promise.resolve([...oldReimports, ...currentTitles]);
+            }
+        );
+
+        await service.reloadXtreamRecentlyAddedItems(300);
+
+        const currentItems = service
+            .xtreamRecentlyAddedItems()
+            .filter((item) => item.release_year === currentYear);
+        expect(
+            currentItems.filter((item) => item.type === 'movie')
+        ).toHaveLength(8);
+        expect(
+            currentItems.filter((item) => item.type === 'series')
+        ).toHaveLength(6);
+        expect(service.xtreamRecentlyAddedItems().length).toBeGreaterThan(300);
+    });
+
+    it('keeps the Electron recently-added path on DatabaseService', async () => {
+        dbServiceMock.getGlobalRecentlyAdded.mockResolvedValue([
+            {
+                id: 11,
+                category_id: 77,
+                title: 'Fresh Movie (2026)',
+                rating: '7.35',
+                added: '1774298340',
+                added_at: '1774298340',
+                poster_url: 'https://example.com/poster.png',
+                xtream_id: 501,
+                type: 'movie',
+                playlist_id: 'xtream-1',
+                playlist_name: 'Xtream Playlist',
+            },
+        ]);
+
+        await expect(service.getXtreamRecentlyAddedItems(20)).resolves.toEqual([
+            expect.objectContaining({
+                title: 'Fresh Movie (2026)',
+                rating: 7.4,
+                release_year: 2026,
+            }),
+        ]);
+        expect(dbServiceMock.getGlobalRecentlyAdded).toHaveBeenCalledWith(
+            'all',
+            20,
+            'xtream'
+        );
+        expect(xtreamDataSourceMock.getContent).not.toHaveBeenCalled();
+    });
+
+    it('builds the Xtream recently added route', () => {
+        const item = {
+            id: 11,
+            title: 'Fresh Series',
+            type: 'series',
+            playlist_id: 'xtream-1',
+            playlist_name: 'Xtream Playlist',
+            added_at: '2026-03-27T14:39:00.000Z',
+            category_id: 77,
+            xtream_id: 501,
+            poster_url: 'https://example.com/poster.png',
+            source: 'xtream',
+        } as const;
+
+        expect(service.getRecentlyAddedLink(item)).toEqual([
+            '/workspace',
+            'xtreams',
+            'xtream-1',
+            'series',
+            '77',
+            '501',
+        ]);
+        expect(service.getRecentlyAddedNavigationState(item)).toBeUndefined();
+    });
+
+    it('builds the M3U recent route with collection auto-open state', () => {
+        const m3uItem = service
+            .globalRecentItems()
+            .find((item) => item.source === 'm3u');
+
+        expect(m3uItem).toBeDefined();
+        expect(service.getRecentItemLink(m3uItem!)).toEqual([
+            '/workspace',
+            'playlists',
+            'm3u-1',
+            'recent',
+        ]);
+        expect(service.getRecentItemNavigationState(m3uItem!)).toEqual({
+            openLiveCollectionItem: {
+                contentType: 'live',
+                sourceType: 'm3u',
+                playlistId: 'm3u-1',
+                itemId: 'https://example.com/stream-1.m3u8',
+                title: 'Channel One',
+                imageUrl: 'https://example.com/logo-1.png',
+            },
+        });
+    });
+
+    it('routes Xtream non-live recents through the global recent page with inline detail state', async () => {
+        dbServiceMock.getGlobalRecentlyViewed.mockResolvedValue([
+            {
+                id: 91,
+                category_id: 18,
+                title: 'Recent Movie',
+                rating: '7.8',
+                viewed_at: '2026-02-04T10:00:00.000Z',
+                poster_url: 'https://example.com/recent-movie.png',
+                backdrop_url: 'https://example.com/recent-movie-backdrop.png',
+                xtream_id: 7001,
+                type: 'movie',
+                playlist_id: 'xtream-1',
+                playlist_name: 'Xtream Playlist',
+            },
+        ]);
+
+        await service.reloadGlobalRecentItems();
+        const movieItem = service
+            .globalRecentItems()
+            .find((item) => item.source === 'xtream');
+
+        expect(movieItem).toEqual(
+            expect.objectContaining({
+                backdrop_url: 'https://example.com/recent-movie-backdrop.png',
+            })
+        );
+        expect(service.getRecentItemLink(movieItem!)).toEqual([
+            '/workspace',
+            'global-recent',
+        ]);
+        expect(service.getRecentItemNavigationState(movieItem!)).toEqual({
+            openCollectionDetailItem: {
+                item: expect.objectContaining({
+                    uid: 'xtream::xtream-1::movie:7001',
+                    name: 'Recent Movie',
+                    contentType: 'movie',
+                    sourceType: 'xtream',
+                    playlistId: 'xtream-1',
+                }),
+            },
+        });
+    });
+
+    it('normalizes SQLite-style Xtream recent timestamps before sorting and rendering', async () => {
+        dbServiceMock.getGlobalRecentlyViewed.mockResolvedValue([
+            {
+                id: 91,
+                category_id: 18,
+                title: 'Recent Movie',
+                rating: '7.8',
+                viewed_at: '2026-02-04 10:00:00',
+                poster_url: 'https://example.com/recent-movie.png',
+                xtream_id: 7001,
+                type: 'movie',
+                playlist_id: 'xtream-1',
+                playlist_name: 'Xtream Playlist',
+            },
+        ]);
+
+        await service.reloadGlobalRecentItems();
+        const movieItem = service
+            .globalRecentItems()
+            .find((item) => item.source === 'xtream');
+
+        expect(movieItem).toEqual(
+            expect.objectContaining({
+                viewed_at: '2026-02-04T10:00:00.000Z',
+            })
+        );
+    });
+
+    it('removes M3U recently viewed via PlaylistsService', async () => {
+        const m3uItem = service
+            .globalRecentItems()
+            .find((item) => item.source === 'm3u');
+
+        expect(m3uItem).toBeDefined();
+
+        await service.removeGlobalRecentItem(m3uItem!);
+
+        expect(
+            playlistsServiceMock.removeFromM3uRecentlyViewed
+        ).toHaveBeenCalledWith('m3u-1', 'https://example.com/stream-1.m3u8');
+    });
+
+    it('removes PWA Xtream recently viewed through the active data source', async () => {
+        Object.defineProperty(window, 'electron', {
+            value: undefined,
+            configurable: true,
+        });
+        const item = {
+            id: 91,
+            category_id: 18,
+            title: 'Recent Movie',
+            viewed_at: '2026-04-21T10:00:00.000Z',
+            poster_url: 'https://example.com/recent-movie.png',
+            xtream_id: 7001,
+            type: 'movie',
+            playlist_id: 'xtream-1',
+            playlist_name: 'Xtream Playlist',
+            source: 'xtream',
+        } satisfies GlobalRecentItem;
+
+        await service.removeGlobalRecentItem(item);
+
+        expect(xtreamDataSourceMock.removeRecentItem).toHaveBeenCalledWith(
+            { id: 91, type: 'movie' },
+            'xtream-1'
+        );
+        expect(dbServiceMock.removeRecentItem).not.toHaveBeenCalled();
+        expect(xtreamDataSourceMock.getRecentItems).toHaveBeenCalledWith(
+            'xtream-1'
+        );
+    });
+});

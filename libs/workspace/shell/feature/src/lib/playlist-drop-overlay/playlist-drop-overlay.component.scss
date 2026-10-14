@@ -1,0 +1,134 @@
+:host {
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    display: none;
+    pointer-events: none;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+}
+
+:host.is-visible {
+    display: flex;
+    animation: drop-overlay-fade 0.15s ease-out;
+}
+
+// Colours come from the app theme tokens, so the overlay follows the theme
+// chosen in Settings rather than the OS colour scheme. The scrim stays dark
+// in both themes, as a modal backdrop does; the card takes the theme's
+// widget surface with a selection (or, on rejection, error) tint.
+.drop-overlay__backdrop {
+    position: absolute;
+    inset: 0;
+    background: color-mix(in srgb, var(--mat-sys-scrim) 50%, transparent);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+}
+
+.drop-overlay__card {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: 12px;
+    padding: clamp(28px, 5vh, 48px) clamp(28px, 5vw, 56px);
+    min-width: 320px;
+    max-width: min(520px, 88vw);
+    background: color-mix(
+        in srgb,
+        var(--app-selection-color) 8%,
+        var(--app-widget-bg)
+    );
+    border: 2px dashed var(--app-selection-border);
+    border-radius: 18px;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.45);
+    color: var(--app-heading-color);
+    animation: drop-overlay-scale 0.18s ease-out;
+
+    &.is-rejected {
+        border-color: var(--mat-sys-error);
+        background: color-mix(
+            in srgb,
+            var(--mat-sys-error) 8%,
+            var(--app-widget-bg)
+        );
+
+        .drop-overlay__icon-wrap {
+            background: var(--mat-sys-error);
+            box-shadow: 0 8px 22px
+                color-mix(in srgb, var(--mat-sys-error) 40%, transparent);
+        }
+
+        .drop-overlay__icon {
+            color: var(--mat-sys-on-error);
+        }
+    }
+}
+
+.drop-overlay__icon-wrap {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 64px;
+    height: 64px;
+    border-radius: 18px;
+    background: var(--app-selection-color);
+    box-shadow: 0 8px 22px
+        color-mix(in srgb, var(--app-selection-color) 45%, transparent);
+    margin-bottom: 4px;
+}
+
+.drop-overlay__icon {
+    font-size: 36px;
+    width: 36px;
+    height: 36px;
+    color: var(--app-selection-on-color);
+}
+
+.drop-overlay__title {
+    font-family: Roboto, 'Helvetica Neue', sans-serif;
+    font-weight: 600;
+    font-size: 1.25rem;
+    margin: 0;
+    letter-spacing: -0.01em;
+}
+
+.drop-overlay__body {
+    font-family: Roboto, 'Helvetica Neue', sans-serif;
+    font-size: 0.9rem;
+    margin: 0;
+    opacity: 0.78;
+    line-height: 1.45;
+}
+
+@keyframes drop-overlay-fade {
+    from {
+        opacity: 0;
+    }
+    to {
+        opacity: 1;
+    }
+}
+
+@keyframes drop-overlay-scale {
+    from {
+        opacity: 0;
+        transform: translateY(6px) scale(0.97);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    :host.is-visible {
+        animation: drop-overlay-fade 0.1s ease-out;
+    }
+
+    .drop-overlay__card {
+        animation: drop-overlay-fade 0.1s ease-out;
+    }
+}

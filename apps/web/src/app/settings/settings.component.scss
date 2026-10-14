@@ -1,0 +1,608 @@
+@use '../../../../../libs/ui/styles/focus-ring';
+
+// Settings page: one content column of titled cards. Every row is a label
+// column plus one right-aligned control column, so selects, switches and
+// segmented controls line up down the page. Tokens and the Material token
+// overrides (compact switch, dense select) live in `_settings-theme.scss`.
+
+.settings-page-host {
+    display: block;
+}
+
+.settings-container {
+    height: auto;
+    overflow: visible;
+    // Rows stack by the pane's width, not the viewport's: the sidebar keeps
+    // the page narrow on small desktop windows. This block is not the
+    // scroll owner, so inline-size containment costs it nothing.
+    container-type: inline-size;
+}
+
+.settings-layout {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    align-items: stretch;
+    box-sizing: border-box;
+    max-width: 880px;
+    margin: 0 auto;
+    padding: 28px 40px calc(48px + var(--settings-safe-bottom));
+}
+
+.settings-content {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+// ─── Page header ───────────────────────────────────────────────────────────
+.settings-group {
+    display: flex;
+    flex-direction: column;
+    gap: 28px;
+}
+
+.settings-group__header {
+    h2 {
+        margin: 0;
+        font-size: 26px;
+        font-weight: 600;
+        letter-spacing: -0.3px;
+        line-height: 1.2;
+        color: var(--app-heading-color);
+    }
+
+    p {
+        margin: 6px 0 0;
+        color: var(--app-body-color);
+        font-size: 13.5px;
+        line-height: 1.45;
+    }
+}
+
+// ─── Sections and cards ────────────────────────────────────────────────────
+.settings-section {
+    display: block;
+}
+
+.settings-section__header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 0 2px 10px;
+    min-height: 32px;
+
+    h3 {
+        margin: 0;
+        font-size: 14px;
+        font-weight: 600;
+        color: var(--app-heading-color);
+    }
+}
+
+.settings-section__count {
+    padding: 1px 7px;
+    border-radius: 999px;
+    background: var(--settings-chip-bg);
+    color: var(--settings-chip-fg);
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+}
+
+.settings-section__actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-left: auto;
+}
+
+.settings-section__desc {
+    margin: -4px 2px 10px;
+    color: var(--settings-muted);
+    font-size: 12.5px;
+    line-height: 1.5;
+    max-width: 72ch;
+}
+
+.settings-card {
+    background: var(--settings-card-bg);
+    border: 1px solid var(--settings-card-border);
+    border-radius: 12px;
+}
+
+.settings-card--danger {
+    border-color: var(--settings-item-danger-border);
+}
+
+// ─── Rows ──────────────────────────────────────────────────────────────────
+.setting-item {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 24px;
+    align-items: center;
+    min-height: 60px;
+    padding: 14px 16px;
+    position: relative;
+}
+
+.setting-item + .setting-item,
+.setting-item__sub + .setting-item,
+.setting-item + .setting-item__sub + .setting-item {
+    border-top: 1px solid var(--settings-item-border);
+}
+
+// Meta stacked over a full-width control (textareas, lists). Flex children
+// do not grow from `justify-content`, so the field itself takes the row.
+.setting-item--full-control {
+    grid-template-columns: 1fr;
+    gap: 12px;
+
+    .setting-item__control {
+        justify-content: stretch;
+
+        > .mat-mdc-form-field {
+            width: 100%;
+        }
+    }
+}
+
+.setting-item--list {
+    display: block;
+    padding: 0;
+}
+
+// A callout under the row it explains (player runtime note, nightly warning).
+.setting-item__sub {
+    padding: 0 16px 14px;
+}
+
+.setting-item__meta {
+    min-width: 0;
+
+    h4 {
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin: 0;
+        font-size: 13.5px;
+        font-weight: 500;
+        color: var(--app-heading-color);
+    }
+
+    p {
+        margin: 3px 0 0;
+        max-width: 56ch;
+        color: var(--settings-muted);
+        font-size: 12.5px;
+        line-height: 1.5;
+        text-wrap: pretty;
+    }
+
+    a {
+        color: var(--app-selection-color);
+    }
+}
+
+.setting-item__control {
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+}
+
+.setting-item__control--stack {
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 8px;
+}
+
+.setting-item__toggle {
+    justify-content: flex-end;
+}
+
+// Row revealed from settings search or the command palette. Choosing a
+// result with Enter focuses the row by script and keeps `:focus-visible`,
+// so it shows the app ring like any keyboard focus.
+.setting-item[data-setting-id],
+.settings-card[data-setting-id],
+.settings-foot[data-setting-id] {
+    scroll-margin: 96px 0 120px;
+
+    &:focus {
+        outline: none;
+    }
+
+    &:focus-visible {
+        @include focus-ring.focus-ring-declarations;
+        border-radius: 12px;
+    }
+}
+
+.setting-item--revealed {
+    animation: settings-reveal-fade 2.4s ease-out forwards;
+}
+
+@keyframes settings-reveal-fade {
+    0%,
+    60% {
+        background: color-mix(
+            in srgb,
+            var(--app-selection-color) 10%,
+            transparent
+        );
+    }
+
+    100% {
+        background: transparent;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .setting-item--revealed {
+        animation: none;
+    }
+}
+
+// ─── Controls ──────────────────────────────────────────────────────────────
+// Compact select without a floating label: the row label names it.
+.settings-select.mat-mdc-form-field {
+    width: 220px;
+
+    .mat-mdc-text-field-wrapper {
+        background: var(--settings-control-bg);
+    }
+
+    .mat-mdc-select-value,
+    .mat-mdc-input-element {
+        font-size: 13px;
+    }
+}
+
+.settings-text-field.mat-mdc-form-field {
+    width: min(100%, 340px);
+}
+
+.settings-chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 1px 7px;
+    border-radius: 999px;
+    background: var(--settings-chip-bg);
+    color: var(--settings-chip-fg);
+    font-size: 10.5px;
+    font-weight: 500;
+    line-height: 1.5;
+    white-space: nowrap;
+}
+
+.settings-chip--success {
+    background: color-mix(in srgb, #4ade80 14%, transparent);
+    color: var(--app-provider-stalker);
+}
+
+.settings-chip--accent {
+    background: var(--app-selection-surface);
+    color: var(--app-selection-color);
+}
+
+.settings-chip--warn {
+    background: var(--app-expiry-warn-surface);
+    color: var(--app-expiry-warn-text);
+}
+
+.settings-callout {
+    display: flex;
+    gap: 10px;
+    padding: 12px 14px;
+    border-radius: 10px;
+    border: 1px solid var(--settings-callout-info-border);
+    background: var(--settings-callout-info-bg);
+    color: var(--settings-muted);
+    font-size: 12.5px;
+    line-height: 1.5;
+
+    > mat-icon {
+        flex-shrink: 0;
+        width: 16px;
+        height: 16px;
+        font-size: 16px;
+        margin-top: 1px;
+        color: var(--app-selection-color);
+    }
+
+    b {
+        display: block;
+        margin-bottom: 2px;
+        color: var(--app-heading-color);
+        font-weight: 600;
+    }
+
+    a {
+        color: var(--app-selection-color);
+    }
+}
+
+.settings-callout--warn {
+    border-color: var(--settings-callout-warn-border);
+    background: var(--settings-callout-warn-bg);
+
+    > mat-icon {
+        color: var(--settings-callout-warn-icon);
+    }
+}
+
+.settings-callout__actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 10px;
+}
+
+// Segmented control (theme, cover size, guide layout): a pill.
+.theme-switcher {
+    display: inline-flex;
+    padding: 3px;
+    border: 1px solid var(--settings-control-border);
+    border-radius: 999px;
+    background: var(--settings-control-bg);
+}
+
+.theme-switcher__option {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    height: 28px;
+    padding: 0 12px;
+    border: 0;
+    border-radius: 999px;
+    background: transparent;
+    color: var(--app-body-color);
+    font: inherit;
+    font-size: 12.5px;
+    font-weight: 500;
+    cursor: pointer;
+    transition:
+        background 0.15s ease,
+        color 0.15s ease;
+
+    mat-icon {
+        width: 14px;
+        height: 14px;
+        font-size: 14px;
+    }
+
+    &:hover {
+        color: var(--app-heading-color);
+    }
+
+    &:focus-visible {
+        @include focus-ring.focus-ring-declarations($offset: 1px);
+    }
+}
+
+.theme-switcher__option--selected {
+    background: var(--app-selection-surface);
+    color: var(--app-selection-color);
+}
+
+// ─── Buttons in rows ───────────────────────────────────────────────────────
+.inline-actions {
+    display: flex;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.button-spinner {
+    display: inline-block;
+    margin-right: 6px;
+    vertical-align: middle;
+}
+
+.inline-actions__label {
+    display: inline-flex;
+    align-items: center;
+}
+
+.inline-actions__button--busy {
+    background: var(--app-selection-surface);
+}
+
+// TMDB attribution / disclaimers under the last card (About, Metadata,
+// Parental lock).
+.settings-foot {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    color: var(--settings-muted);
+    font-size: 11.5px;
+    line-height: 1.6;
+
+    img {
+        height: 14px;
+    }
+}
+
+// ─── Restart notice ────────────────────────────────────────────────────────
+.settings-restart-bar {
+    position: sticky;
+    top: 0;
+    z-index: 5;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 12px 8px 16px;
+    border: 1px solid var(--settings-card-border);
+    border-radius: 10px;
+    background: var(--settings-restart-bar-bg);
+    color: var(--app-body-color);
+    font-size: 12.5px;
+
+    mat-icon {
+        flex-shrink: 0;
+        width: 16px;
+        height: 16px;
+        font-size: 16px;
+        color: var(--app-selection-color);
+    }
+
+    span {
+        flex: 1;
+        min-width: 0;
+    }
+}
+
+// ─── Save bar ──────────────────────────────────────────────────────────────
+// Only present while the form is dirty. It floats over the content column
+// (sticky, so it never covers the shell rail) and carries the change count.
+.unsaved-bar {
+    position: sticky;
+    bottom: calc(16px + var(--settings-safe-bottom));
+    z-index: 100;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: min(100%, 720px);
+    margin: 0 auto;
+    padding: 10px 10px 10px 16px;
+    box-sizing: border-box;
+    border: 1px solid var(--settings-action-bar-border);
+    border-radius: 12px;
+    background: var(--settings-action-bar-bg);
+    box-shadow: var(--settings-action-bar-shadow);
+    animation: unsaved-bar-enter 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+
+    @media (prefers-reduced-motion: reduce) {
+        animation: none;
+    }
+}
+
+@keyframes unsaved-bar-enter {
+    from {
+        opacity: 0;
+        transform: translateY(12px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.unsaved-bar__dot {
+    flex-shrink: 0;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--app-selection-color);
+}
+
+.unsaved-bar__message {
+    flex: 1;
+    min-width: 0;
+    color: var(--app-heading-color);
+    font-size: 13px;
+}
+
+.unsaved-bar__actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    margin-left: auto;
+}
+
+.settings-save-button.mat-mdc-button-base {
+    font-weight: 600;
+}
+
+.settings-kbd {
+    margin-left: 8px;
+    padding: 1px 5px;
+    border-radius: 4px;
+    border: 1px solid color-mix(in srgb, currentColor 25%, transparent);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 10.5px;
+    font-weight: 500;
+    opacity: 0.8;
+}
+
+// ─── Narrow panes ──────────────────────────────────────────────────────────
+// Below 600px of content width a row cannot hold its label beside a 220px
+// control, so the control drops under the label.
+@container (max-width: 600px) {
+    .settings-layout {
+        padding: 20px 16px calc(24px + var(--settings-safe-bottom));
+    }
+
+    .settings-group__header h2 {
+        font-size: 22px;
+    }
+
+    .setting-item {
+        grid-template-columns: 1fr;
+        gap: 12px;
+    }
+
+    .setting-item__control,
+    .setting-item__toggle {
+        justify-content: flex-start;
+    }
+
+    .setting-item__control--stack {
+        align-items: flex-start;
+    }
+
+    .settings-select.mat-mdc-form-field,
+    .settings-text-field.mat-mdc-form-field {
+        width: 100%;
+    }
+
+    // Translated option labels (ru, de) do not fit a one-line pill on a
+    // phone: the segments take the row and wrap when they must.
+    .theme-switcher {
+        width: 100%;
+        flex-wrap: wrap;
+        border-radius: 14px;
+    }
+
+    .theme-switcher__option {
+        flex: 1 1 auto;
+        min-width: 0;
+    }
+
+    .settings-section__header {
+        flex-wrap: wrap;
+    }
+
+    .settings-section__actions {
+        flex-basis: 100%;
+        margin-left: 0;
+    }
+
+    .unsaved-bar {
+        flex-wrap: wrap;
+        bottom: calc(8px + var(--settings-safe-bottom));
+    }
+
+    // Long translations ("Enregistrer les modifications") do not fit two
+    // buttons side by side on a phone: stack them, Save first.
+    .unsaved-bar__actions {
+        flex-basis: 100%;
+        flex-direction: column-reverse;
+        align-items: stretch;
+        margin-left: 0;
+
+        button {
+            width: 100%;
+        }
+    }
+
+    // A keyboard-only affordance has no place on a phone.
+    .settings-kbd {
+        display: none;
+    }
+}

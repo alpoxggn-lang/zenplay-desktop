@@ -1,0 +1,8 @@
+*.yml 
+dist 
+build 
+coverage 
+release 
+.angular
+
+.nx/self-healing

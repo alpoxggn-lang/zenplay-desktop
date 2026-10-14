@@ -1,0 +1,29 @@
+{
+    "name": "playlist-m3u-feature-player",
+    "$schema": "../../../../node_modules/nx/schemas/project-schema.json",
+    "sourceRoot": "libs/playlist/m3u/feature-player/src",
+    "prefix": "lib",
+    "projectType": "library",
+    "tags": ["scope:playlist", "domain:m3u", "type:feature"],
+    "implicitDependencies": ["ui-styles"],
+    "targets": {
+        "test": {
+            "executor": "nx:run-commands",
+            "outputs": ["{workspaceRoot}/coverage/{projectRoot}"],
+            "options": {
+                "command": [
+                    "node",
+                    "./tools/testing/run-web-esm-lib-tests.mjs",
+                    "libs/playlist/m3u/feature-player/src"
+                ],
+                "env": {
+                    "NODE_OPTIONS": "--experimental-vm-modules"
+                },
+                "forwardAllArgs": true
+            }
+        },
+        "lint": {
+            "executor": "@nx/eslint:lint"
+        }
+    }
+}

@@ -1,0 +1,107 @@
+:host {
+    display: block;
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+
+    // "Playing from: SharkTV · 1080p · mkv — also found in 2 playlists".
+    // Projected into the hero's credits block, on a line of its own.
+    ::ng-deep .source-caption {
+        flex: 0 0 100%;
+        margin: 0;
+        font-size: 0.75rem;
+        line-height: 1.4;
+        color: var(--text-muted);
+
+        .source-caption__source {
+            margin-left: 6px;
+            font-weight: 600;
+            color: var(--text-secondary);
+        }
+
+        .source-caption__extra {
+            margin-left: 6px;
+        }
+    }
+
+    // The download button's circular progress: track + value arc, spinning
+    // when the total size — and so the percent — is unknown.
+    ::ng-deep .download-glyph {
+        position: relative;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+
+        .download-ring {
+            width: 26px;
+            height: 26px;
+            transform: rotate(-90deg);
+
+            &--indeterminate {
+                animation: download-ring-spin 0.9s linear infinite;
+            }
+        }
+
+        .download-ring__track {
+            fill: none;
+            stroke: color-mix(in srgb, var(--app-on-surface) 18%, transparent);
+            stroke-width: 3;
+        }
+
+        .download-ring__value {
+            fill: none;
+            stroke: var(--accent-color, #4f8eff);
+            stroke-width: 3;
+            stroke-linecap: round;
+            transition: stroke-dashoffset 0.3s ease;
+        }
+
+        .download-glyph__center {
+            position: absolute;
+            width: 14px;
+            height: 14px;
+            font-size: 14px;
+            line-height: 14px;
+        }
+    }
+
+    ::ng-deep .details__fallback-note {
+        flex: 1 0 100%;
+        margin-bottom: 4px;
+        padding: 14px 16px;
+        border: 1px solid color-mix(in srgb, var(--tag-border) 85%, transparent);
+        border-radius: 14px;
+        background: linear-gradient(
+            180deg,
+            color-mix(in srgb, var(--surface-bg) 86%, transparent) 0%,
+            color-mix(in srgb, var(--tag-bg) 86%, transparent) 100%
+        );
+        color: var(--text-secondary);
+        line-height: 1.5;
+        backdrop-filter: blur(14px);
+    }
+
+    ::ng-deep .details__meta-item--fallback {
+        min-width: min(220px, 100%);
+
+        .value--mono {
+            font-family:
+                ui-monospace, 'SFMono-Regular', 'SF Mono', Menlo, Consolas,
+                monospace;
+            font-size: 0.8125rem;
+            letter-spacing: 0.03em;
+        }
+    }
+}
+
+@keyframes download-ring-spin {
+    to {
+        transform: rotate(270deg);
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    :host ::ng-deep .download-ring--indeterminate {
+        animation-duration: 3.6s;
+    }
+}

@@ -1,0 +1,142 @@
+---
+import type { ResolvedRelease } from '../lib/downloads';
+import { formatReleaseDate, resolveDownloads } from '../lib/downloads';
+import { DOWNLOAD_PLATFORMS, PLATFORM_ICON_PATHS, PLATFORM_LABELS, PLATFORM_PAGES } from '../lib/platforms';
+
+interface Props {
+  release: ResolvedRelease;
+}
+
+const { release } = Astro.props;
+const releaseDate = formatReleaseDate(release.publishedAt);
+
+/**
+ * One row per platform, like the settings pages inside the app. The row lists
+ * the files the release actually carries and sends the visitor to the
+ * platform page, which has the direct links plus install and first-run notes.
+ */
+const rows = DOWNLOAD_PLATFORMS.map((platform) => {
+  const downloads = resolveDownloads(release, platform);
+  const shown = [...downloads.filter((d) => d.recommended), ...downloads.filter((d) => !d.recommended)].slice(0, 2);
+  return {
+    platform,
+    label: PLATFORM_LABELS[platform],
+    icon: PLATFORM_ICON_PATHS[platform],
+    href: PLATFORM_PAGES[platform],
+    files: shown.map((d) => ({ name: d.fileName, detail: d.detail })),
+    more: Math.max(downloads.length - shown.length, 0),
+  };
+});
+
+const packageManagers = [
+  { label: 'Homebrew', command: 'brew install --cask iptvnator' },
+  { label: 'Snap', command: 'sudo snap install iptvnator' },
+  { label: 'AUR', command: 'yay -S iptvnator-bin' },
+];
+---
+
+<section id="download" class="relative py-24 sm:py-28">
+  <div class="relative mx-auto max-w-6xl px-6">
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+      <h2 class="font-display text-3xl font-bold tracking-tight text-surface-50 sm:text-4xl lg:text-5xl">
+        Get IPTVnator {release.version}
+      </h2>
+      <p class="text-base text-surface-400 sm:text-right">
+        {releaseDate && <span>Released {releaseDate} · </span>}
+        <a href={release.url} class="text-accent-400 transition-colors hover:text-accent-300" rel="noopener">Release notes</a>
+      </p>
+    </div>
+
+    <div class="mt-12 grid gap-5 lg:grid-cols-[minmax(0,1.25fr)_minmax(0,0.75fr)]" data-download-panel>
+      <!-- Platform rows -->
+      <div class="overflow-hidden rounded-xl border border-surface-800 bg-surface-900/40">
+        {
+          rows.map((row) => (
+            <div
+              class="grid gap-4 border-t border-surface-800 p-5 first:border-t-0 transition-colors duration-300 sm:grid-cols-[9.5rem_minmax(0,1fr)_auto] sm:items-center"
+              data-platform-row={row.platform}
+            >
+              <div class="flex items-center gap-2.5 font-display text-base font-semibold text-surface-50">
+                <svg class="h-[18px] w-[18px] shrink-0 text-surface-400" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d={row.icon} />
+                </svg>
+                {row.label}
+                <span class="hidden font-mono text-[10px] font-medium uppercase tracking-[0.1em] text-accent-400" data-detected-badge>
+                  Detected
+                </span>
+              </div>
+              <ul class="min-w-0 font-mono text-xs leading-relaxed text-surface-400">
+                {row.files.map((file) => (
+                  <li class="truncate" title={file.detail}>
+                    {file.name}
+                  </li>
+                ))}
+                {row.more > 0 && <li class="text-surface-600">+ {row.more} more on the {row.label} page</li>}
+              </ul>
+              <a
+                href={row.href}
+                class="inline-flex items-center justify-center whitespace-nowrap rounded-lg border border-surface-700 px-4 py-2.5 text-sm font-semibold text-surface-100 transition-colors duration-200 hover:border-surface-500 hover:bg-surface-900"
+                data-platform-link
+              >
+                Download for {row.label}
+              </a>
+            </div>
+          ))
+        }
+      </div>
+
+      <!-- Package managers -->
+      <div class="flex flex-col rounded-xl border border-surface-800 bg-surface-900/40">
+        {
+          packageManagers.map((pm) => (
+            <div class="grid grid-cols-[4.5rem_minmax(0,1fr)_auto] items-center gap-3 border-t border-surface-800 px-5 py-4 first:border-t-0">
+              <span class="font-mono text-[11px] uppercase tracking-[0.12em] text-surface-500">{pm.label}</span>
+              <code class="min-w-0 font-mono text-[13px] text-surface-100">{pm.command}</code>
+              <button
+                type="button"
+                class="copy-btn rounded-md border border-surface-700 px-2.5 py-1 font-mono text-[11px] text-surface-400 transition-colors hover:border-surface-500 hover:text-surface-100"
+                data-command={pm.command}
+                aria-label={`Copy ${pm.label} command`}
+              >
+                Copy
+              </button>
+            </div>
+          ))
+        }
+        <p class="mt-auto border-t border-surface-800 px-5 py-4 text-sm leading-relaxed text-surface-400">
+          Prefer the browser? <a href="/iptvnator/download/docker/" class="text-accent-400 transition-colors hover:text-accent-300">Self-host the web app</a> and open it as a PWA on any device.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<script>
+  import { detectPlatform } from '../lib/detect-platform';
+
+  const platform = detectPlatform();
+  if (platform) {
+    const row = document.querySelector<HTMLElement>(`[data-platform-row="${platform}"]`);
+    row?.classList.add('bg-surface-850/60');
+    row?.querySelector('[data-detected-badge]')?.classList.remove('hidden');
+    const link = row?.querySelector('[data-platform-link]');
+    link?.classList.remove('border-surface-700', 'text-surface-100', 'hover:border-surface-500', 'hover:bg-surface-900');
+    link?.classList.add('border-transparent', 'bg-accent-500', 'text-surface-950', 'hover:bg-accent-400');
+  }
+
+  document.querySelectorAll<HTMLButtonElement>('.copy-btn').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const command = btn.dataset.command;
+      if (!command) return;
+      try {
+        await navigator.clipboard.writeText(command);
+        btn.textContent = 'Copied';
+        window.setTimeout(() => {
+          btn.textContent = 'Copy';
+        }, 1500);
+      } catch {
+        // Clipboard access can be denied; the command stays selectable as text.
+      }
+    });
+  });
+</script>

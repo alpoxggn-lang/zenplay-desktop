@@ -1,0 +1,1358 @@
+# Embedded Inline Playback
+
+This document records the current contract for embedded playback in portal detail views.
+
+## Summary
+
+- Embedded web players are `videojs`, `html5`, and `artplayer`.
+- `embedded-mpv` exists as a hidden desktop experimental harness backed by a native MPV addon. macOS and Windows use in-process `libmpv`; Linux uses an X11/Xwayland child window with an out-of-process `mpv --wid` backend.
+- Controlled external players are `mpv` and `vlc`.
+- macOS `.app` bundle paths are resolved only for real MPV/VLC apps. IINA may
+  launch through the MPV path field when the user supplies an executable path
+  such as `/Applications/IINA.app/Contents/MacOS/iina-cli`, but IPTVnator
+  controls, position polling, and instance reuse are not guaranteed for IINA.
+- Flatpak launches external players on the host via `flatpak-spawn --host`.
+- Live playback stays inline in dedicated live layouts.
+- VOD and series detail playback stays inline on canonical detail, collection,
+  favorites, recent, and search surfaces.
+- Xtream and Stalker series detail heroes expose a quick-start CTA driven by
+  saved episode playback positions.
+- Embedded playback UI is always hosted by the current view. `PlayerService`
+  launches MPV/VLC only and does not open an embedded-player dialog.
+- Browser-player failures are diagnosed client-side and produce ranked,
+  user-triggered recovery actions without changing the saved player setting.
+
+## Scope
+
+Inline embedded playback is required for these VOD/series entry points:
+
+- Xtream VOD detail route
+- Xtream series detail route
+- Stalker VOD detail view
+- Stalker series detail view
+- unified favorites collection details
+- unified recently viewed collection details
+- Stalker advanced search result details
+
+Collection/search VOD surfaces that expose embedded playback must host
+`ResolvedPortalPlayback` inline state locally. They must not call
+`PlayerService.openPlayer(...)` or `PlayerService.openResolvedPlayback(...)` to
+create embedded UI.
+
+## Logical Playback Identity
+
+Every inline playback host owns a required, URL-independent
+`playbackSessionKey`. Live hosts derive it from the playlist/source and the
+current channel identity; an M3U session uses `Channel.id` rather than a mutable
+stream or catch-up URL. VOD and series hosts use the route or catalog
+content identity, with series episode coordinates. Stalker episode identity
+also includes the explicit series mode, normalized parent, exact season key,
+season number, and episode number; synthesized episode hashes are not identity.
+Mapped episodes retain the original provider command or episode ID for playback
+resolution. Recovery ownership never serializes that value into the session
+key or retained recovery state; its recovery-ownership use is limited to a
+short-lived exact pending-request snapshot/guard that locates the selected
+episode and rejects stale or out-of-order completion. This keeps token refreshes
+in one logical session while ensuring colliding tracking hashes cannot select a
+sibling episode.
+After a Stalker episode mounts, the host retains only a frozen structural
+identity (source, normalized parent, series mode, exact season key, season and
+episode coordinates, and the credential-free session key). Each metadata,
+navigation, or autoplay read resolves those coordinates against the current
+`mappedSeasons()` value. Same-owner provider or TMDB refreshes therefore update
+the mounted episode without changing its session key; if the episode disappears,
+or if multiple episodes claim the same structural coordinates, the mounted
+commands fail closed. The command/ID-bearing identity never outlives the pending
+playback request.
+Shared wrappers (`VodDetailsComponent` and `PortalInlinePlayerComponent`) pass
+the key unchanged to `WebPlayerViewComponent`.
+
+Hosts invalidate both committed playback and pending resolution when the
+canonical owner changes (playlist/source, content, and mode where applicable).
+Refreshing data for the same canonical owner preserves the mounted player.
+Collection UIDs remain a separate persistence concern; legacy M3U collection
+UIDs continue to use stream URLs so saved favorites ordering remains compatible.
+
+Temporary portal URLs, catch-up URLs, headers, DRM data, and alternative source
+payloads are transport details and must not change this logical identity. A
+content or episode change must produce a different key. The serialized key is
+created with `createPlaybackSessionKey()` from `@iptvnator/playback/util` so
+delimiter-bearing provider IDs remain unambiguous.
+
+The key is host-owned and stable only for the logical selection represented by
+that mounted host. In particular, M3U identity uses the current playlist/source
+identity and `Channel.id`; it does not claim durability across a refresh that
+replaces either identity. Recovery state contains this credential-free key,
+target IDs, generation counters, and a finite VOD resume position. It never
+uses a playback URL, headers, DRM configuration, or credentials as identity.
+
+Inline hosts capture this identity before asynchronous playback resolution. A
+completion may mount only while the same owner is current; stale completions
+and embedded starts without a complete canonical identity are ignored without
+replacing an already committed session.
+
+## Embedded MPV Harness
+
+The repository now contains a first-pass native embedded MPV harness for Electron:
+
+- shared setting id: `embedded-mpv`
+- native addon owner: `/Users/4gray/Code/iptvnator/apps/electron-backend/src/app/services/embedded-mpv-native.service.ts`
+- IPC bridge: `/Users/4gray/Code/iptvnator/apps/electron-backend/src/app/events/embedded-mpv.events.ts`
+- renderer host: `/Users/4gray/Code/iptvnator/libs/ui/playback/src/lib/embedded-mpv-player/embedded-mpv-player.component.ts`
+- native architecture and release-readiness details: `/Users/4gray/Code/iptvnator/docs/architecture/embedded-mpv-native.md`
+
+Current contract:
+
+- desktop only: macOS, Windows x64, and Linux x64 under X11/Xwayland
+- experimental opt-in
+- enabled in local development only when `IPTVNATOR_ENABLE_EMBEDDED_MPV_EXPERIMENT=1`
+- Linux Wayland sessions must start Electron through Xwayland, for example with `pnpm nx run electron-backend:serve-electron --args=--ozone-platform=x11` during local development or `iptvnator --ozone-platform=x11` for a packaged app
+- enabled in packaged desktop builds only when the bundled native addon/runtime prerequisites are present; Linux additionally requires an `mpv` executable on `PATH`
+- uses IPTVnator-owned controls and `ResolvedPortalPlayback` payloads
+- uses the libmpv render API on macOS and renders through an IPTVnator-owned native `NSView`
+- uses mpv `wid` embedding on Windows and Linux through IPTVnator-owned native child windows
+- Linux starts `mpv --wid=<x11-window>` out of process so MPV does not share Electron's FFmpeg or graphics symbols
+- Linux controls that out-of-process MPV instance through a private JSON IPC socket so duration, position, pause, volume, and seek state come from MPV instead of renderer guesses
+- Linux starts that MPV process with `WAYLAND_DISPLAY` removed, `XDG_SESSION_TYPE=x11`, and X11 video output options; otherwise MPV can pick Wayland inside a Wayland desktop session, ignore `--wid`, and open a separate window instead of embedding
+- macOS/Windows default to libmpv's OpenGL render backend with `hwdec=auto-safe`
+- keeps the previous software renderer as a debug fallback via `IPTVNATOR_EMBEDDED_MPV_RENDERER=sw`
+- emits lightweight native diagnostics when `IPTVNATOR_TRACE_EMBEDDED_MPV=1` is set; Linux also writes MPV's own trace log to `/tmp/iptvnator-embedded-mpv.log`
+- exposes an IPTVnator-owned fullscreen button that uses the renderer fullscreen API and resyncs the native MPV view bounds after fullscreen transitions
+- auto-hides IPTVnator-owned controls while playback is active and restores them on pointer/focus interaction
+- exposes audio-track metadata from MPV and switches tracks through the `aid` property without reloading the stream
+- passes VOD/episode resume offsets to MPV through the `loadfile` options map; live catchup URLs are treated as already-positioned streams
+- applies the initial volume during session creation and uses async libmpv control calls after startup where the in-process libmpv backend is active
+- VLC remains external-only
+
+Current limitation:
+
+- the current feasibility harness is still experimental and platform-specific
+- the original macOS `wid` embedding path produced audio with a black video surface inside Electron, so the harness now avoids foreign-window embedding on macOS
+- Windows and Linux use the mpv `wid` path and still need OS-native packaged smoke coverage before public exposure
+- Linux native Wayland is not supported in this implementation; the Electron process must have `DISPLAY` through X11/Xwayland and a real X11 window handle
+- the OpenGL render path avoids the old per-frame `CGImage` copy path, but it still needs broader interaction, resize, and packaging coverage
+- startup deadlocks seen during early macOS playback bring-up are mitigated, but the feature is still kept behind the explicit experiment flag until more interaction and packaging coverage is proven
+- because of that, the setting is auto-sanitized back to the default inline player unless support detection reports that the experimental runtime is available
+- this follows the rollout gate: keep the native work in-tree, but do not leave it user-facing until playback, resize, focus, and packaging are stable
+
+## Two-State Detail Layout (Browse ↔ Watch)
+
+Portal VOD/series detail pages are hosted by the shared
+`PortalDetailShellComponent`
+(`libs/ui/components/src/lib/portal-detail-shell/portal-detail-shell.component.ts`),
+which owns the page scroll container and two layout states:
+
+- **Browse** (`playbackActive=false`): the hero (`ContentHeroComponent`,
+  now a natural-height, non-scrolling block) renders poster, title, chips,
+  description, credits, and actions. Episodes render below.
+- **Watch** (`playbackActive=true`, bound by hosts to
+  `inlinePlayback() !== null`): the hero collapses (~300ms CSS morph,
+  disabled under `prefers-reduced-motion`), the host-projected
+  `[detail-player]` slot renders the inline player at full content width,
+  and the shell renders an About block (`ContentAboutComponent`) below the
+  `[detail-episodes]` slot so the hero metadata stays reachable.
+
+Contracts:
+
+- Hosts provide hero chips/meta/actions as `*appDetailTags` / `*appDetailMeta` /
+  `*appDetailActions` templates; the shell stamps them into the hero and again
+  into the About block. Degradation stays "missing → not rendered".
+- Provider stand-ins count as missing: `N/A` (any case), a lone `-`, and a
+  `0` IMDb/Kinopoisk score are dropped where provider rows are mapped, by
+  `readProviderText` / `readProviderRating`
+  (`libs/shared/interfaces/src/lib/provider-metadata.util.ts`) — in
+  `createStalkerInfo()`, the `vod-details-adapters.ts` normalizers and the
+  Xtream store's detail selection. Templates keep plain `@if` guards; do not
+  teach them the placeholder list. Widen the list only with evidence of a
+  provider sending the new stand-in.
+- The shell never wraps the `[detail-player]` slot in a conditional; the
+  host's `@if (inlinePlayback())` is the only creator/destroyer of the
+  player subtree, so shell state changes cannot recreate the `<video>`.
+- **External MPV/VLC sessions do not flip the layout to watch** — browse
+  layout stays, and the primary CTA keeps its "Stop <player>" behavior.
+- The shell's Back, rendered by the workspace header, emits the host-owned
+  `backClicked` in browse and watch alike (unless `backAvailable=false`, when
+  the shell registers none):
+  hosts wire it to their route-level `goBack()`, straight back to the list —
+  everything browse offers is also visible in watch, so a two-step unwind
+  would be ceremony. Escape alone unwinds one level: in watch it emits
+  `closePlayerRequested`, which hosts wire to `closeInlinePlayer()`; in browse
+  it emits `backClicked`. Escape respects fullscreen, menus/dialogs, editable
+  fields and hidden/inert surfaces, and consumes a handled key so one press
+  performs only one action. See
+  [Portal Detail Navigation](./portal-detail-navigation.md).
+- The now-playing bar has one exit of its own: the "Close player" button
+  emits `closed` and returns to browse without navigating. It carries no back
+  arrow — a second arrow beside the header's, with a different meaning,
+  was the duplicate this contract removes.
+- Entering watch scrolls the shell to the top; leaving keeps the scroll
+  position.
+
+### Inline player stage (theater + ambient fill)
+
+`PortalInlinePlayerComponent`
+(`libs/ui/playback/src/lib/portal-inline-player/`) wraps the projected
+`WebPlayerViewComponent` in a `.player-shell__viewport` "theater stage".
+The stage spans the full content width and is capped at
+`min(70vh, 720px)`; on wide-short windows it becomes wider than 16:9. The
+player is sized as the largest 16:9 box that fits the stage height and is
+centered, so the leftover is always the stage's own black background — never
+a stray strip of app surface. This is the YouTube-style letterbox and is the
+default behavior for every inline engine.
+
+The optional `playerAmbientMode` setting (Settings → Playback, default off,
+shown only for the built-in web players) renders a blurred, dimmed copy of the
+poster (`ResolvedPortalPlayback.thumbnail`) behind the player via the
+`--ambient-image` custom property, turning the letterbox margins into
+atmosphere (YouTube "Ambient mode" / Netflix backdrops). The component also
+enforces the web-player scope at runtime (HTML5, Video.js, ArtPlayer): with
+Embedded MPV selected, a persisted `playerAmbientMode=true` never renders the
+layer, keeping extra DOM out of the native-video compositing path. Live
+channels are excluded (their `thumbnail` is a logo), and only
+`http(s):`/`data:` poster URLs are accepted to avoid CSS `url()` breakout.
+
+### Up Next side rail (series)
+
+For inline **series** playback the stage can trade its centered letterbox for
+a Netflix/Plex-style layout: the player docks left and the leftover column
+becomes an "Up Next" episode rail (`app-up-next-rail`,
+`libs/ui/playback/src/lib/portal-inline-player/up-next-rail.component.ts`).
+The rail lists the currently playing episode (highlighted, click-inert)
+followed by the rest of its season and a spillover into the following
+seasons, with per-episode watch-progress bars from playback positions,
+drawn in the player's `--pc-progress` like the dock's Up next card.
+
+- Data flow: the hosts (Xtream `SerialDetailsComponent`, Stalker
+  `StalkerSeriesViewComponent`) build the entries with
+  `buildUpNextRailItems()` (`up-next-rail.util.ts`) from their
+  season→episodes map, the inline episode state, and the playback-position
+  map, and pass them into `PortalInlinePlayerComponent` via the
+  `upNextEpisodes` input. Selection comes back through
+  `upNextEpisodeSelected`, carrying the host's raw episode object, and is
+  routed into the host's existing episode-play flow — the same path the
+  season container uses.
+- Width gating: a ResizeObserver on `.player-shell__viewport` feeds the
+  component's `stageSize` with the stage's **border-box** size, and the gate
+  computes the width the rail would actually receive — stage minus the docked
+  layout's padding, minus the 16:9 player sized to the remaining height, minus
+  the flex gap (`RAIL_STAGE_PADDING` / `RAIL_STAGE_GAP`, kept in sync with the
+  stylesheet). The rail docks in only when that is ≥ 320px
+  (`UP_NEXT_RAIL_MIN_WIDTH`). Measuring the border box matters: the docked
+  modifier adds padding to the same element being observed, so a content-box
+  measurement would change the input the moment the rail appears and could
+  oscillate around the threshold. On near-16:9 or taller windows the rail
+  auto-hides and the centered theater/ambient behavior above remains.
+- Lazy Stalker seasons: Ministra VOD-series seasons carry no episodes until
+  their tab is opened, so `StalkerSeriesViewComponent` prefetches the season
+  after the playing one while inline playback is active — otherwise the rail's
+  next-season spillover would silently stop at the current season's end. The
+  prefetch is claimed synchronously and answered seasons (including genuinely
+  empty ones) are never re-requested: a failed request leaves `episodes` empty
+  with `isLoading` back to false, which would otherwise re-run the effect that
+  issued it and loop. A _failed_ request releases the claim but is pinned to
+  the episode that triggered it, so a transient portal error retries on the
+  next playback change instead of either looping or giving up permanently.
+- Gating mirrors ambient mode: the `playerUpNextRail` setting (Settings →
+  Playback, **default on**, shown only for the built-in web players) plus a
+  runtime web-engine check; the rail also requires
+  `contentInfo.contentType === 'episode'` and non-live playback, so movies
+  and live channels always keep the centered stage.
+- Layering: the rail is an opaque panel rendered on top of the stage, so the
+  ambient fill stays behind it and shows in the flexible gap between the
+  docked player and the rail on very wide stages.
+- Fullscreen: the rail cannot show over a fullscreen video, so the same
+  host offers the whole series — season tabs plus the selected season's
+  episodes — as the slide-in side panel of the player's fullscreen surface.
+  `PortalInlinePlayerComponent` provides `FULLSCREEN_CHANNEL_PANEL` for the
+  nested view from the hosts' `seriesEpisodes` / `episodePlaybackPositions` /
+  `seasonLoadStates` inputs, an episode picked there travels the same
+  `upNextEpisodeSelected` output as a rail click, and a season tab picked
+  there travels `episodePanelSeasonSelected` into the host's
+  `onSeasonSelected`. Contract: "Fullscreen episode panel" in
+  `docs/architecture/player-controls-contract.md`.
+
+Season navigation inside `SeasonContainerComponent` uses season tabs
+(`SeasonTabsComponent`; a dropdown beyond 6 seasons) instead of the old
+seasons-grid + "Back to seasons" level. A season is auto-selected
+(inline-playing episode's season → most recently updated in-progress
+episode's season → earliest season with unwatched episodes → latest
+non-empty season; Stalker lazy-VOD series with unhydrated seasons pin
+the fallback to the first season still to load or holding episodes
+(`unloadedSeasonKeys`: a season the portal answered empty is passed over)
+because a pending season's watched state is unknown,
+and the empty→loaded positions flip caused by the session's own watched
+toggles never re-resolves the selection). Extras (season 0, by the
+episodes' season or, unloaded, the key: `isExtrasSeason`) steer none of
+the last three while the series' other seasons hold, or may still hold,
+episodes, as with its next episode, so the page does not open on Specials;
+only a playing extra opens its season. The
+auto-selection emits `seasonSelected`,
+so host lazy-load/enrichment hooks (Stalker VOD-series episode fetch,
+TMDB season fetch, Xtream `enrichSelectedSerialSeason`) fire on open
+without a click. Switching tabs never stops playback; a "back to playing
+episode" chip appears when the playing episode is outside the opened
+season. Season descriptions come from `get_series_info` seasons (Xtream)
+or `TmdbEnrichmentService.getSeason` (Stalker).
+
+The season picker carries no artwork: chips up to four seasons, a menu
+button with "N episodes · M watched" rows from five. The selected season's
+synopsis sits under the header, offset to the episode number column, only
+when it is non-empty and does not repeat the series description. The season
+posters (`seasonPosters` input, keyed like `seasonDescriptions`; TMDB season
+poster first, provider `seasons[].cover_big` next — see "Season/Episode
+Enrichment" in `tmdb-metadata-enrichment.md`) are not drawn on the detail
+page; the container only uses them to recognise an episode still that is the
+season cover again. The hero poster never follows the season.
+The fullscreen episode panel shows the same poster as a compact season
+strip (poster, season name, episode count — `PORTALS.EPISODE_COUNT_ONE` /
+`PORTALS.EPISODE_COUNT_OTHER`) above its season tabs, under the
+same gates, from `PortalInlinePlayerComponent.seasonPosters` through
+`buildFullscreenEpisodePanelSeasons`.
+
+Beyond six seasons the tabs become a `mat-menu` dropdown, and that dropdown
+carries **season thumbnails** from the same `seasonPosters` map
+(`SeasonTabsComponent.seasonPosters`, passed by the season container and by
+the fullscreen episode panel): a 28×42 poster projected into the leading slot
+of each menu row that has one, and the selected season's poster inside the
+closed trigger (`season-tabs__dropdown--with-thumb` tightens the pill around
+it). A season without a poster gets no placeholder tile — its row simply
+starts with the text — and a poster whose image request fails is dropped from
+both places rather than left as a broken-image frame (the component keeps its
+own failed-URL set, independent of the container's cover column). The pill
+row (six seasons or fewer) deliberately stays text-only: the design review
+rejected per-pill thumbnails as a second poster rail, and the season cover
+beside the tabs already shows the selected season's picture.
+
+### Manual watched toggle for movies
+
+Movies carry the same manual "watched" affordance as episodes, in the
+detail action row of both portals: Xtream renders an icon square after
+Favorite (`vod-details-watched.service.ts`), Stalker a labelled button
+inside the shared `app-vod-details` component, wired by the routed
+catalog detail and by the collection inline detail (Favorites / Recent).
+Both hosts delegate to `createVodWatchedToggle()` in
+`@iptvnator/portal/shared/util`:
+
+- **Marking** writes a full-progress `vod` position row — the same shape
+  playback leaves behind, so catalog badges, the dashboard and the
+  Play/Resume rule need no new state. The duration is the stored row's
+  (real), else the provider's `duration_secs` (Xtream), else 1 s: Stalker
+  VOD details state no runtime, and "position === duration" is what
+  "watched" means, whatever the number.
+- **Unmarking** deletes the row, which also forgets the resume point —
+  the trade the episode toggle already makes.
+- Both writes use the rejecting `savePlaybackPositionOrThrow` /
+  `clearPlaybackPositionOrThrow` boundary: the row on screen changes only
+  after a confirmed write, and a refused write reports instead of showing
+  the movie as (un)watched.
+- The toggle is **disabled while the movie plays** (inline player mounted,
+  external session live or launching for this content): the player
+  persists its position every ~15 s and would overwrite a just-written
+  row, silently flipping the movie back.
+- It acts on the **route copy's row only**. Positions are keyed by
+  (playlist, stream), so a pinned multi-source alternative keeps its own
+  state, exactly as playback would leave it.
+- A completion that lands **after navigation** (`stillCurrent`) still
+  refreshes the playlist's catalog positions (the write did land), but
+  neither patches the new page's row nor shows its snackbar.
+- A watched copy shows **Play**, never "Resume 1:32:00" from its final
+  seconds — `app-vod-details` folds `isWatched` into `hasPlaybackPosition`,
+  which Xtream's route already did through its 90% rule.
+
+Catalog cards derive their corner badge from one shared `PortalWatchState`
+(`unwatched` / `in-progress` / `watched`, `portal-watch-state.ts`): both
+facades map a movie's position through `watchStateFromProgressPercent` /
+`resolvePortalWatchState` (`PORTAL_WATCHED_PROGRESS_PERCENT`, 90%, shared
+with the Resume rule and the dashboard's Continue Watching rail),
+and a series through `resolvePortalSeriesWatchState`, which reports at
+most `in-progress` — the list payload never carries the episode total, so
+"every episode watched" is not decidable there.
+
+The season header carries a season-level watched toggle next to
+"Download season" (`season-watch-toggle.util.ts` builds the request:
+marking touches only unwatched episodes so real durations survive;
+a fully watched season flips the action to unwatch-all). The container
+emits one `seasonPlaybackToggleRequested` and the host persists it:
+Xtream through `SerialDetailsSeasonWatchService` and the batch IPC
+(`DB_SAVE_PLAYBACK_POSITIONS_BATCH` / `DB_CLEAR_PLAYBACK_POSITIONS_BATCH`,
+one SQLite transaction; the PWA data source rewrites its localStorage
+blob once), Stalker as synchronous per-episode enqueues through the
+existing position-mutation queue so legacy-row reconciliation still runs
+and the queue coalesces to a single reload; partial failures surface a
+direction-specific "{{count}} marked/unmarked · {{failed}} failed"
+snackbar. A stale batch completion is discarded on the Xtream side: the
+host captures the playlist/series identity before awaiting and, when
+navigation changed it, skips both the rendered-state mutation and the
+feedback snackbar (episode ids collide across playlists and the
+contextless message would read as being about the new page; the DB write
+itself carries its own playlistId). Stalker gates its snackbars on the
+same captured playlist/series identity. After any Xtream toggle
+(single or batch) the host refreshes `XtreamStore.loadAllPositions` —
+the catalog reads series-progress badges from the store, which otherwise
+loads positions once per playlist — unless the playlist changed
+meanwhile. The host reports busy-state back through the
+`seasonWatchBatchRunning` input.
+
+A series-level counterpart lives in a `⋮` menu at the end of the same
+header row (`SeasonWatchPresenter` in `libs/ui/components` owns the state
+math for both scopes, which keeps the container component under the
+max-lines cap).
+`buildSeriesWatchToggleRequest` flattens every LOADED season with the same
+mark/unmark semantics, and the direction is always the one the label
+advertised (`markWatched: !seriesFullyWatched()`), never re-inferred from
+data at persist time. Hosts route the request through the same machinery
+as the season toggle — Xtream via the scope-parameterized
+`SerialDetailsSeasonWatchService.handle(..., scope)`, Stalker via
+`StalkerSeriesWatchToggleService` and its `runStalkerWatchToggleBatch`
+core — sharing the busy flag, the ownership guards, and the catalog-badge
+refresh. Stalker lazy-VOD is the
+special case: unopened seasons have empty episode lists, so the container
+reports them through the `hasUnloadedSeasons` input (blocks the
+"fully watched" verdict and switches the label to its countless variant),
+and may emit an EMPTY mark request when every loaded episode is watched.
+The Stalker host then hydrates the missing seasons sequentially through
+`loadEpisodesForSeason` (aborting silently on navigation, and aborting
+with zero writes plus the series failure snackbar if any season fails to
+load). A season the portal ANSWERS for with zero episodes becomes
+loaded-and-empty (`VodSeriesSeasonVm.episodesLoaded`), not pending —
+`episodes.length === 0` alone would keep it counted as unloaded forever,
+locking the label countless and re-fetching it on every series toggle.
+Only a well-formed empty array earns that trust: `fetchVodSeriesEpisodes`
+rejects a malformed envelope or an answer whose rows contain no
+recognizable episode, so those fail the load instead of masquerading as
+an empty season. `loadEpisodesForSeason` is single-flight per season — a
+tab click, the spillover prefetch, the quick-start recursion, and the
+series-toggle hydration join one in-flight request instead of
+duplicating it (a second request's failure could abort a toggle whose
+original request succeeded).
+The host synchronously re-runs the position reconcile
+(`StalkerSeriesPositionsService.applyReconciledSeriesPositions` — the
+effect-fed maps only update on
+the next change-detection tick, and enqueuing against stale maps would
+miss the hydrated episodes' legacy rows), rebuilds the request from the
+now-complete seasons keeping the captured direction, and reports an
+honest count-0 success if hydration reveals nothing left to mark.
+
+## Components
+
+Shared detail layout shell:
+
+- `/Users/4gray/Code/iptvnator/libs/ui/components/src/lib/portal-detail-shell/portal-detail-shell.component.ts`
+
+Shared inline player shell:
+
+- `/Users/4gray/Code/iptvnator/libs/ui/playback/src/lib/portal-inline-player/portal-inline-player.component.ts`
+
+Xtream detail hosts:
+
+- `/Users/4gray/Code/iptvnator/libs/portal/xtream/feature/src/lib/vod-details/vod-details-route.component.ts`
+- `/Users/4gray/Code/iptvnator/libs/portal/xtream/feature/src/lib/serial-details/serial-details.component.ts`
+
+Stalker detail hosts:
+
+- `/Users/4gray/Code/iptvnator/libs/portal/stalker/feature/src/lib/stalker-catalog-detail/stalker-catalog-detail.component.ts`
+- `/Users/4gray/Code/iptvnator/libs/portal/stalker/feature/src/lib/stalker-series-view/stalker-series-view.component.ts`
+- `/Users/4gray/Code/iptvnator/libs/portal/stalker/feature/src/lib/stalker-collection-detail.component.ts`
+- `/Users/4gray/Code/iptvnator/libs/portal/stalker/feature/src/lib/stalker-search/stalker-search.component.ts`
+
+Embedded playback does not have a fallback dialog path.
+`PlayerService.openResolvedPlayback(...)` remains the MPV/VLC external launch
+entry point; for embedded players it returns without creating UI.
+
+Diagnostics, recovery policy, and recovery UI:
+
+- `/Users/4gray/Code/iptvnator/libs/playback/util/src/index.ts`
+- `/Users/4gray/Code/iptvnator/libs/ui/playback/src/lib/web-player-view/web-player-view.component.ts`
+
+## Playback Decision Rule
+
+When a detail view starts playback:
+
+1. Resolve or construct a typed playback payload.
+2. Check the active player setting.
+3. If the player is embedded, render the inline player inside the current detail view.
+4. If the player is external, hand the same payload to `PlayerService` for MPV/VLC playback.
+
+The detail or collection/search host owns inline state. `PlayerService` is not
+an owner of embedded UI playback state.
+
+After a successful external episode launch, the detail host immediately
+persists that episode as the latest playback-position entry, preserving an
+existing resume offset or using zero for a newly opened episode. MPV/VLC
+position telemetry overwrites this launch marker when available. This keeps the
+last-watched season and episode correct even when an external player's progress
+interface is unavailable; exact external timestamps remain best-effort.
+
+## Forced External Launches From Detail Pages
+
+The detail "…" menu's "Open in external player" sends the title to MPV/VLC
+through `PortalPlayer.openExternalPlayback(playback, player)` whatever the
+configured player is. The launch IPC cannot be cancelled, and until it
+resolves the session is at most `launching` and may not have a closer yet.
+Every detail host therefore keeps these rules:
+
+- **One external player per owner.** Before launching, the host closes the
+  external session the page owns: the session of the same title on the
+  Stalker pages and the Xtream series page; the session it launched, else the
+  one matching its movie, on the Xtream movie page. Sessions the page does not
+  own are left alone. With instance reuse off, a second detached player would
+  otherwise start beside the first. Stalker hosts use
+  `replaceOwnedExternalSession` from
+  `@iptvnator/portal/shared/util`; the Xtream pages use
+  `closeRunningExternalSession` with the same outcome rules.
+- **Unconfirmed teardown cancels the launch.** A live session without a
+  closer, or a close that rejects, leaves the running player in place and
+  nothing new launches.
+- **Ownership is rechecked after every await.** Stream resolution, the close
+  and the launch IPC can each outlive the page or be superseded by a newer
+  start. A stale step stops without reporting, and a launch that resolves
+  stale closes the session it just opened.
+- **No second player while a launch settles.** A repeat of the same launch is
+  ignored, or its control stays disabled. Movie pages refuse or disable every
+  other start of that title until the launch settles. Series pages hold the
+  latest episode choice and, once the launch settled, replace the player it
+  opened, only while that series is still on screen.
+- **Pending starts are owner-scoped.** A start still resolving holds the
+  actions of its own title only: another title shown by the reused page is
+  not blocked by it. Movie hosts track starts with
+  `createPendingPlaybackStart` (`@iptvnator/portal/shared/util`): only the
+  latest start may clear the flag, and `isPendingFor(owner)` answers for one
+  owner. The Stalker movie hosts, whose starts wait on a portal round trip,
+  also `retire(owner)` when the selection leaves it, so a start that never
+  settles does not keep the flag set on a return to the same title. A movie's
+  "Reset progress" is scoped the same way.
+- **Two gates are page-wide.** The Xtream movie page refuses Play, Start
+  over, source switches and the menu launch while an external launch it made
+  has not settled. A series page runs one watched or reset batch at a time,
+  whichever series is shown; the Stalker page also holds episode starts until
+  that batch settles.
+
+Owner keys and queueing are provider contracts:
+
+| Host | Contract |
+| --- | --- |
+| Xtream series | [Forced external launches from detail pages](./xtream-portal-compatibility.md#forced-external-launches-from-detail-pages) |
+| Xtream movie | [Menu launch and reset follow the primary button](./vod-multi-source.md#menu-launch-and-reset-follow-the-primary-button) |
+| Stalker series and movies | [Forced External Launches](./stalker-portal.md#forced-external-launches) |
+
+## Series Quick Start CTA
+
+Xtream and Stalker series detail views share the quick-start decision helper in
+`libs/portal/shared/util/src/lib/series-quick-start.ts`, built on
+`getSeriesNextUp` (`series-next-up.ts`), which the dashboard's Continue
+Watching rail also follows. The helper flattens the loaded season/episode map,
+sorts seasons and episodes in natural order, and returns the hero CTA state.
+
+Current contract:
+
+- the CTA shows the action label plus a compact episode target such as
+  `S01E02 · Episode title`
+- if the newest activity is an episode left unfinished, resume it with its
+  saved offset (recency reads SQLite `updated_at`, UTC without a zone, as UTC;
+  both hosts date the rows they write themselves with
+  `stampPlaybackPositionNow`, so the episode just played ranks newest)
+- if the newest episode entry is a successful external-player launch marker
+  with no meaningful progress yet, target it with `Play episode N` instead of
+  falling back to the first episode
+- otherwise play the first unwatched episode after the episode watched last,
+  as Plex's On Deck and Jellyfin's Next Up do: an earlier episode skipped or
+  left unfinished is passed over, and a next episode started before resumes
+- extras (season 0) stand apart when the series has other seasons: they never
+  come next, are never resumed from here (not even one left unfinished) and
+  never keep the series from completing; after only extras were played the
+  CTA plays the first episode of the run. A series filed under season 0 alone
+  has them as its run
+- if watched episodes end at a season boundary, play the first episode of the
+  next loaded season
+- when no unwatched episode follows the one watched last, offer the first one
+  skipped before it (never an extra); with none left, render a disabled
+  completed state
+- with nothing played yet, play the first episode of the run in season order
+
+The click path must continue through each detail host's normal episode playback
+method so recent-item updates, inline/external player selection, resume offsets,
+and playback-position saving keep the same behavior as manual episode clicks.
+
+## Series Inline Episode Continuation
+
+Xtream and Stalker series detail views own current-episode state and pass a
+`SeriesPlaybackNavigation` payload through `PortalInlinePlayerComponent` and
+`WebPlayerViewComponent` to the active embedded player.
+
+Current contract:
+
+- Video.js, HTML5, ArtPlayer, and embedded MPV emit `playbackEnded` only for
+  real media EOF/`ended` events.
+- Teardown, replacement, manual close, player reload, idle state, and playback
+  errors must not emit `playbackEnded`.
+- Series previous/next controls render only when the series navigation payload is
+  present. Movies, live streams, radio streams, and non-series VOD must not show
+  those buttons.
+- The shared navigation payload contains `canPrevious`, `canNext`, and
+  `autoplayEnabled`. Player controls disable previous on the first episode and
+  next on the last episode of the current season.
+- Autoplay is enabled by default for series playback. On `playbackEnded`, the
+  portal detail host starts the next episode only when `canNext` is true for the
+  current season.
+- Autoplay and Next never cross season boundaries or lazy-load another season.
+  Quick start remains the flow that may choose an episode from another loaded or
+  newly loaded season before playback begins.
+- Previous switches directly to the previous episode in the current season. It
+  does not implement a restart-threshold behavior.
+
+## Codec And Container Diagnostics
+
+The shared `WebPlayerViewComponent` is the central browser-player viewport for
+M3U, Xtream, and Stalker inline playback, including live streams opened from
+favorites and recently viewed collections.
+
+The mounted engine resolves in a fixed order: temporary recovery override →
+host `playerOverride` input → the saved player read from the live
+`SettingsStore` signal (Video.js as the last-resort default). The saved player
+is deliberately NOT a mount-time storage snapshot: persisting a different
+player — from the settings page or the command palette — re-applies to every
+mounted `WebPlayerViewComponent` in place as a new playback application, and a
+first mount reads the already-loaded store value so the default engine never
+flashes before the saved one. Hosts that pass no `playerOverride` (the Xtream
+and Stalker live layouts, the portal inline detail player) rely on this live
+tracking. A saved switch to managed MPV/VLC is the one exception
+(`resolveRenderableWebPlayer`): the viewport can neither render nor launch an
+external player, so the mounted engine is retained and the external choice
+applies when the host starts the next playback.
+
+Video.js, HTML5, and ArtPlayer
+report native media errors, hls.js errors, Video.js/VHS errors, Shaka errors,
+mpegts.js errors, and HLS manifest codec metadata into the DOM-free classifiers
+exported by `@iptvnator/playback/util`.
+
+The canonical recovery flow is:
+
+```text
+engine public error
+  -> sanitized PlaybackDiagnostic (@iptvnator/playback/util)
+  -> recommendPlaybackRecovery(context)
+  -> ranked maximum-three action model
+  -> WebPlayerView session-local user action
+```
+
+Engine adapters own public-event collection and sanitation. The playback
+utility owns diagnostic contracts, evidence classification, source/engine
+mapping, capability contracts, and the pure recommendation policy.
+`WebPlayerViewComponent` owns only the current session state and execution of a
+user-selected action. Diagnostic producers do not decide which player to show,
+and the recommendation policy does not inspect Angular, the DOM, settings,
+storage, or Electron globals.
+
+The diagnostics remain client-only:
+
+- no ffprobe or server-side probing
+- no extra manifest fetch beyond the active player
+- no automatic failover to an external player
+- no embedded MPV diagnostics
+
+Supported diagnostic codes are:
+
+- `unsupported-container`
+- `unsupported-codec`
+- `media-decode-error`
+- `network-error`
+- `browser-access-error`
+- `drm-or-encryption`
+- `unknown-playback-error`
+
+Native `MediaError` code 4 alone is not codec evidence. A source with a known
+browser-incompatible container remains `unsupported-container`; otherwise, a
+code 4 error without stronger evidence is `unknown-playback-error`. An explicit
+Video.js HTTP error is `network-error` and shows its status. Because an HTTP
+status is server/network evidence rather than decoding evidence, external
+decoding is not presented as a likely fix.
+
+Video.js `8.24.0`, the default web player, runs HTTP streaming through bundled
+VHS `3.17.5`. Its terminal `Player#error` crosses a separate allowlisted
+boundary built only from the public Video.js `MediaError` code/status,
+`metadata.errorType`, and the documented `player.tech().vhs` runtime property.
+The engine type must exactly match an installed `videojs.Error` value;
+unrecognized values remain unknown. Exact network identifiers, HTTP 4xx/5xx
+status, and standard network code 2 produce `network-error`; exact
+`streamingfailedtodecryptsegment` or standard encrypted code 5 produce
+`drm-or-encryption`. A generic VHS code 3 remains
+`unknown-playback-error` because VHS also assigns code 3 to terminal internal
+objects and strings that do not establish a decode cause. Non-VHS native code
+3 keeps its standard media-decode meaning.
+
+VHS stage evidence is derived only where the public engine identifier names
+the operation: HLS playlist parsing is `playlist`, DASH manifest parsing is
+`manifest`, and select/decrypt/transmux/append segment errors are `segment`;
+everything else is `unknown`. In particular, IPTVnator does not read internal
+`requestType` values to guess manifest, playlist, segment, or key stages. VHS
+handles retries, rendition exclusions/re-inclusions, segment timeout recovery,
+and request aborts before a final player error; IPTVnator observes only the
+public terminal event and does not subscribe to undocumented recovery events
+or private loaders.
+
+Video.js/VHS error messages, request or response URLs, headers, xhr objects,
+response text/bodies, credentials, request types, and arbitrary metadata are
+neither retained nor rendered. Technical details contain only the sanitized
+stage, exact/unknown engine type, standard/unknown media error code, terminal
+disposition, and validated HTTP status. The active playback URL remains
+available only through the pre-existing playback metadata used by Retry, Copy
+URL, and explicit external-player actions; it is never copied from VHS error
+metadata.
+
+HLS.js errors cross one shared sanitizer boundary before HTML5 or ArtPlayer can
+emit a diagnostic. The boundary retains only allowlisted engine `type` and
+`details` identifiers, the final fatal/recoverable disposition, a stage derived
+from exact details (`manifest`, `level`, `segment`, `key`, `media`, or
+`unknown`), a structured failure kind, and a validated `response.code`.
+Recoverable events return no terminal diagnostic. Exact codec, decrypt/key
+system, network/timeout/HTTP, and media/mux evidence select the corresponding
+diagnostic; insufficient evidence stays `unknown-playback-error`.
+
+HLS.js does not expose a reliable structured CORS, mixed-content, CSP, or
+private-network-access cause. Status zero and generic fetch failures therefore
+remain network/unknown evidence instead of becoming browser-access guesses.
+Error URLs, request context and headers, loader/network objects, response
+URL/text/body, error messages, reasons, and arbitrary provider payloads are
+neither retained nor rendered. Technical details show only the sanitized stage,
+failure, engine type/details, disposition, and HTTP status. The active playback
+URL remains available to the pre-existing retry, copy, and explicit
+external-player workflows; it is not copied from the HLS error payload into
+the evidence or technical details. HLS startup development logs are event-only:
+they do not include provider-supplied channel names or source URLs.
+
+Shaka Player `5.2.12` errors cross a separate structured boundary before the
+HTML5 or ArtPlayer DASH session emits a diagnostic. Version-locked tests assert
+the installed Shaka version plus the public `Severity`, `Category`, and selected
+online-playback `Code` values used by the boundary. Evidence retains only
+validated severity/category/code, the lifecycle disposition, an exact
+code-derived stage and failure kind, and a validated HTTP status. A direct
+`Network.BAD_HTTP_STATUS` may expose `data[1]` as the status; the same status is
+accepted from the documented nested networking error for
+`Drm.LICENSE_REQUEST_FAILED` and
+`Drm.SERVER_CERTIFICATE_REQUEST_FAILED`. For direct network errors, the
+public request type also identifies the stage: `BAD_HTTP_STATUS.data[4]`,
+`HTTP_ERROR.data[2]`, or `TIMEOUT.data[1]`. Only MANIFEST, SEGMENT and LICENSE
+are mapped, with their numeric values checked against the installed Shaka
+contract. Other types and malformed slots remain unknown; request URLs, bodies
+and headers are never inspected to guess the stage.
+
+A recoverable Shaka `error` event does not become a terminal playback
+diagnostic because the engine continues its retry/recovery lifecycle. A
+critical event is terminal. A rejected `Player.load()` is also terminal even
+when its last networking error still carries recoverable severity, because the
+load lifecycle has ended; the structured evidence preserves both facts as
+`severity=recoverable` and `disposition=terminal`. Unknown event severity does
+not prove terminal failure and is ignored. Exact public code/category pairs may
+classify network, DRM/encryption, manifest/parsing, or media/decode failures.
+Ambiguous evidence stays `unknown-playback-error`: in particular, the Manifest
+category alone is not container incompatibility, and Shaka messages never infer
+CORS, codec, DRM, container, or stage. The public critical
+`STREAMING_ENGINE_STARTUP_INVALID_STATE` code remains exact evidence while its
+stage and failure stay unknown because the code does not identify a user-facing
+media cause. Public DASH text-parser codes are also retained exactly; their
+`TEXT` category proves the parser subsystem, but not a safe manifest, segment,
+or media cause, so stage and failure remain unknown.
+
+A failed public `Player.isBrowserSupported()` preflight is not a Shaka error
+and therefore retains fully unknown technical evidence instead of being
+mislabelled as an unsupported container. The app adds only the exact,
+enumerated `PlaybackRuntimeSupport.ShakaBrowserUnsupported` marker to that
+otherwise unknown diagnostic. This Shaka/DASH runtime-preflight marker is the
+sole unknown-code exception that can rank configured MPV/VLC actions, and only
+for clear, externally transferable DASH in a managed-external runtime. Generic
+unknown diagnostics remain Retry/alternative-source only. PWA capability and
+KODIPROP DRM suppress the external actions because those players are absent or
+the launch contract cannot transfer the key configuration.
+
+Shaka messages, URLs, headers, request/response bodies, credentials,
+license/key payloads, and arbitrary `error.data` objects are neither retained
+nor rendered. Structured error details show only sanitized stage, failure, severity,
+category, code, disposition, and optional HTTP status. Unsupported playlist
+DRM uses a fixed safe description rather than echoing provider license
+configuration. A recognized configured license type can add only its
+allowlisted display name.
+
+`network-error` is reserved for provider/network loading failures. Engines that expose concrete browser security evidence, such as CORS, mixed content, Content Security Policy, or private-network-access blocks, use `browser-access-error` so the UI can explain that the browser player was blocked before playback reached decoding.
+
+mpegts.js `1.8.2` errors cross one shared structured boundary before the HTML5,
+Video.js, or ArtPlayer owner emits a diagnostic. Version-locked tests compare
+the installed public `ErrorTypes` and `ErrorDetails` exports with the accepted
+contract. Evidence retains only an exact type/detail pair, terminal
+disposition, a pair-derived stage and failure, and a validated HTTP 4xx/5xx
+status from the top-level `info.code` slot of
+`NetworkError + HttpStatusCodeInvalid`.
+
+Exact public pairs classify HTTP/timeout/exception as network failures,
+`FormatUnsupported` as an unsupported container, `CodecUnsupported` as an
+unsupported codec, and `FormatError`/`MediaMSEError` as media failures.
+`UnrecoverableEarlyEof` remains a `media-decode-error` that may rank a distinct
+engine or external player:
+mpegts.js has already exhausted its internal finite-source early-EOF recovery,
+and another demuxer may tolerate the truncated transport stream. Mismatched or
+unknown pairs fail closed to `unknown-playback-error`.
+
+Arbitrary `info`, messages, URLs, headers, bodies, credentials, and provider
+objects are neither retained nor rendered. A generic `Exception` does not
+prove CORS, mixed content, CSP, or private-network access, so mpegts.js no
+longer creates `browser-access-error` from message text. HTTP and other network
+failures do not claim an external decoder will fix the provider response;
+container, codec, truncated-stream, format, and MediaSource failures retain
+evidence that can rank an explicit MPV/VLC action when the payload and runtime
+permit it.
+
+The diagnostic surface covers the inline player viewport when playback fails,
+with a compact warning badge, one primary recommendation, at most two secondary
+recommendations, and always-available Copy URL and Technical details utilities.
+An alternative-source recommendation consumes one of those three slots even
+when its bounded source list renders several rows. Technical details contain
+the diagnostic code, reporting player/source, detected container/MIME,
+video/audio codecs, native browser error fields, and sanitized structured
+Video.js/VHS, HLS, Shaka, and mpegts.js evidence. HLS manifest codec metadata
+also drives a concise browser-support hint for codecs that Chromium/Electron
+commonly cannot decode inline, such as HEVC, AC-3, E-AC-3, DTS, and MPEG-2
+video.
+
+The panel's host is a size container over the player, so its spacing, its
+narrow-width rules and a compact layout for players up to 560px tall all
+follow the player box rather than the window. The M3U inline player above its
+EPG panel is about 400px tall in a 720px window; there the whole surface fits,
+including each card's hint and status lines and the utilities. A shorter
+player scrolls the surface from its top. Card labels wrap instead of being
+ellipsized, because translated actions are wider than a card column.
+`apps/electron-backend-e2e/src/playback-diagnostic-layout.e2e.ts` writes every
+locale's card labels and status line into the cards and fails on any
+truncated label or clipped content.
+
+URL extension metadata is filtered before diagnostics and player selection use it. Web script extensions such as `.php` are not shown as stream containers; explicit media query metadata such as `extension=ts` or `format=m3u8` is preferred when present.
+
+The HTML5 player and ArtPlayer choose their source engine from one URL rule,
+`resolvePlaybackUrlSourceKind()` in `@iptvnator/playback/util`, which maps the
+normalized media extension to `dash` (`mpd`), `hls` (`m3u8`/`m3u`), `mpegts`
+(`ts`, `m2ts`, and extension-less proxy/script URLs) or `native` (every other
+container: `mkv`, `webm`, `mp4`, `avi`, `mov`, `m4v`, audio files). hls.js
+therefore only ever receives HLS manifests; it used to be handed every
+unlisted container and raised a manifest error over media Chromium plays by
+itself. ArtPlayer serves the `native` kind through a single
+`ART_PLAYER_NATIVE_SOURCE_TYPE` custom type so `ArtPlayerSourceSession` keeps
+owning engine teardown and controls binding; the HTML5 player appends one
+`<source>` whose `video/mp4` MIME hint is set only for MP4-family files, since
+a hint the browser's `canPlayType()` rejects makes it skip the source
+(`resolveNativeSourceMimeType()`).
+
+MKV sources are attempted through Chromium's native Matroska path. Video.js
+receives `video/matroska` for `.mkv` URLs and explicit query metadata such as
+`extension=mkv` or `container=mkv`. This is container support rather than a
+universal codec guarantee: native source or decode failures still produce a
+diagnostic whose ranked actions may include MPV/VLC.
+
+Portal VOD and episode payloads with `contentInfo` are treated as non-live by the inline players unless `isLive` is explicitly set. If Chromium leaves the underlying MediaSource duration at `Infinity` for a finite TS VOD, the Video.js wrapper normalizes its UI duration from the finite `seekable` or `buffered` range. Embedded MPV uses the same live decision rule and shows an unknown duration placeholder for VOD/episode snapshots until MPV reports a finite duration. This removes the misleading `LIVE` control state without changing stream decoding, diagnostics, or external fallback behavior.
+
+### Source metadata in diagnostics
+
+The existing technical-details list has localized failure-stage and declared-DRM
+rows. Unknown stages are omitted from the dedicated row and remain visible as
+`unknown` in raw structured details. These rows do not change the original
+failure classification or recovery ranking.
+
+`ShakaManifestMetadata` observes the active Shaka networking engine's existing
+MANIFEST responses through a public response filter. It reads only DASH
+`AdaptationSet`/`Representation` codec attributes and `ContentProtection`
+scheme IDs, before licensing can fail. Inspection is bounded to 2 MiB and
+bounded element/codec counts. Non-DASH, malformed, DTD-bearing and oversized
+XML is ignored; the response is never changed, and an inspection failure never
+fails playback. No internal Shaka manifest API or extra fetch is used.
+
+Only known Widevine, PlayReady, ClearKey and FairPlay identifiers are retained.
+Generic CENC/common PSSH does not prove a particular DRM system. Configuration
+may also supply a known system name, including ClearKey; these are source facts,
+not proof that EME initialized or that a license is usable. No manifest body,
+key ID, key, license URL, header or arbitrary provider string enters the added
+metadata. Each observer belongs to one engine, unregisters on teardown and
+ignores late callbacks; switching channels cannot reuse the previous evidence.
+
+Fatal HLS errors retain the current hls.js level codec metadata, Video.js reads
+its current VHS representations, and MPEG-TS errors read the current engine's
+`mediaInfo`. DASH lists the advertised manifest codecs, which may include
+alternative renditions, rather than claiming they were successfully decoded.
+All added codec values pass a bounded identifier allowlist. An unrecognized or
+unavailable codec is omitted. Metadata does not itself trigger a failure or
+prove that a browser supports a codec.
+
+### Evidence-backed summaries and support reports
+
+The shared diagnostic panel refines its description only from owned evidence:
+`drm-configuration-unsupported` marks an app-rejected DRM configuration; Shaka
+6001 means the requested DRM configuration is unavailable (including denied
+permission or unsupported features, not proof that a particular CDM is absent).
+Shaka 6007, 6008 and 6012 distinguish license acquisition failure, a rejected
+license response and missing license-server configuration. An owned license
+network request also identifies acquisition failure. Confirmed segment requests
+with HTTP 401/403 report access refusal, without asserting token expiry. Source
+DRM names and arbitrary messages never select these explanations. Existing
+classification, recovery ranking and generic descriptions remain the fallback.
+
+**Copy diagnostics** writes a versioned JSON report to the local clipboard on
+explicit activation. The report allowlists app version, coarse OS/runtime,
+player/engine, diagnostic and numeric error codes, stage, HTTP status, container,
+codec identifiers and declared DRM names. Unknown values are omitted or marked
+unknown. It never serializes the diagnostic object, raw user agent, URL, title,
+provider message, headers, credentials, key IDs or licenses. It issues no network
+request and sends nothing to support automatically. The independent **Copy URL**
+action still copies the original stream URL and may include access credentials.
+Copy success/failure is announced accessibly; changing diagnostics refreshes the
+report and clears the prior result. The report contains source facts, not proof
+that a license, codec or stream is playable.
+
+## Recovery Recommendation Policy
+
+Recommendations change playback paths only when structured evidence supports
+that conclusion. A different skin over the same engine family is not a distinct
+recovery target.
+
+| Source path                              | Active engine family            | Distinct built-in recommendation |
+| ---------------------------------------- | ------------------------------- | -------------------------------- |
+| HLS in Video.js                          | Video.js/VHS                    | HTML5 through hls.js             |
+| HLS in HTML5 or ArtPlayer                | hls.js                          | Video.js/VHS                     |
+| MPEG-TS in any web player                | shared mpegts.js                | None                             |
+| DASH in HTML5 or ArtPlayer               | Shaka                           | None                             |
+| DASH in Video.js                         | unsupported recommendation path | None                             |
+| Native media/container in any web player | browser native-media            | None                             |
+
+HTML5 is the canonical hls.js alternative to Video.js/VHS; ArtPlayer is not a
+second independent hls.js choice. MPEG-TS, DASH/Shaka, and native media never
+offer a same-family built-in alternative. Unknown source or engine-family facts
+also suppress built-in recommendations.
+
+The pure policy builds the following order, filters the current, unavailable,
+incompatible, and already attempted inline targets, and then returns at most
+three actions. It projects attempted inline target IDs through the validated
+canonical source/target capability matrix and filters every engine family that
+has already been attempted. HTML5 and ArtPlayer therefore cannot be offered as
+separate hls.js recovery attempts. External MPV/VLC attempts remain eligible;
+the view reranks them by per-target attempt count instead of removing them. The
+first surviving action is primary and later actions are secondary.
+
+| Sanitized evidence                        | Candidate order                                              |
+| ----------------------------------------- | ------------------------------------------------------------ |
+| HTTP, timeout, or generic network failure | Retry -> Alternative source                                  |
+| Generic unknown playback error            | Retry -> Alternative source                                  |
+| Exact Shaka browser-unsupported preflight | MPV -> VLC -> Alternative source                             |
+| Browser access/CORS/CSP-class failure     | MPV -> VLC -> Alternative source                             |
+| Unsupported codec or container            | MPV -> VLC -> Alternative source                             |
+| Media/decode/engine processing failure    | Distinct built-in family -> MPV -> VLC -> Alternative source |
+| DRM/encryption failure                    | Compatible built-in path -> Alternative source -> MPV -> VLC |
+
+Network and generic unknown evidence fail closed: they never claim that
+changing a decoder will repair the provider response. The exact app-owned
+Shaka browser-unsupported runtime-preflight marker above is the only
+unknown-code exception. Contradictory or incomplete capability facts fail
+closed to Retry and an available alternative source.
+External targets require both managed external-player support and a transferable
+payload. PWA builds therefore never rank MPV/VLC. Any ClearKey/KODIPROP DRM
+payload is non-transferable and suppresses both external targets; the policy
+does not infer transferability from a message or URL. Eligible Electron portal
+fallback requests keep using the original `ResolvedPortalPlayback`, so the
+existing host path can forward its required headers and playback metadata.
+
+## Recovery Session Lifecycle And Privacy
+
+Each mounted `WebPlayerViewComponent` owns one in-memory recovery session for
+its required `playbackSessionKey`. Retry and an alternative source for the same
+logical content keep the key and attempted-target set. A different channel,
+movie, or exact episode changes the key and synchronously clears the diagnostic,
+attempts, temporary player override, and handoff position. Destroying the
+component also ends the session; the same key in a later component is a new
+session. Applying a different source under the same key, including another
+catch-up programme, clears only the VOD handoff position; attempts and the
+temporary player override remain available for the recovery session.
+
+On a terminal failure, the current binding is accepted only when both its
+generation and inline target still match. The current target becomes attempted,
+the sanitized diagnostic is stored, and recommendations are reranked. The
+`PlaybackBinding` contains exactly `{ generation, target }`. Changes to the
+playback URL, headers, DRM, live/VOD mode, target, or reload generation are
+instead correlated with a fieldless opaque `Symbol` application token. Source
+applications also advance a second fieldless source-revision `Symbol` that
+resets the VOD handoff position; target-only switches and Retry leave that
+revision stable. None of these ownership objects embed source material, and
+recovery ownership state never stores URLs, headers, DRM keys, error payloads,
+or credentials. Each rendered web or Embedded MPV application captures the
+nullable binding, both opaque tokens, and its live/VOD flag. A time update can
+change the resume position only while that exact capture still owns the current
+application, so a replaced source cannot repopulate cleared handoff state.
+
+A separate fieldless intent token invalidates on each new source, target, or
+reload intent. The application effect synchronizes the content session before
+tracking that intent, so clearing a temporary player override is incorporated
+into one application instead of scheduling a duplicate Electron header handoff.
+Each application start clears both the diagnostic owner and backing signal,
+making the prior diagnostic neither retained nor actionable before asynchronous
+header setup completes. False or rejected current handoffs leave it clear, and
+a stale success, false result, or rejection cannot erase a newer owned
+diagnostic or mutate the newer application state.
+
+Selecting a built-in recommendation records the target, immediately detaches
+the diagnostic, and installs a temporary local override ahead of the host
+override and saved player setting. The new engine receives the latest finite
+VOD position as a best-effort resume point; live playback starts at the live
+edge. Retry reloads the active target without clearing attempts. Selecting MPV
+or VLC records the external target before emitting the existing fallback
+request. Both external actions remain mounted while their per-target state
+moves through `launching`, `started`, `playing`, or `error`; an attempted idle
+target becomes an explicit reopen action and a failed target becomes Try again.
+Only an exact correlated Electron `playing` session update earns the Playing
+label. A single external launch handshake owns the session: duplicate actions
+are ignored, other external actions wait, and an existing live external session
+must close before a different player can start. Play, Restart, and secondary
+provider launch actions all observe the same local guard before Electron has
+returned a session. Xtream VOD also records the diagnostic fallback's
+route-scoped destination and pending generation before invoking MPV/VLC, so a
+subsequent route cannot start a second detached player while the first launch
+is being correlated. The source-owning host binds
+its returned launch promise to the fieldless current intent, so only that exact
+result supplies the initial session ID; a late result from a timed-out attempt
+cannot take over a retry. Later global updates must match the exact ID. A
+replacement does not launch until teardown of the exact spawned process is
+confirmed, and the old target is settled synchronously before the new launch so
+coalesced signal effects cannot preserve stale feedback. Teardown waits through
+bounded graceful and forced-exit windows, and reusable MPV also bounds its IPC
+quit command before entering those windows. If any stage cannot confirm exit,
+close rejects and keeps the exact session live so a replacement cannot overlap
+it. A process-wide teardown gate starts before any potentially slow teardown
+preparation, including VLC position flush and a reused player's MPV IPC or VLC
+RC quit command, and rejects both player launches until that exact child
+reports exit; `ChildProcess.killed` is never treated as proof. If
+bounded teardown fails while a fresh launch IPC is pending, the IPC rejects and
+the exact session becomes a closable error instead of remaining in Opening.
+If a pre-content reuse failure has no still-live displaced session to restore,
+the replacement error keeps its attached closer so Stop can retry teardown of
+the orphaned reusable child. A terminal error without a closer is never
+restorable.
+A rejected close promise is cached only while that attempt is pending, so the
+dock's Stop action can retry teardown of the same exact child after an
+unconfirmed bounded attempt. Reusable children are mapped to the current
+content session; a stale older closer becomes a no-op after MPV `loadfile` or
+the VLC enqueue handoff remaps the process. Closing an already terminal session
+is also idempotent: it returns the closed snapshot without invoking the saved
+closer, and a later process error cannot revive it as a visible failure. Reused
+MPV commands use the socket captured for their exact child, so a delayed close
+cannot send `quit` to a replacement process through a newer global socket.
+Every reused MPV command carries a `request_id` and waits, within the same 2 s
+IPC bound, for mpv's matching newline-delimited reply; event lines and replies
+to other requests on that connection are skipped. An error reply or a missing
+reply fails the handoff exactly like a socket error: the reused child is torn
+down and a fresh launch follows. `loadfile` marks the content as possibly
+changed and moves ownership of the child to the attempted session from the
+moment it is written, whatever mpv replies, and stops the previous session's
+position poll there, including a read already awaiting mpv, so an exit or a
+stale Stop for the previous session during
+the reply wait settles the right session and no poll can save the new stream's
+position under the old content; a child that exited while its reply was in
+flight is returned as the session its exit handler settled, never reported as
+opened and never replaced by a fresh launch under that terminal session.
+MPV launches run one at a time. A reused launch waits for mpv's replies and a
+failed one for its teardown and fallback spawn, so a launch that arrives
+meanwhile, such as a quick channel switch, starts only once the previous one
+has settled and acts on the player that one left behind; two launches never
+act on the same child. Each launch begins its session at once, so the newest
+launch is the active session; the renderer lets a `launching` update take the
+dock only when that launch did not start before the current one, by the
+session's `launchOrder` (which separates launches in the same millisecond) or
+else its `startedAt`, so an older launch still settling cannot pull the dock
+back. Only the newest queued launch
+runs: an older
+one that comes up while a newer one waits behind it settles closed without
+reaching mpv or taking the dock. Stop on a launch still waiting in the queue
+cancels it and every launch queued before it; on the newest queued launch it
+also closes, through their own closers, the in-flight launch and the session
+owning the stored player at that moment (read from the per-child mapping, which
+a failed attempt hands back to the previous owner during its teardown), so
+their exact-child, retry and settle rules apply. Because launches run one at a
+time, nothing else acts on a reused child while an attempt is in flight, so
+that attempt's own Stop always reaches its child until the attempt settles,
+whatever the per-child mapping names (the previous owner before `loadfile` or
+during a failed attempt's teardown, possibly closed already); after it settles,
+ownership decides as before, except that a Stop of that attempt which could
+not confirm the exit keeps the right to retry that exact child. These rules apply
+and nothing starts playing after Stop. Those targets are fixed at the first
+Stop, so a retried Stop never reaches a player started later, and a late Stop
+for an older queued launch cancels only that launch. The cancelled launch
+settles only once its own Stop has: if the exit cannot be confirmed it stays a
+closable error, so Stop can be retried. App shutdown cancels the whole queue.
+A queued launch that finds the teardown gate closed, because the launch before
+it could not confirm its child's exit, restores the session that still owns
+that child, preferring the last launch that started (with reuse off its
+detached child is not stored anywhere else); if that is not possible, it stays
+a closable error so Stop can still tear the child down. Stopping the stored player, when reuse is disabled or
+the app quits, cancels an in-flight reuse attempt: it dispatches no further
+commands, never falls back to a fresh reusable player, also after waiting for
+a failed child's exit, and settles its own session as closed once the child's
+exit is confirmed, or as a closable error when it is not. No `seek` follows
+`loadfile`: mpv rejects a seek before the file is loaded, so the resume offset
+travels as the per-file `start` option. The `loadfile` reply only acknowledges
+the command; a stream that later fails to open is reported through the reused
+child's output and exit, not through the reply.
+If Stop is observed before a pending MPV content command or VLC enqueue command
+is dispatched, that command is skipped. A source handoff also fails closed
+while a live session has no closer (`canClose: false`); renderer Dismiss is not
+accepted as process-teardown confirmation. That denial advances neither the
+multi-source switch token nor the playback generation, so it cannot cancel the
+sole launch already in flight.
+VLC rechecks that gate immediately around every concrete spawn after
+asynchronous port allocation or reuse fallback work. If a post-start VLC
+fallback is blocked by the gate, the already-opened session transitions to
+error instead of continuing to claim that the player started. If RC-port
+allocation fails, reuse ownership is never claimed: the spawned VLC child
+keeps its exact one-shot session closer so Stop still confirms its teardown.
+During reusable-player handoff, a failure before the content command restores
+the globally displaced renderer session—not the reusable process's prior
+owner—through an exact `restoredFromSessionId` transition, but only while that
+displaced replacement is still the active session.
+After MPV `loadfile` or VLC `clear` has been dispatched, the attempted session
+owns the possibly changed process and stays a closable error instead of
+restoring stale content metadata. Such an error still participates in every
+replacement close. Stop during an in-flight MPV or VLC reuse command, including
+the teardown wait after a failed command and VLC's subsequent fallback
+port-allocation wait, settles that exact close and cancels the fallback spawn.
+If a partially applied reuse
+command is instead recovered by a fresh spawn, the old child's exit is retired
+under its previous session so it cannot close the replacement session. A
+during-start Stop also settles VLC's launch IPC when a spawn error reports
+`close` without `exit`. The dock keeps Stop as the only global teardown action
+while that exact closer remains live; safe Dismiss is available only after an
+error becomes terminal and has no closer. If diagnostic ownership changes during close, the
+unlaunched intent is cancelled without a false launch error; an exact stale
+launch whose close fails keeps its credential-free owner for the next close
+attempt. Route Play/Resume cancels older source resolution immediately but
+captures the initiating playlist/VOD route before awaiting teardown; navigation
+cancels that start. Accepting a diagnostic fallback cancels the same older
+source resolution before opening MPV/VLC, and a fallback resolving on the new
+route closes its exact returned session. The route commits its source badge and playback
+evidence only after start succeeds. If the local
+handshake timeout fires after Electron has supplied an exact session ID, the ID
+stays correlated so a later `opened`, `playing`, or `error` update can reconcile
+the action with the global dock.
+
+The global external-playback dock uses the same Electron session status. It
+shows Opening player with progress during launch, Player started for `opened`,
+and Playing only for `playing`. An error with a live closer remains visible with
+Stop until teardown is confirmed; an unclosable terminal error remains visible
+until dismissed. The dock deliberately has no retry because it does not own the
+original headers or credentials required to reconstruct a safe launch request.
+
+No recommendation mutates `Settings.player` or another persisted setting.
+Recovery recommendations never auto-switch a player or source and do not
+replace the separate source-owner auto-failover feature. The narrow Xtream
+live Auto format contract is separate: a source owner may supply one advertised
+TS transport to the same web player on an initial terminal HTTP failure. It
+never chooses another engine, and its pending callback waits for the old
+transport's render teardown. See [Initial Auto HLS failure](./xtream-portal-compatibility.md#initial-auto-hls-failure)
+for eligibility, session ownership and the external/Embedded MPV/VHS limits. Attempts, overrides,
+resume handoff, and diagnostics are session-local: there is no persistent
+history, cross-session learning, correlation, or telemetry.
+
+Only allowlisted public engine evidence crosses the structured sanitizers.
+Provider/engine messages, request and response objects, arbitrary `error.data`
+or `info`, bodies, URLs copied from error payloads, headers, DRM material, and
+credentials do not enter recommendation evidence or recovery ownership state.
+The active playback URL remains available only through the pre-existing
+playback metadata needed by Retry, Copy URL, and eligible explicit
+external-player actions.
+
+`PortalPlayer.openExternalPlayback(playback, player)` remains the forced
+external launch API. It sends the resolved playback payload to MPV or VLC
+regardless of the current saved player setting, so a recommendation never
+mutates preferences.
+
+## External Player Arguments
+
+Electron settings expose optional MPV and VLC command-line argument fields only
+when the corresponding external player is selected. The executable path remains a
+path-only setting; extra flags are stored separately as `mpvPlayerArguments` and
+`vlcPlayerArguments`.
+
+Argument fields are line-oriented: one non-empty trimmed line becomes one argv
+entry. IPTVnator prepends those custom entries before its stream-specific runtime
+arguments. This avoids shell parsing, keeps paths with spaces safe, and preserves
+existing settings for users who never configured extra arguments.
+
+The arguments apply only when IPTVnator spawns a new external player process. If
+MPV or VLC instance reuse is active and an existing process is reused, subsequent
+streams are loaded through MPV IPC or VLC RC commands and new process arguments
+are not re-applied until a fresh process starts.
+
+VLC enables its TCP RC interface when content metadata requires progress
+tracking or instance reuse is enabled. On Windows, these managed RC launches
+also append `--rc-quiet` after custom arguments to suppress VLC's DOS console
+while retaining TCP control. macOS/Linux and launches without an allocated RC
+port receive no automatic quiet flag. Both launch-error and exit-code-1 retries
+remove the app-generated RC flags, including `--rc-quiet`; custom arguments
+continue to be prepended unchanged.
+
+## Electron External Player Ownership
+
+External MPV/VLC integration is split across focused main-process modules:
+
+- `apps/electron-backend/src/app/events/player.events.ts` registers IPC handlers
+  and settings updates only.
+- `apps/electron-backend/src/app/events/external-player-launch-context.ts`
+  resolves Flatpak spawning, default executable paths, macOS `.app` bundles,
+  custom argv merging, spawn specs, and reuse decisions.
+- `apps/electron-backend/src/app/events/external-player-playback-request.ts`
+  builds the effective playback request, including Stalker direct-stream fallback
+  metadata and external-player request headers.
+- `apps/electron-backend/src/app/events/external-player-runtime.ts` owns shared
+  session tracking, trace logging, renderer notifications, playback-position
+  forwarding, and user-facing start errors.
+- `apps/electron-backend/src/app/events/mpv-session.service.ts` owns fresh MPV
+  launches; `mpv-position-polling.ts` owns progress polling over the IPC socket
+  and `mpv-output-errors.ts` the child's stdout/stderr error reporting;
+  `mpv-reusable-process.ts` owns the tracked
+  child, captured socket, remapping, retryable close, and reuse handoff;
+  `mpv-ipc-command.ts` owns the bounded request/reply IPC command the reuse
+  handoff and its quit use; `mpv-launch-queue.ts` runs MPV launches one at a
+  time and owns queued-launch cancellation and Stop.
+- `apps/electron-backend/src/app/events/vlc-session.service.ts` owns fresh VLC
+  launches and progress polling; `vlc-reusable-process.ts` owns the tracked
+  child, RC-port remapping, retryable close, and reuse handoff, while
+  `vlc-rc.ts` owns bounded RC commands, parsing, and playback snapshots.
+
+Keep player-specific reusable-process state in the focused MPV/VLC managers.
+Shared spawn, request-header, session-registry, and notification helpers belong
+in the `external-player-*` modules so IPC registration stays small and
+reviewable.
+
+## Flatpak External Players
+
+Flatpak cannot execute host-installed `mpv` or `vlc` binaries directly from the sandbox.
+
+Current contract:
+
+- Flatpak launches external players through `flatpak-spawn --host`.
+- AppImage, deb/rpm, snap, macOS, and Windows keep the existing direct process spawn flow.
+- VLC keeps the current external-session flow in Flatpak, including the RC port used for progress polling.
+- MPV is intentionally reduced in Flatpak: the app does not reuse an existing MPV instance there and does not open the Unix socket bridge used for non-Flatpak progress polling.
+- VLC instance reuse is also gated off in Flatpak. Outside Flatpak the user can opt in via the "Reuse VLC instance" setting; the app then keeps a single tracked VLC process and drives subsequent stream loads through its RC interface (`clear` + `add <url> :http-*`) instead of spawning a new window per click.
+
+This keeps non-Flatpak behavior unchanged while allowing Flatpak builds to open host-installed external players.
+
+## Typed Playback Payload
+
+Shared playback payloads live in:
+
+- `/Users/4gray/Code/iptvnator/libs/shared/interfaces/src/lib/portal-playback.interface.ts`
+
+Types introduced:
+
+- `PlayerContentInfo`
+- `ResolvedPortalPlayback`
+
+These provide a single shape for:
+
+- `streamUrl`
+- `title`
+- optional thumbnail and resume start time
+- playback-position metadata
+- optional external-player headers and request metadata
+
+## Xtream Behavior
+
+Xtream detail views already own canonical routes, so they construct playback locally and decide inline vs external locally.
+
+Behavior to preserve:
+
+- resume/playback position continues saving from `timeUpdate`
+- back navigation clears inline playback with the route
+- favorites, recent, and search still route into canonical Xtream detail screens before playback
+
+## Stalker Behavior
+
+Stalker previously resolved playback and opened UI in the same method.
+
+Current contract:
+
+- `resolveVodPlayback(...)` returns a `ResolvedPortalPlayback`
+- `createLinkToPlayVod(...)` remains as a compatibility API but collection,
+  search, and canonical detail views use the resolver directly
+- Stalker detail, collection, and search views decide inline vs external locally
+
+This keeps:
+
+- inline/store-state detail navigation intact
+- series and VOD-as-series support intact
+- external MPV/VLC launches unchanged
+
+## Recently Viewed Confirmation
+
+Selecting or resolving an item is not watching it. A channel, movie or series
+becomes a recently viewed item — and with it the dashboard hero — only once
+its stream has really played, so a stream that fails straight away never
+reaches history.
+
+- Writers do not persist on selection. They hand the write to
+  `PlaybackHistoryGate` (`@iptvnator/playback/data-access`) with
+  `defer(target, commit)`, where the target is what the playback will be
+  known by: the host's `playbackSessionKey` (M3U) and/or stream URLs. The Stalker resolver defers
+  by the resolved (possibly temporary) link; the persisted row still stores
+  the portal `cmd`, never that link. Writers capture the item and its
+  playlist when they defer, so navigating meanwhile cannot misfile it; an
+  Xtream write confirmed after a switch to another playlist (only a slow
+  MPV/VLC launch can) is saved to its own playlist without reloading the
+  store's recent list, which belongs to the other playlist by then.
+- Matching: a write deferred with a session key is confirmed only by that
+  same key — the same URL in two playlists must not let playback in one
+  (inline, or in MPV/VLC) record a failed attempt in the other. Writes
+  without one (portal resolvers) match any confirmation of their stream URL.
+  The global live tab defers with its own playlist-scoped session key, which
+  also survives a switch to catch-up, when the row plays inline; a row that
+  goes to MPV/VLC defers by URL, the only thing that launch confirms.
+- `WebPlayerViewComponent` confirms its `playbackSessionKey`, `streamUrl`
+  and `playback.streamUrl` once the owned engine's reported position has
+  advanced by 2 seconds while playing (`PlaybackProgressConfirmation`).
+  Engines report `playing` (not paused, not seeking) with each time update,
+  so seeks of paused media do not count; neither do steps above 3 seconds
+  (seeks, a resume jump, live-edge catch-up), stalls or backwards jumps. A
+  report of a new stream never adds to the progress of the previous one; an
+  engine or format swap of the same stream keeps its progress. The radio
+  `AudioPlayerComponent` confirms the same way (with the host's session key
+  when given).
+- MPV/VLC cannot report whether a live stream plays, so the gate itself
+  subscribes to the Electron external-player session updates and confirms a
+  session's `streamUrl` once it is `opened` or `playing`; a launch that ends
+  in `error` is not recorded. (Subscribing in the gate, which the first
+  deferred write creates, keeps it off the initial bundle.) That
+  confirmation carries no session key, so an "Open in MPV/VLC" recovery
+  launch is also confirmed by the `WebPlayerViewComponent` that requested
+  it, under its own session key, once the launch has opened. M3U keeps
+  recording on selection when MPV/VLC is the configured player.
+- A confirmation commits every write matching it, once. Unconfirmed writes
+  are bounded (oldest dropped) and simply never commit. The global live tab
+  moves a confirmed row to the top of an open Recently Viewed list even if
+  another row was selected meanwhile.
+- A committed write updates the source while the item keeps playing. Hosts
+  must not hand the player a new but identical playback for it: the M3U
+  host's `embeddedPlayback` also reads the playlist meta, so it is compared
+  by value — a new object would remount the engine and restart the stream.
+
+## Playback Position Saving
+
+The old dialog path saved playback positions from inside the removed Xtream
+player dialog.
+
+The new contract is:
+
+- inline detail hosts listen to `timeUpdate`
+- each host throttles saves
+- each host persists via existing playback-position infrastructure
+
+This avoids coupling inline UI state to a global dialog.
+
+## Future Migration Rule
+
+If a non-detail surface needs embedded playback:
+
+- give that surface a canonical inline host
+- switch it to `ResolvedPortalPlayback`
+- do not move portal-specific navigation into `PlayerService`
+
+The preferred direction is view-owned inline playback, not a larger dialog manager.

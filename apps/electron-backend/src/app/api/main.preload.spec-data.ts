@@ -1,0 +1,607 @@
+import type { ElectronBridgeApi } from '@iptvnator/shared/interfaces';
+
+type ElectronBridgeMethodName = Extract<
+    {
+        [K in keyof ElectronBridgeApi]: ElectronBridgeApi[K] extends (
+            ...args: never[]
+        ) => unknown
+            ? K
+            : never;
+    }[keyof ElectronBridgeApi],
+    string
+>;
+
+type PreloadInvokeCase = {
+    method: ElectronBridgeMethodName;
+    args: unknown[];
+    channel: string;
+    forwardedArgs: unknown[];
+};
+
+const playlistId = 'playlist-1';
+export const operationId = 'operation-1';
+const epgUrls = ['https://example.com/guide.xml'];
+const trustOptions = {
+    trustedPrivateNetworkEpgUrls: ['http://192.168.1.20/guide.xml'],
+    trustedInsecureTlsHosts: ['playlist.local'],
+};
+const channelIds = ['channel-1', 'channel-2'];
+const playlist = { id: playlistId, name: 'Playlist', type: 'xtream' };
+const playlists = [playlist];
+const playlistUpdates = { name: 'Updated playlist' };
+const categories = [{ category_id: '10', category_name: 'Live' }];
+const streams = [{ stream_id: 42, name: 'Channel' }];
+const favorites = [{ contentId: 1, playlistId }];
+const recentlyViewed = [{ contentId: 2, playlistId }];
+const categoryIds = [10, 11];
+const reorderUpdates = [
+    { content_id: 12, playlist_id: 'playlist-1', position: 1 },
+];
+const recentItemsBatch = [{ contentId: 13, playlistId }];
+const playbackData = {
+    contentXtreamId: 42,
+    contentType: 'vod',
+    positionSeconds: 120,
+};
+const tmdbCacheEntry = {
+    mediaType: 'movie',
+    lookupKey: 'id:603',
+    language: 'en-US',
+    tmdbId: 603,
+    payload: '{"id":603}',
+};
+const vodSourceRequest = {
+    title: 'The Matrix',
+    year: 1999,
+    excludePlaylistId: playlistId,
+};
+const vodSourceMatchKeys = ['tmdb:603', 'title:the matrix:1999'];
+const vodSourcePin = {
+    matchKey: 'tmdb:603',
+    playlistId,
+    contentId: 42,
+    portalType: 'xtream',
+};
+
+export const dbPreloadCases: PreloadInvokeCase[] = [
+    {
+        method: 'dbCreatePlaylist',
+        args: [playlist],
+        channel: 'DB_CREATE_PLAYLIST',
+        forwardedArgs: [playlist],
+    },
+    {
+        method: 'dbGetPlaylist',
+        args: [playlistId],
+        channel: 'DB_GET_PLAYLIST',
+        forwardedArgs: [playlistId],
+    },
+    {
+        method: 'dbUpsertAppPlaylist',
+        args: [playlist],
+        channel: 'DB_UPSERT_APP_PLAYLIST',
+        forwardedArgs: [playlist],
+    },
+    {
+        method: 'dbRecoverLegacyPlaylists',
+        args: [],
+        channel: 'DB_RECOVER_LEGACY_PLAYLISTS',
+        forwardedArgs: [],
+    },
+    {
+        method: 'dbMigrateAppPlaylists',
+        args: [playlists],
+        channel: 'DB_MIGRATE_APP_PLAYLISTS',
+        forwardedArgs: [playlists],
+    },
+    {
+        method: 'dbUpsertAppPlaylists',
+        args: [playlists],
+        channel: 'DB_UPSERT_APP_PLAYLISTS',
+        forwardedArgs: [playlists],
+    },
+    {
+        method: 'dbGetAppPlaylists',
+        args: [],
+        channel: 'DB_GET_APP_PLAYLISTS',
+        forwardedArgs: [],
+    },
+    {
+        method: 'dbGetAppPlaylistMetas',
+        args: [],
+        channel: 'DB_GET_APP_PLAYLIST_METAS',
+        forwardedArgs: [],
+    },
+    {
+        method: 'dbGetAppPlaylist',
+        args: [playlistId],
+        channel: 'DB_GET_APP_PLAYLIST',
+        forwardedArgs: [playlistId],
+    },
+    {
+        method: 'dbGetAppPlaylistFavoriteChannels',
+        args: [playlistId],
+        channel: 'DB_GET_APP_PLAYLIST_FAVORITE_CHANNELS',
+        forwardedArgs: [playlistId],
+    },
+    {
+        method: 'dbUpdatePlaylist',
+        args: [playlistId, playlistUpdates],
+        channel: 'DB_UPDATE_PLAYLIST',
+        forwardedArgs: [playlistId, playlistUpdates],
+    },
+    {
+        method: 'dbSetPlaylistServerTimezone',
+        args: [
+            playlistId,
+            { serverUrl: 'http://panel.example', username: 'u', password: 'p' },
+            'Europe/London',
+        ],
+        channel: 'DB_SET_PLAYLIST_SERVER_TIMEZONE',
+        forwardedArgs: [
+            playlistId,
+            { serverUrl: 'http://panel.example', username: 'u', password: 'p' },
+            'Europe/London',
+        ],
+    },
+    {
+        method: 'dbDeletePlaylist',
+        args: [playlistId, operationId],
+        channel: 'DB_DELETE_PLAYLIST',
+        forwardedArgs: [playlistId, operationId],
+    },
+    {
+        method: 'dbDeleteXtreamContent',
+        args: [playlistId, operationId],
+        channel: 'DB_DELETE_XTREAM_CONTENT',
+        forwardedArgs: [playlistId, operationId],
+    },
+    {
+        method: 'dbRestoreXtreamUserData',
+        args: [playlistId, favorites, recentlyViewed, operationId],
+        channel: 'DB_RESTORE_XTREAM_USER_DATA',
+        forwardedArgs: [playlistId, favorites, recentlyViewed, operationId],
+    },
+    {
+        method: 'dbHasCategories',
+        args: [playlistId, 'live'],
+        channel: 'DB_HAS_CATEGORIES',
+        forwardedArgs: [playlistId, 'live'],
+    },
+    {
+        method: 'dbGetCategories',
+        args: [playlistId, 'live'],
+        channel: 'DB_GET_CATEGORIES',
+        forwardedArgs: [playlistId, 'live'],
+    },
+    {
+        method: 'dbSaveCategories',
+        args: [playlistId, categories, 'live', categoryIds, categoryIds],
+        channel: 'DB_SAVE_CATEGORIES',
+        forwardedArgs: [
+            playlistId,
+            categories,
+            'live',
+            categoryIds,
+            categoryIds,
+        ],
+    },
+    {
+        method: 'dbGetAllCategories',
+        args: [playlistId, 'live'],
+        channel: 'DB_GET_ALL_CATEGORIES',
+        forwardedArgs: [playlistId, 'live'],
+    },
+    {
+        method: 'dbUpdateCategoryVisibility',
+        args: [categoryIds, true],
+        channel: 'DB_UPDATE_CATEGORY_VISIBILITY',
+        forwardedArgs: [categoryIds, true],
+    },
+    {
+        method: 'dbSetCategoryLocks',
+        args: [playlistId, 'live', categoryIds],
+        channel: 'DB_SET_CATEGORY_LOCKS',
+        forwardedArgs: [playlistId, 'live', categoryIds],
+    },
+    {
+        method: 'dbHasContent',
+        args: [playlistId, 'movie'],
+        channel: 'DB_HAS_CONTENT',
+        forwardedArgs: [playlistId, 'movie'],
+    },
+    {
+        method: 'dbGetContent',
+        args: [playlistId, 'movie'],
+        channel: 'DB_GET_CONTENT',
+        forwardedArgs: [playlistId, 'movie'],
+    },
+    {
+        method: 'dbSaveContent',
+        args: [playlistId, streams, 'movie', operationId],
+        channel: 'DB_SAVE_CONTENT',
+        forwardedArgs: [playlistId, streams, 'movie', operationId],
+    },
+    {
+        method: 'dbClearXtreamImportCache',
+        args: [playlistId, 'movie'],
+        channel: 'DB_CLEAR_XTREAM_IMPORT_CACHE',
+        forwardedArgs: [playlistId, 'movie'],
+    },
+    {
+        method: 'dbSearchContent',
+        args: [playlistId, 'matrix', ['movie'], true],
+        channel: 'DB_SEARCH_CONTENT',
+        forwardedArgs: [playlistId, 'matrix', ['movie'], true],
+    },
+    {
+        method: 'dbGlobalSearch',
+        args: ['matrix', ['movie'], true],
+        channel: 'DB_GLOBAL_SEARCH',
+        forwardedArgs: ['matrix', ['movie'], true],
+    },
+    {
+        method: 'dbGetGlobalRecentlyAdded',
+        args: ['vod', 50, 'xtream'],
+        channel: 'DB_GET_GLOBAL_RECENTLY_ADDED',
+        forwardedArgs: ['vod', 50, 'xtream'],
+    },
+    {
+        method: 'dbGetRecentlyViewed',
+        args: [],
+        channel: 'DB_GET_RECENTLY_VIEWED',
+        forwardedArgs: [],
+    },
+    {
+        method: 'dbClearRecentlyViewed',
+        args: [],
+        channel: 'DB_CLEAR_RECENTLY_VIEWED',
+        forwardedArgs: [],
+    },
+    {
+        method: 'dbAddFavorite',
+        args: [12, playlistId, 'https://image.example/backdrop.jpg'],
+        channel: 'DB_ADD_FAVORITE',
+        forwardedArgs: [12, playlistId, 'https://image.example/backdrop.jpg'],
+    },
+    {
+        method: 'dbRemoveFavorite',
+        args: [12, playlistId],
+        channel: 'DB_REMOVE_FAVORITE',
+        forwardedArgs: [12, playlistId],
+    },
+    {
+        method: 'dbIsFavorite',
+        args: [12, playlistId],
+        channel: 'DB_IS_FAVORITE',
+        forwardedArgs: [12, playlistId],
+    },
+    {
+        method: 'dbGetFavorites',
+        args: [playlistId],
+        channel: 'DB_GET_FAVORITES',
+        forwardedArgs: [playlistId],
+    },
+    {
+        method: 'dbGetGlobalFavorites',
+        args: [],
+        channel: 'DB_GET_GLOBAL_FAVORITES',
+        forwardedArgs: [],
+    },
+    {
+        method: 'dbGetAllGlobalFavorites',
+        args: [],
+        channel: 'DB_GET_ALL_GLOBAL_FAVORITES',
+        forwardedArgs: [],
+    },
+    {
+        method: 'dbReorderGlobalFavorites',
+        args: [reorderUpdates],
+        channel: 'DB_REORDER_GLOBAL_FAVORITES',
+        forwardedArgs: [reorderUpdates],
+    },
+    {
+        method: 'dbGetRecentItems',
+        args: [playlistId],
+        channel: 'DB_GET_RECENT_ITEMS',
+        forwardedArgs: [playlistId],
+    },
+    {
+        method: 'dbAddRecentItem',
+        args: [13, playlistId, 'https://image.example/recent.jpg'],
+        channel: 'DB_ADD_RECENT_ITEM',
+        forwardedArgs: [13, playlistId, 'https://image.example/recent.jpg'],
+    },
+    {
+        method: 'dbClearPlaylistRecentItems',
+        args: [playlistId],
+        channel: 'DB_CLEAR_PLAYLIST_RECENT_ITEMS',
+        forwardedArgs: [playlistId],
+    },
+    {
+        method: 'dbRemoveRecentItem',
+        args: [13, playlistId],
+        channel: 'DB_REMOVE_RECENT_ITEM',
+        forwardedArgs: [13, playlistId],
+    },
+    {
+        method: 'dbRemoveRecentItemsBatch',
+        args: [recentItemsBatch],
+        channel: 'DB_REMOVE_RECENT_ITEMS_BATCH',
+        forwardedArgs: [recentItemsBatch],
+    },
+    {
+        method: 'dbGetContentByXtreamId',
+        args: [42, playlistId, 'movie'],
+        channel: 'DB_GET_CONTENT_BY_XTREAM_ID',
+        forwardedArgs: [42, playlistId, 'movie'],
+    },
+    {
+        method: 'dbSetContentMetadataIfMissing',
+        args: [
+            12,
+            { backdropUrl: 'https://image.example/backdrop.jpg', tmdbId: 603 },
+        ],
+        channel: 'DB_SET_CONTENT_METADATA_IF_MISSING',
+        forwardedArgs: [
+            12,
+            { backdropUrl: 'https://image.example/backdrop.jpg', tmdbId: 603 },
+        ],
+    },
+    {
+        method: 'dbDeleteAllPlaylists',
+        args: [operationId],
+        channel: 'DB_DELETE_ALL_PLAYLISTS',
+        forwardedArgs: [operationId],
+    },
+    {
+        method: 'dbCancelOperation',
+        args: [operationId],
+        channel: 'DB_CANCEL_OPERATION',
+        forwardedArgs: [operationId],
+    },
+    {
+        method: 'dbGetAppState',
+        args: ['workspace:last-route'],
+        channel: 'DB_GET_APP_STATE',
+        forwardedArgs: ['workspace:last-route'],
+    },
+    {
+        method: 'dbSetAppState',
+        args: ['workspace:last-route', '/workspace'],
+        channel: 'DB_SET_APP_STATE',
+        forwardedArgs: ['workspace:last-route', '/workspace'],
+    },
+    {
+        method: 'dbSavePlaybackPosition',
+        args: [playlistId, playbackData],
+        channel: 'DB_SAVE_PLAYBACK_POSITION',
+        forwardedArgs: [playlistId, playbackData],
+    },
+    {
+        method: 'dbGetPlaybackPosition',
+        args: [playlistId, 42, 'vod'],
+        channel: 'DB_GET_PLAYBACK_POSITION',
+        forwardedArgs: [playlistId, 42, 'vod'],
+    },
+    {
+        method: 'dbGetSeriesPlaybackPositions',
+        args: [playlistId, 88],
+        channel: 'DB_GET_SERIES_PLAYBACK_POSITIONS',
+        forwardedArgs: [playlistId, 88],
+    },
+    {
+        method: 'dbGetRecentPlaybackPositions',
+        args: [playlistId, 20],
+        channel: 'DB_GET_RECENT_PLAYBACK_POSITIONS',
+        forwardedArgs: [playlistId, 20],
+    },
+    {
+        method: 'dbGetAllPlaybackPositions',
+        args: [playlistId],
+        channel: 'DB_GET_ALL_PLAYBACK_POSITIONS',
+        forwardedArgs: [playlistId],
+    },
+    {
+        method: 'dbClearAllPlaybackPositions',
+        args: [playlistId],
+        channel: 'DB_CLEAR_ALL_PLAYBACK_POSITIONS',
+        forwardedArgs: [playlistId],
+    },
+    {
+        method: 'dbClearPlaybackPosition',
+        args: [playlistId, 42, 'vod'],
+        channel: 'DB_CLEAR_PLAYBACK_POSITION',
+        forwardedArgs: [playlistId, 42, 'vod'],
+    },
+    {
+        method: 'dbReplaceAllPlaybackPositions',
+        args: [playlistId, [playbackData]],
+        channel: 'DB_REPLACE_ALL_PLAYBACK_POSITIONS',
+        forwardedArgs: [playlistId, [playbackData]],
+    },
+    {
+        method: 'dbSavePlaybackPositionsBatch',
+        args: [playlistId, [playbackData]],
+        channel: 'DB_SAVE_PLAYBACK_POSITIONS_BATCH',
+        forwardedArgs: [playlistId, [playbackData]],
+    },
+    {
+        method: 'dbClearPlaybackPositionsBatch',
+        args: [playlistId, [{ contentXtreamId: 42, contentType: 'episode' }]],
+        channel: 'DB_CLEAR_PLAYBACK_POSITIONS_BATCH',
+        forwardedArgs: [
+            playlistId,
+            [{ contentXtreamId: 42, contentType: 'episode' }],
+        ],
+    },
+    {
+        method: 'dbGetTmdbMetadata',
+        args: ['movie', 'id:603', 'en-US'],
+        channel: 'DB_GET_TMDB_METADATA',
+        forwardedArgs: ['movie', 'id:603', 'en-US'],
+    },
+    {
+        method: 'dbSetTmdbMetadata',
+        args: [tmdbCacheEntry],
+        channel: 'DB_SET_TMDB_METADATA',
+        forwardedArgs: [tmdbCacheEntry],
+    },
+    {
+        method: 'dbGetTmdbCacheStats',
+        args: [],
+        channel: 'DB_GET_TMDB_CACHE_STATS',
+        forwardedArgs: [],
+    },
+    {
+        method: 'dbClearTmdbMetadata',
+        args: [],
+        channel: 'DB_CLEAR_TMDB_METADATA',
+        forwardedArgs: [],
+    },
+    {
+        method: 'dbMatchTitles',
+        args: [[['The Matrix', 'Inception']][0]],
+        channel: 'DB_MATCH_TITLES',
+        forwardedArgs: [['The Matrix', 'Inception']],
+    },
+    {
+        method: 'dbFindTitleSources',
+        args: [vodSourceRequest],
+        channel: 'DB_FIND_TITLE_SOURCES',
+        forwardedArgs: [vodSourceRequest],
+    },
+    {
+        method: 'dbGetVodSourcePin',
+        args: [vodSourceMatchKeys],
+        channel: 'DB_GET_VOD_SOURCE_PIN',
+        forwardedArgs: [vodSourceMatchKeys],
+    },
+    {
+        method: 'dbListVodSourcePins',
+        args: ['playlist-1'],
+        channel: 'DB_LIST_VOD_SOURCE_PINS',
+        forwardedArgs: ['playlist-1'],
+    },
+    {
+        method: 'dbClearVodSourcePinsForPlaylist',
+        args: ['playlist-1'],
+        channel: 'DB_CLEAR_VOD_SOURCE_PINS_FOR_PLAYLIST',
+        forwardedArgs: ['playlist-1'],
+    },
+    {
+        method: 'dbSetVodSourcePin',
+        args: [vodSourcePin, ['title:dune:'], ['title:dune:2021']],
+        channel: 'DB_SET_VOD_SOURCE_PIN',
+        // Both key lists ride along, so the write, the extra keys it is also
+        // stored under, and the retirement are one transaction rather than
+        // separate calls that can half-apply.
+        forwardedArgs: [vodSourcePin, ['title:dune:'], ['title:dune:2021']],
+    },
+    {
+        method: 'dbReplaceVodSourcePins',
+        args: ['playlist-1', [vodSourcePin]],
+        channel: 'DB_REPLACE_VOD_SOURCE_PINS',
+        // One statement for the whole playlist: restore cannot afford a clear
+        // and a write that can half-apply.
+        forwardedArgs: ['playlist-1', [vodSourcePin]],
+    },
+    {
+        method: 'dbClearVodSourcePin',
+        args: [vodSourceMatchKeys],
+        channel: 'DB_CLEAR_VOD_SOURCE_PIN',
+        forwardedArgs: [vodSourceMatchKeys],
+    },
+];
+
+export const epgPreloadCases: PreloadInvokeCase[] = [
+    {
+        method: 'fetchEpg',
+        args: [epgUrls, trustOptions],
+        channel: 'FETCH_EPG',
+        forwardedArgs: [{ url: epgUrls, options: trustOptions }],
+    },
+    {
+        method: 'getChannelPrograms',
+        args: ['channel-1'],
+        channel: 'GET_CHANNEL_PROGRAMS',
+        forwardedArgs: [{ channelId: 'channel-1' }],
+    },
+    {
+        method: 'getCurrentProgramsBatch',
+        args: [channelIds],
+        channel: 'GET_CURRENT_PROGRAMS_BATCH',
+        forwardedArgs: [{ channelIds }],
+    },
+    {
+        method: 'getEpgChannelMetadata',
+        args: [channelIds],
+        channel: 'EPG_GET_CHANNEL_METADATA',
+        forwardedArgs: [{ channelIds }],
+    },
+    {
+        method: 'getEpgChannels',
+        args: [],
+        channel: 'EPG_GET_CHANNELS',
+        forwardedArgs: [],
+    },
+    {
+        method: 'getEpgProgramsForChannels',
+        args: [{ channelIds, fromMs: 1_000, toMs: 2_000 }],
+        channel: 'EPG_GET_PROGRAMS_FOR_CHANNELS',
+        forwardedArgs: [{ channelIds, fromMs: 1_000, toMs: 2_000 }],
+    },
+    {
+        method: 'getEpgProgramCoverage',
+        args: [{ channelIds, fromMs: 1_000, toMs: 2_000 }],
+        channel: 'EPG_GET_PROGRAM_COVERAGE',
+        forwardedArgs: [{ channelIds, fromMs: 1_000, toMs: 2_000 }],
+    },
+    {
+        method: 'forceFetchEpg',
+        args: ['https://example.com/guide.xml', trustOptions],
+        channel: 'EPG_FORCE_FETCH',
+        forwardedArgs: [
+            {
+                url: 'https://example.com/guide.xml',
+                options: trustOptions,
+            },
+        ],
+    },
+    {
+        method: 'openEpgFileDialog',
+        args: [],
+        channel: 'EPG_OPEN_FILE_DIALOG',
+        forwardedArgs: [],
+    },
+    {
+        method: 'clearEpgData',
+        args: [],
+        channel: 'EPG_CLEAR_ALL',
+        forwardedArgs: [],
+    },
+    {
+        method: 'reconcileEpgSources',
+        args: [epgUrls],
+        channel: 'EPG_RECONCILE_SOURCES',
+        forwardedArgs: [{ urls: epgUrls }],
+    },
+    {
+        method: 'clearEpgDataForSource',
+        args: ['https://example.com/guide.xml'],
+        channel: 'EPG_CLEAR_SOURCE',
+        forwardedArgs: [{ sourceUrl: 'https://example.com/guide.xml' }],
+    },
+    {
+        method: 'checkEpgFreshness',
+        args: [epgUrls, 24],
+        channel: 'EPG_CHECK_FRESHNESS',
+        forwardedArgs: [{ urls: epgUrls, maxAgeHours: 24 }],
+    },
+    {
+        method: 'searchEpgPrograms',
+        args: ['news', 50],
+        channel: 'EPG_DB_SEARCH_PROGRAMS',
+        forwardedArgs: ['news', 50],
+    },
+];

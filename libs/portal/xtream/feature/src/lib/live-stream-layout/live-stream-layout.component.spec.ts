@@ -1,0 +1,1356 @@
+import { signal } from '@angular/core';
+import { ComponentFixture, TestBed } from '@angular/core/testing';
+import { By } from '@angular/platform-browser';
+import { NoopAnimationsModule } from '@angular/platform-browser/animations';
+import {
+    ActivatedRoute,
+    NavigationEnd,
+    Router,
+    convertToParamMap,
+} from '@angular/router';
+import { MockPipe } from 'ng-mocks';
+import { TranslatePipe } from '@ngx-translate/core';
+import { BehaviorSubject, Subject, of } from 'rxjs';
+import {
+    LIVE_EPG_PANEL_STATE_STORAGE_KEY,
+    liveSidebarStateStorageKey,
+    LiveLayoutSidebarStateService,
+    PORTAL_PLAYER,
+} from '@iptvnator/portal/shared/util';
+import {
+    FavoritesService,
+    XtreamStore,
+    XtreamUrlService,
+} from '@iptvnator/portal/xtream/data-access';
+import {
+    EpgArchiveDownloadService,
+    EpgArchiveCopyService,
+    EpgListViewComponent,
+    EpgTimelineComponent,
+} from '@iptvnator/ui/epg';
+import {
+    type PlaybackFallbackRequest,
+    WebPlayerViewComponent,
+} from '@iptvnator/ui/playback';
+import {
+    EpgItem,
+    EpgProgram,
+    ResolvedPortalPlayback,
+} from '@iptvnator/shared/interfaces';
+import { GridListComponent } from '@iptvnator/portal/shared/ui';
+import { PortalChannelsListComponent } from '../portal-channels-list/portal-channels-list.component';
+import { LiveStreamLayoutComponent } from './live-stream-layout.component';
+import { RuntimeCapabilitiesService, SettingsStore } from '@iptvnator/services';
+import { createPlaybackSessionKey } from '@iptvnator/playback/util';
+import { liveHistoryTestCases } from './live-stream-layout-history.spec-data';
+
+import {
+    sampleChannel,
+    playlist,
+    StubEpgTimelineComponent,
+    StubGridListComponent,
+    StubPortalChannelsListComponent,
+    StubWebPlayerViewComponent,
+} from './live-stream-layout-stubs.spec-data';
+
+const LIVE_CHANNEL_SORT_STORAGE_KEY = 'xtream-live-channel-sort-mode';
+
+describe('LiveStreamLayoutComponent', () => {
+    let fixture: ComponentFixture<LiveStreamLayoutComponent>;
+    let component: LiveStreamLayoutComponent;
+    let routeQueryParamMap: BehaviorSubject<
+        ReturnType<typeof convertToParamMap>
+    >;
+    const fixedNow = new Date('2026-04-05T12:00:00.000Z');
+
+    const categories = signal([{ category_id: 1, category_name: 'News' }]);
+    const categoryItemCounts = signal(new Map<number, number>([[1, 1]]));
+    const epgItems = signal<EpgItem[]>([]);
+    const currentEpgItem = signal<EpgItem | null>(null);
+    const isLoadingEpg = signal(false);
+    const selectedTypeContentLoading = signal(false);
+    const selectedCategoryId = signal<number | null>(1);
+    const selectedContentType = signal<'live' | 'vod' | 'series'>('live');
+    const selectedItem = signal<unknown>(sampleChannel);
+    const currentPlaylist = signal(playlist);
+    const liveStreams = signal<unknown[]>([]);
+    const isContentInitialized = signal(true);
+    const paginatedContent = signal<unknown[]>([]);
+    const hasMoreContent = signal(false);
+
+    const xtreamStore = {
+        getCategoriesBySelectedType: categories,
+        getCategoryItemCounts: categoryItemCounts,
+        getPaginatedContent: paginatedContent,
+        hasMoreContent,
+        epgItems,
+        currentEpgItem,
+        isLoadingEpg,
+        selectedTypeContentLoading,
+        selectedCategoryId,
+        selectedContentType,
+        selectedItem,
+        currentPlaylist,
+        liveStreams,
+        isContentInitialized,
+        selectItemsFromSelectedCategory: jest.fn<unknown[], []>(() => [
+            sampleChannel,
+        ]),
+        constructStreamUrl: jest.fn(() => 'https://example.com/live.ts'),
+        openPlayer: jest.fn(),
+        addRecentItem: jest.fn(),
+        setSelectedItem: jest.fn(),
+        setSelectedCategory: jest.fn(),
+        loadMoreContent: jest.fn(),
+    };
+
+    let routerEvents: Subject<unknown>;
+    let router: { events: Subject<unknown>; navigate: jest.Mock };
+    const favoritesService = {
+        getFavorites: jest.fn().mockReturnValue(of([])),
+    };
+    const xtreamUrlService = {
+        constructAutoLiveFallbackUrl: jest.fn(
+            (): string | undefined => undefined
+        ),
+        resolveCatchupUrl: jest
+            .fn()
+            .mockResolvedValue('https://example.com/timeshift.ts'),
+    };
+    const portalPlayer = {
+        isEmbeddedPlayer: jest.fn().mockReturnValue(true),
+        openExternalPlayback: jest.fn(),
+    };
+    const settingsStore = {
+        openStreamOnDoubleClick: signal(false),
+        // Reset in beforeEach: the store is module-scoped, so a test failure
+        // before an in-test restore must not leak 'list' into siblings.
+        resolvedEpgViewMode: signal<'timeline' | 'list'>('timeline'),
+        resolvedEpgOffsetMinutes: signal(0),
+    };
+
+    const originalElectron = window.electron;
+
+    beforeEach(async () => {
+        currentPlaylist.set(playlist);
+        jest.useFakeTimers();
+        jest.setSystemTime(fixedNow);
+        settingsStore.resolvedEpgViewMode.set('timeline');
+        localStorage.removeItem(LIVE_CHANNEL_SORT_STORAGE_KEY);
+        localStorage.removeItem(LIVE_EPG_PANEL_STATE_STORAGE_KEY);
+        localStorage.removeItem(liveSidebarStateStorageKey('portal'));
+        settingsStore.openStreamOnDoubleClick.set(false);
+
+        window.electron = {
+            updateRemoteControlStatus: jest.fn(),
+            onChannelChange: jest.fn(() => jest.fn()),
+            onRemoteControlCommand: jest.fn(() => jest.fn()),
+        } as unknown as typeof window.electron;
+
+        routerEvents = new Subject();
+        router = { events: routerEvents, navigate: jest.fn() };
+        xtreamStore.constructStreamUrl.mockClear();
+        xtreamStore.openPlayer.mockClear();
+        xtreamStore.addRecentItem.mockClear();
+        xtreamStore.setSelectedItem.mockClear();
+        xtreamStore.setSelectedCategory.mockClear();
+        xtreamStore.loadMoreContent.mockClear();
+        xtreamStore.selectItemsFromSelectedCategory.mockReturnValue([
+            sampleChannel,
+        ]);
+        liveStreams.set([]);
+        paginatedContent.set([]);
+        hasMoreContent.set(false);
+        favoritesService.getFavorites.mockClear();
+        xtreamUrlService.resolveCatchupUrl.mockClear();
+        portalPlayer.isEmbeddedPlayer.mockReset();
+        portalPlayer.isEmbeddedPlayer.mockReturnValue(true);
+        portalPlayer.openExternalPlayback.mockClear();
+
+        epgItems.set([]);
+        currentEpgItem.set(null);
+        isLoadingEpg.set(false);
+        categories.set([{ category_id: 1, category_name: 'News' }]);
+        categoryItemCounts.set(new Map<number, number>([[1, 1]]));
+        selectedTypeContentLoading.set(false);
+        selectedCategoryId.set(1);
+        selectedContentType.set('live');
+        selectedItem.set(sampleChannel);
+        currentPlaylist.set(playlist);
+        routeQueryParamMap = new BehaviorSubject(convertToParamMap({}));
+
+        await TestBed.configureTestingModule({
+            imports: [LiveStreamLayoutComponent, NoopAnimationsModule],
+            providers: [
+                {
+                    provide: EpgArchiveDownloadService,
+                    useValue: {
+                        start: jest.fn(async (_input, resolve) => {
+                            await resolve();
+                        }),
+                    },
+                },
+                {
+                    provide: EpgArchiveCopyService,
+                    useValue: {
+                        copy: jest.fn(
+                            async (resolve: () => Promise<string | null>) => {
+                                await resolve();
+                            }
+                        ),
+                    },
+                },
+                {
+                    provide: ActivatedRoute,
+                    useValue: {
+                        snapshot: {
+                            data: {},
+                            queryParamMap: convertToParamMap({}),
+                        },
+                        queryParamMap: routeQueryParamMap.asObservable(),
+                    },
+                },
+                {
+                    provide: Router,
+                    useValue: {
+                        events: router.events.asObservable(),
+                        navigate: router.navigate,
+                    },
+                },
+                { provide: XtreamStore, useValue: xtreamStore },
+                { provide: FavoritesService, useValue: favoritesService },
+                { provide: XtreamUrlService, useValue: xtreamUrlService },
+                {
+                    provide: RuntimeCapabilitiesService,
+                    useValue: {
+                        supportsDownloads: true,
+                        get supportsEpg() {
+                            return Boolean(window.electron);
+                        },
+                        get isElectron() {
+                            return Boolean(window.electron);
+                        },
+                        get supportsRemoteControl() {
+                            return Boolean(
+                                window.electron?.updateRemoteControlStatus &&
+                                window.electron.onChannelChange &&
+                                window.electron.onRemoteControlCommand
+                            );
+                        },
+                    },
+                },
+                { provide: SettingsStore, useValue: settingsStore },
+                { provide: PORTAL_PLAYER, useValue: portalPlayer },
+            ],
+        })
+            .overrideComponent(LiveStreamLayoutComponent, {
+                remove: {
+                    imports: [
+                        EpgArchiveCopyService,
+                        EpgListViewComponent,
+                        EpgTimelineComponent,
+                        GridListComponent,
+                        PortalChannelsListComponent,
+                        TranslatePipe,
+                        WebPlayerViewComponent,
+                    ],
+                },
+                add: {
+                    imports: [
+                        StubEpgTimelineComponent,
+                        StubGridListComponent,
+                        StubPortalChannelsListComponent,
+                        MockPipe(
+                            TranslatePipe,
+                            (value: string | null | undefined) => value ?? ''
+                        ),
+                        StubWebPlayerViewComponent,
+                    ],
+                },
+            })
+            .compileComponents();
+
+        fixture = TestBed.createComponent(LiveStreamLayoutComponent);
+        component = fixture.componentInstance;
+
+        TestBed.inject(LiveLayoutSidebarStateService).setState(
+            'portal',
+            'expanded'
+        );
+    });
+
+    afterEach(() => {
+        TestBed.inject(LiveLayoutSidebarStateService).setState(
+            'portal',
+            'expanded'
+        );
+        fixture.destroy();
+        jest.useRealTimers();
+        localStorage.removeItem(LIVE_CHANNEL_SORT_STORAGE_KEY);
+        localStorage.removeItem(LIVE_EPG_PANEL_STATE_STORAGE_KEY);
+        localStorage.removeItem(liveSidebarStateStorageKey('portal'));
+        window.electron = originalElectron;
+    });
+
+    it('retires committed live playback when the playlist owner changes', () => {
+        fixture.detectChanges();
+        component.playLive({ xtream_id: 10000, title: 'Synthetic' });
+        expect(component.activePlayback()).not.toBeNull();
+        currentPlaylist.set({ ...playlist, id: 'other-playlist' });
+        fixture.detectChanges();
+        expect(component.activePlayback()).toBeNull();
+        expect(component.playbackSessionKey()).toBe('');
+    });
+
+    it('passes the source-owner alternate live format to the web player', () => {
+        xtreamStore.constructStreamUrl.mockReturnValueOnce(
+            'https://example.com/live/101.ts'
+        );
+        xtreamUrlService.constructAutoLiveFallbackUrl.mockReturnValueOnce(
+            'https://example.com/live/101.m3u8'
+        );
+
+        component.playLive(sampleChannel);
+
+        expect(component.activePlayback()).toEqual(
+            expect.objectContaining({
+                streamUrl: 'https://example.com/live/101.ts',
+                liveAutoFallbackUrl: 'https://example.com/live/101.m3u8',
+                liveAutoTsUrl: undefined,
+            })
+        );
+    });
+
+    it('renders the controlled epg list for electron playback', () => {
+        epgItems.set([
+            buildEpgItem(
+                '1',
+                'Current Show',
+                '2026-04-05T11:30:00.000Z',
+                '2026-04-05T12:30:00.000Z'
+            ),
+        ]);
+
+        component.playLive(sampleChannel);
+        fixture.detectChanges();
+
+        expect(
+            fixture.nativeElement.querySelector('app-epg-timeline')
+        ).not.toBeNull();
+    });
+
+    it('swaps the timeline for the list view when epgViewMode is "list"', () => {
+        settingsStore.resolvedEpgViewMode.set('list');
+
+        component.playLive(sampleChannel);
+        fixture.detectChanges();
+
+        expect(
+            fixture.nativeElement.querySelector('app-epg-list-view')
+        ).not.toBeNull();
+        expect(
+            fixture.nativeElement.querySelector('app-epg-timeline')
+        ).toBeNull();
+        // Taller inline panel for the list view (see _portal-layout.scss).
+        expect(
+            fixture.nativeElement
+                .querySelector('.epg')
+                ?.classList.contains('epg--list')
+        ).toBe(true);
+
+        settingsStore.resolvedEpgViewMode.set('timeline'); // restore for sibling tests
+    });
+
+    liveHistoryTestCases(() => ({ component, xtreamStore, portalPlayer }));
+
+    it('hides the EPG panel in browser/PWA playback', () => {
+        fixture.destroy();
+        window.electron = undefined as unknown as typeof window.electron;
+
+        fixture = TestBed.createComponent(LiveStreamLayoutComponent);
+        component = fixture.componentInstance;
+
+        component.playLive(sampleChannel);
+        fixture.detectChanges();
+
+        expect(
+            fixture.nativeElement.querySelector('app-web-player-view')
+        ).not.toBeNull();
+        expect(fixture.nativeElement.querySelector('.epg')).toBeNull();
+        expect(
+            fixture.nativeElement.querySelector('app-epg-timeline')
+        ).toBeNull();
+    });
+
+    it('restores the collapsed live EPG panel state for embedded playback', () => {
+        fixture.destroy();
+        localStorage.setItem(LIVE_EPG_PANEL_STATE_STORAGE_KEY, 'collapsed');
+
+        fixture = TestBed.createComponent(LiveStreamLayoutComponent);
+        component = fixture.componentInstance;
+        component.playLive(sampleChannel);
+        fixture.detectChanges();
+
+        expect(component.isLiveEpgPanelCollapsed()).toBe(true);
+        const timeline = fixture.debugElement.query(
+            By.directive(StubEpgTimelineComponent)
+        );
+        expect(timeline.componentInstance.collapsed()).toBe(true);
+        expect(
+            fixture.nativeElement
+                .querySelector('.epg')
+                .classList.contains('epg-collapsed')
+        ).toBe(true);
+    });
+
+    it('persists live EPG panel toggle changes from the timeline', () => {
+        component.playLive(sampleChannel);
+        fixture.detectChanges();
+
+        const timeline = fixture.debugElement.query(
+            By.directive(StubEpgTimelineComponent)
+        );
+        timeline.componentInstance.collapsedChange.emit(true);
+
+        expect(component.isLiveEpgPanelCollapsed()).toBe(true);
+        expect(localStorage.getItem(LIVE_EPG_PANEL_STATE_STORAGE_KEY)).toBe(
+            'collapsed'
+        );
+
+        timeline.componentInstance.collapsedChange.emit(false);
+
+        expect(component.isLiveEpgPanelCollapsed()).toBe(false);
+        expect(localStorage.getItem(LIVE_EPG_PANEL_STATE_STORAGE_KEY)).toBe(
+            'expanded'
+        );
+    });
+
+    it('keeps the EPG timeline expanded for external playback', () => {
+        portalPlayer.isEmbeddedPlayer.mockReturnValue(false);
+
+        component.playLive(sampleChannel);
+        fixture.detectChanges();
+
+        const timeline = fixture.debugElement.query(
+            By.directive(StubEpgTimelineComponent)
+        );
+        expect(timeline).not.toBeNull();
+        expect(timeline.componentInstance.collapsed()).toBe(false);
+        expect(
+            fixture.nativeElement
+                .querySelector('.epg')
+                .classList.contains('epg-collapsed')
+        ).toBe(false);
+    });
+
+    it('shows the channel loading skeleton surface while live content loads without a selected category', () => {
+        selectedCategoryId.set(null);
+        selectedTypeContentLoading.set(true);
+
+        fixture.detectChanges();
+
+        expect(
+            fixture.nativeElement.querySelector(
+                '[data-test-id="portal-channels-list-stub"]'
+            )
+        ).not.toBeNull();
+        expect(
+            fixture.nativeElement.querySelector('app-portal-empty-state')
+        ).toBeNull();
+    });
+
+    it('shows live all-items content with the shared grid and no paginator before a category is selected', () => {
+        const firstChannel = {
+            xtream_id: 301,
+            name: 'First Channel',
+            category_id: '7',
+            added: String(
+                Math.floor(Date.parse('2026-04-04T12:00:00Z') / 1000)
+            ),
+        };
+        const secondChannel = {
+            xtream_id: 302,
+            name: 'Second Channel',
+            category_id: '8',
+            added: String(
+                Math.floor(Date.parse('2026-04-03T12:00:00Z') / 1000)
+            ),
+        };
+        const thirdChannel = {
+            xtream_id: 303,
+            name: 'Third Channel',
+            category_id: '9',
+            added: String(
+                Math.floor(Date.parse('2026-04-02T12:00:00Z') / 1000)
+            ),
+        };
+        selectedCategoryId.set(null);
+        selectedTypeContentLoading.set(false);
+        hasMoreContent.set(true);
+        paginatedContent.set([firstChannel, secondChannel]);
+        xtreamStore.selectItemsFromSelectedCategory.mockReturnValue([
+            firstChannel,
+            secondChannel,
+            thirdChannel,
+        ]);
+
+        fixture.detectChanges();
+
+        const grid = fixture.debugElement.query(
+            By.directive(StubGridListComponent)
+        );
+        expect(grid).not.toBeNull();
+        expect(grid.componentInstance.items()).toEqual([
+            firstChannel,
+            secondChannel,
+        ]);
+        expect(grid.componentInstance.variant()).toBe('logo');
+        expect(grid.componentInstance.type()).toBe('live');
+        expect(
+            fixture.nativeElement.querySelector('.category-title').textContent
+        ).toContain('PORTALS.ALL_ITEMS');
+        expect(
+            fixture.nativeElement.querySelector('.category-subtitle')
+                .textContent
+        ).toContain('WORKSPACE.CONTEXT.ITEM_COUNT_OTHER');
+        expect(fixture.nativeElement.querySelector('mat-paginator')).toBeNull();
+        expect(
+            fixture.debugElement.query(
+                By.directive(StubPortalChannelsListComponent)
+            )
+        ).toBeNull();
+        expect(
+            fixture.nativeElement.querySelector('app-portal-empty-state')
+        ).toBeNull();
+    });
+
+    it('plays a live all-items grid card and selects its category', () => {
+        const channel = {
+            xtream_id: 301,
+            name: 'Grid Channel',
+            category_id: '7',
+            added: String(
+                Math.floor(Date.parse('2026-04-04T12:00:00Z') / 1000)
+            ),
+        };
+        selectedCategoryId.set(null);
+        selectedTypeContentLoading.set(false);
+        paginatedContent.set([channel]);
+        xtreamStore.selectItemsFromSelectedCategory.mockReturnValue([channel]);
+
+        fixture.detectChanges();
+
+        const grid = fixture.debugElement.query(
+            By.directive(StubGridListComponent)
+        );
+        grid.componentInstance.itemClicked.emit(channel);
+        fixture.detectChanges();
+
+        expect(xtreamStore.constructStreamUrl).toHaveBeenCalledWith(channel);
+        expect(xtreamStore.setSelectedCategory).toHaveBeenCalledWith(7);
+        expect(
+            fixture.debugElement.query(By.directive(StubWebPlayerViewComponent))
+        ).not.toBeNull();
+    });
+
+    it('keeps the host-owned live key across URL replacement and changes it with the channel', () => {
+        portalPlayer.isEmbeddedPlayer.mockReturnValue(true);
+        currentPlaylist.set({ ...playlist, id: 'playlist|one' });
+        const first = { ...sampleChannel, xtream_id: 101 };
+        component.playLive(first);
+        fixture.detectChanges();
+
+        const webPlayer = fixture.debugElement.query(
+            By.directive(StubWebPlayerViewComponent)
+        ).componentInstance as StubWebPlayerViewComponent;
+        const expected = createPlaybackSessionKey({
+            kind: 'live',
+            sourceId: 'playlist|one',
+            contentId: 101,
+        });
+        expect(webPlayer.playbackSessionKey()).toBe(expected);
+
+        xtreamStore.constructStreamUrl.mockReturnValueOnce(
+            'https://example.com/replaced-timeshift.ts'
+        );
+        component.playLive(first);
+        fixture.detectChanges();
+        expect(webPlayer.playbackSessionKey()).toBe(expected);
+
+        component.playLive({ ...first, xtream_id: 102 });
+        fixture.detectChanges();
+        expect(webPlayer.playbackSessionKey()).not.toBe(expected);
+    });
+
+    it('forwards the exact resolved live playback to external fallback', () => {
+        const playback: ResolvedPortalPlayback = {
+            streamUrl: 'https://example.com/fallback.m3u8',
+            title: 'Channel 101',
+            isLive: true,
+            headers: { Authorization: 'Bearer token' },
+        };
+        // Partial double: the diagnostic that triggered the fallback is not
+        // needed to verify that the playback and player are forwarded as-is.
+        component.handleExternalFallbackRequest({
+            player: 'mpv',
+            playback,
+            trackLaunch: jest.fn(),
+        } as unknown as PlaybackFallbackRequest);
+
+        const [forwardedPlayback, forwardedPlayer] =
+            portalPlayer.openExternalPlayback.mock.calls[0];
+        expect(forwardedPlayback).toBe(playback);
+        expect(forwardedPlayer).toBe('mpv');
+    });
+
+    it('delegates live root loadMore to the store window', () => {
+        selectedCategoryId.set(null);
+        selectedTypeContentLoading.set(false);
+        hasMoreContent.set(true);
+        xtreamStore.selectItemsFromSelectedCategory.mockReturnValue(
+            Array.from({ length: 80 }, (_, index) => ({
+                xtream_id: index + 1,
+                name: `Channel ${index + 1}`,
+            }))
+        );
+        paginatedContent.set([]);
+
+        fixture.detectChanges();
+
+        component.onLiveRootLoadMore();
+
+        expect(xtreamStore.loadMoreContent).toHaveBeenCalledTimes(1);
+    });
+
+    it('shows the cross-category live channel list while searching from the live root', () => {
+        selectedCategoryId.set(null);
+        selectedTypeContentLoading.set(false);
+        routeQueryParamMap.next(convertToParamMap({ q: 'world' }));
+
+        fixture.detectChanges();
+
+        const lists = fixture.debugElement.queryAll(
+            By.directive(StubPortalChannelsListComponent)
+        );
+        const list = lists[0];
+
+        expect(list).not.toBeNull();
+        expect(lists).toHaveLength(1);
+        expect(list.componentInstance.searchTermInput() as string).toBe(
+            'world'
+        );
+        expect(
+            fixture.nativeElement.querySelector(
+                '.sidebar [data-test-id="portal-channels-list-stub"]'
+            )
+        ).not.toBeNull();
+    });
+
+    it('shows embedded playback after selecting a channel from live root search results', () => {
+        const searchResultChannel = {
+            ...sampleChannel,
+            category_id: '7',
+        };
+        selectedCategoryId.set(null);
+        selectedTypeContentLoading.set(false);
+        routeQueryParamMap.next(convertToParamMap({ q: 'world' }));
+        fixture.detectChanges();
+
+        const list = fixture.debugElement.query(
+            By.directive(StubPortalChannelsListComponent)
+        );
+
+        list.componentInstance.playClicked.emit(searchResultChannel);
+        fixture.detectChanges();
+
+        expect(xtreamStore.constructStreamUrl).toHaveBeenCalledWith(
+            searchResultChannel
+        );
+        expect(xtreamStore.setSelectedCategory).toHaveBeenCalledWith(7);
+        expect(
+            fixture.debugElement.query(By.directive(StubWebPlayerViewComponent))
+        ).not.toBeNull();
+        expect(
+            fixture.nativeElement.querySelector(
+                '.sidebar [data-test-id="portal-channels-list-stub"]'
+            )
+        ).not.toBeNull();
+    });
+
+    it('renders the current EPG program in the collapsible panel summary', () => {
+        epgItems.set([
+            buildEpgItem(
+                'current',
+                'Current Show',
+                '2026-04-05T11:30:00.000Z',
+                '2026-04-05T12:30:00.000Z'
+            ),
+        ]);
+        currentEpgItem.set(epgItems()[0]);
+
+        component.playLive(sampleChannel);
+        fixture.detectChanges();
+
+        expect(
+            fixture.nativeElement.querySelector('.live-epg-panel-summary')
+                .textContent
+        ).toContain('Current Show');
+        expect(
+            fixture.nativeElement.querySelector('.live-epg-panel-label')
+                .textContent
+        ).toContain('EPG.CURRENT_PROGRAM');
+    });
+
+    it('uses currentEpgItem instead of assuming the first schedule item is current', () => {
+        epgItems.set([
+            buildEpgItem(
+                'past',
+                'Past Show',
+                '2026-04-05T08:00:00.000Z',
+                '2026-04-05T09:00:00.000Z'
+            ),
+            buildEpgItem(
+                'current',
+                'Current Show',
+                '2026-04-05T11:30:00.000Z',
+                '2026-04-05T12:30:00.000Z'
+            ),
+        ]);
+        currentEpgItem.set(epgItems()[1]);
+
+        fixture.detectChanges();
+
+        expect(window.electron?.updateRemoteControlStatus).toHaveBeenCalledWith(
+            expect.objectContaining({
+                epgTitle: 'Current Show',
+            })
+        );
+    });
+
+    it('does not publish remote-control status when the bridge is incomplete', () => {
+        fixture.destroy();
+        const updateRemoteControlStatus = jest.fn();
+        window.electron = {
+            updateRemoteControlStatus,
+        } as unknown as typeof window.electron;
+
+        fixture = TestBed.createComponent(LiveStreamLayoutComponent);
+        component = fixture.componentInstance;
+        fixture.detectChanges();
+
+        expect(updateRemoteControlStatus).not.toHaveBeenCalled();
+    });
+
+    it('publishes a remote status reset when the live view is destroyed', () => {
+        const updateRemoteControlStatus = window.electron
+            ?.updateRemoteControlStatus as jest.Mock;
+        fixture.detectChanges();
+        updateRemoteControlStatus.mockClear();
+
+        fixture.destroy();
+
+        expect(updateRemoteControlStatus).toHaveBeenCalledWith({
+            portal: 'unknown',
+            isLiveView: false,
+            supportsVolume: false,
+        });
+    });
+
+    it('resolves a catchup url for archived program activation', async () => {
+        portalPlayer.isEmbeddedPlayer.mockReturnValue(false);
+
+        await component.onProgramActivated({
+            type: 'timeshift',
+            program: {
+                start: '2026-04-04T10:00:00.000Z',
+                stop: '2026-04-04T11:00:00.000Z',
+                channel: 'channel-101',
+                title: 'Archived Show',
+                desc: null,
+                category: null,
+                startTimestamp: 1775296800,
+                stopTimestamp: 1775300400,
+            },
+        });
+
+        expect(xtreamUrlService.resolveCatchupUrl).toHaveBeenCalledWith(
+            'playlist-1',
+            {
+                allowedOutputFormats: undefined,
+                serverUrl: 'http://demo.example',
+                username: 'demo',
+                password: 'secret',
+            },
+            101,
+            1775296800,
+            1775300400,
+            undefined
+        );
+        expect(xtreamStore.openPlayer).toHaveBeenCalledWith(
+            'https://example.com/timeshift.ts',
+            'Channel 101 - Archived Show',
+            'channel-101.png'
+        );
+        expect(component.activePlayback()).toEqual(
+            expect.objectContaining({
+                streamUrl: 'https://example.com/timeshift.ts',
+                isLive: false,
+            })
+        );
+    });
+
+    it('queues a completed programme with its channel identity and headers without changing playback', async () => {
+        const before = component.activePlayback();
+        const start = Math.floor(Date.now() / 1000) - 7200;
+        await component.onProgramActivated({
+            type: 'download-catchup',
+            program: {
+                start: new Date(start * 1000).toISOString(),
+                stop: new Date((start + 3600) * 1000).toISOString(),
+                startTimestamp: start,
+                stopTimestamp: start + 3600,
+                channel: 'channel-101',
+                title: 'Archive',
+                desc: null,
+                category: null,
+            },
+        });
+        expect(
+            TestBed.inject(EpgArchiveDownloadService).start
+        ).toHaveBeenCalledWith(
+            expect.objectContaining({
+                playlistId: playlist.id,
+                xtreamId: 101,
+                title: 'Archive',
+                catchup: expect.objectContaining({
+                    startTimestamp: start,
+                    stopTimestamp: start + 3600,
+                }),
+                headers: expect.objectContaining({
+                    userAgent: expect.any(String),
+                }),
+            }),
+            expect.any(Function)
+        );
+        expect(component.activePlayback()).toEqual(before);
+    });
+
+    it('copies the programme URL without changing playback or channel selection', async () => {
+        const before = component.activePlayback();
+        xtreamStore.openPlayer.mockClear();
+        xtreamStore.setSelectedItem.mockClear();
+        await component.onProgramActivated({
+            type: 'copy-catchup-url',
+            program: {
+                start: '2026-04-04T10:00:00Z',
+                stop: '2026-04-04T11:00:00Z',
+                channel: 'channel-101',
+                title: 'Archive',
+                desc: null,
+                category: null,
+            },
+        });
+        expect(TestBed.inject(EpgArchiveCopyService).copy).toHaveBeenCalled();
+        expect(xtreamUrlService.resolveCatchupUrl).toHaveBeenCalledWith(
+            playlist.id,
+            expect.objectContaining({ serverUrl: playlist.serverUrl }),
+            101,
+            1775296800,
+            1775300400,
+            undefined
+        );
+        expect(component.activePlayback()).toBe(before);
+        expect(xtreamStore.openPlayer).not.toHaveBeenCalled();
+        expect(xtreamStore.setSelectedItem).not.toHaveBeenCalled();
+    });
+
+    it('does not attach a pending catchup result to a newer live owner', async () => {
+        let resolveCatchup!: (url: string) => void;
+        xtreamUrlService.resolveCatchupUrl.mockReturnValueOnce(
+            new Promise((resolve) => {
+                resolveCatchup = resolve;
+            })
+        );
+        component.playLive(sampleChannel);
+        const catchup = component.onProgramActivated({
+            type: 'timeshift',
+            program: buildArchivedProgram(),
+        });
+        const newerChannel = {
+            ...sampleChannel,
+            xtream_id: 202,
+            name: 'Channel 202',
+        };
+        xtreamStore.constructStreamUrl.mockReturnValueOnce(
+            'https://example.com/channel-202.ts'
+        );
+        component.playLive(newerChannel);
+        resolveCatchup('https://stale.example/channel-101-timeshift.ts');
+        await catchup;
+
+        expect(component.activePlayback()?.streamUrl).toBe(
+            'https://example.com/channel-202.ts'
+        );
+        expect(component.playbackSessionKey()).toBe(
+            createPlaybackSessionKey({
+                kind: 'live',
+                sourceId: 'playlist-1',
+                contentId: 202,
+            })
+        );
+    });
+
+    it('shows the active archive program in the live EPG panel summary', async () => {
+        const archivedProgram = buildArchivedProgram();
+        epgItems.set([
+            buildEpgItem(
+                'archived',
+                'Archived Show',
+                archivedProgram.start,
+                archivedProgram.stop
+            ),
+        ]);
+        currentEpgItem.set(
+            buildEpgItem(
+                'current',
+                'Current Show',
+                '2026-04-05T11:30:00.000Z',
+                '2026-04-05T12:30:00.000Z'
+            )
+        );
+
+        component.playLive(sampleChannel);
+        await component.onProgramActivated({
+            type: 'timeshift',
+            program: archivedProgram,
+        });
+        fixture.detectChanges();
+
+        const timeline = fixture.debugElement.query(
+            By.directive(StubEpgTimelineComponent)
+        );
+        expect(timeline.componentInstance.summary()).toEqual(
+            expect.objectContaining({
+                title: 'Archived Show',
+                start: '2026-04-04T10:00:00.000Z',
+                stop: '2026-04-04T11:00:00.000Z',
+            })
+        );
+        expect(timeline.componentInstance.summaryLabelKey()).toBe(
+            'EPG.ARCHIVE_PLAYBACK'
+        );
+        expect(timeline.componentInstance.isLivePlayback()).toBe(false);
+        expect(
+            fixture.nativeElement.querySelector('.live-epg-panel-summary')
+                .textContent
+        ).toContain('Archived Show');
+        expect(
+            fixture.nativeElement.querySelector('.live-epg-panel-summary')
+                .textContent
+        ).not.toContain('Current Show');
+    });
+
+    it('returns archive playback to the selected live stream from the panel action', async () => {
+        const archivedProgram = buildArchivedProgram();
+        currentEpgItem.set(
+            buildEpgItem(
+                'current',
+                'Current Show',
+                '2026-04-05T11:30:00.000Z',
+                '2026-04-05T12:30:00.000Z'
+            )
+        );
+
+        component.playLive(sampleChannel);
+        await component.onProgramActivated({
+            type: 'timeshift',
+            program: archivedProgram,
+        });
+        fixture.detectChanges();
+
+        const timeline = fixture.debugElement.query(
+            By.directive(StubEpgTimelineComponent)
+        );
+        timeline.componentInstance.returnToLive.emit();
+        fixture.detectChanges();
+
+        expect(component.activeCatchupProgram()).toBeNull();
+        expect(component.activePlayback()).toEqual(
+            expect.objectContaining({
+                streamUrl: 'https://example.com/live.ts',
+                isLive: true,
+            })
+        );
+        expect(timeline.componentInstance.summary()?.title).toBe(
+            'Current Show'
+        );
+        expect(timeline.componentInstance.summaryLabelKey()).toBe(
+            'EPG.CURRENT_PROGRAM'
+        );
+        expect(timeline.componentInstance.isLivePlayback()).toBe(true);
+    });
+
+    it('publishes the active archive program in remote-control status', async () => {
+        const archivedProgram = buildArchivedProgram();
+        currentEpgItem.set(
+            buildEpgItem(
+                'current',
+                'Current Show',
+                '2026-04-05T11:30:00.000Z',
+                '2026-04-05T12:30:00.000Z'
+            )
+        );
+        const updateRemoteControlStatus = window.electron
+            ?.updateRemoteControlStatus as jest.Mock;
+
+        component.playLive(sampleChannel);
+        fixture.detectChanges();
+        updateRemoteControlStatus.mockClear();
+
+        await component.onProgramActivated({
+            type: 'timeshift',
+            program: archivedProgram,
+        });
+        fixture.detectChanges();
+
+        expect(updateRemoteControlStatus).toHaveBeenLastCalledWith(
+            expect.objectContaining({
+                epgTitle: 'Archived Show',
+                epgStart: '2026-04-04T10:00:00.000Z',
+                epgEnd: '2026-04-04T11:00:00.000Z',
+            })
+        );
+    });
+
+    it('passes the active catchup program to the EPG list until live playback resumes', async () => {
+        const archivedProgram = buildArchivedProgram();
+        epgItems.set([
+            buildEpgItem(
+                '1',
+                'Archived Show',
+                archivedProgram.start,
+                archivedProgram.stop
+            ),
+        ]);
+
+        await component.onProgramActivated({
+            type: 'timeshift',
+            program: archivedProgram,
+        });
+        fixture.detectChanges();
+
+        let epgTimeline = fixture.debugElement.query(
+            By.directive(StubEpgTimelineComponent)
+        );
+        expect(epgTimeline.componentInstance.activeProgram()).toEqual(
+            archivedProgram
+        );
+
+        component.playLive(sampleChannel);
+        fixture.detectChanges();
+
+        epgTimeline = fixture.debugElement.query(
+            By.directive(StubEpgTimelineComponent)
+        );
+        expect(epgTimeline.componentInstance.activeProgram()).toBeNull();
+    });
+
+    it('keeps remote order after browsing another category and changing sort', () => {
+        const first = { ...sampleChannel, category_id: '1', name: 'Zulu' };
+        const next = { ...first, xtream_id: 102, name: 'Alpha' };
+        liveStreams.set([first, next]);
+        xtreamStore.selectItemsFromSelectedCategory.mockReturnValue([
+            first,
+            next,
+        ]);
+        selectedItem.set(first);
+        component.playLive(first);
+        xtreamStore.setSelectedCategory.mockClear();
+        selectedCategoryId.set(2);
+        xtreamStore.selectItemsFromSelectedCategory.mockReturnValue([]);
+        component.setLiveChannelSortMode('name-desc');
+        component['handleRemoteChannelChange']('down');
+        expect(xtreamStore.constructStreamUrl).toHaveBeenLastCalledWith(next);
+        expect(xtreamStore.setSelectedCategory).not.toHaveBeenCalled();
+    });
+
+    it('starts external playback from remote channel navigation when double-click opening is enabled', () => {
+        const nextChannel = {
+            ...sampleChannel,
+            category_id: '1',
+            xtream_id: 102,
+            name: 'Channel 102',
+        };
+        settingsStore.openStreamOnDoubleClick.set(true);
+        portalPlayer.isEmbeddedPlayer.mockReturnValue(false);
+        selectedItem.set(sampleChannel);
+        xtreamStore.selectItemsFromSelectedCategory.mockReturnValue([
+            sampleChannel,
+            nextChannel,
+        ]);
+
+        liveStreams.set([{ ...sampleChannel, category_id: '1' }, nextChannel]);
+        component.playLive(sampleChannel);
+        xtreamStore.openPlayer.mockClear();
+        (
+            component as unknown as {
+                handleRemoteChannelChange(direction: 'up' | 'down'): void;
+            }
+        ).handleRemoteChannelChange('down');
+
+        expect(xtreamStore.openPlayer).toHaveBeenCalledWith(
+            'https://example.com/live.ts',
+            'Channel 102',
+            'channel-101.png'
+        );
+    });
+
+    it('shows an archive-unavailable notice when past programs exist but archive playback is unavailable', () => {
+        const nonArchiveChannel = {
+            ...sampleChannel,
+            tv_archive: 0,
+            tv_archive_duration: null,
+        };
+        selectedItem.set(nonArchiveChannel);
+        epgItems.set([
+            buildEpgItem(
+                'past',
+                'Past Show',
+                '2026-04-05T09:00:00.000Z',
+                '2026-04-05T10:00:00.000Z'
+            ),
+            buildEpgItem(
+                'current',
+                'Current Show',
+                '2026-04-05T11:30:00.000Z',
+                '2026-04-05T12:30:00.000Z'
+            ),
+        ]);
+
+        component.playLive(nonArchiveChannel);
+        fixture.detectChanges();
+
+        const timeline = fixture.debugElement.query(
+            By.directive(StubEpgTimelineComponent)
+        );
+        expect(timeline.componentInstance.archivePlaybackAvailable()).toBe(
+            false
+        );
+    });
+
+    it('hides the archive-unavailable notice when archive playback is available', () => {
+        selectedItem.set(sampleChannel);
+        epgItems.set([
+            buildEpgItem(
+                'past',
+                'Past Show',
+                '2026-04-05T09:00:00.000Z',
+                '2026-04-05T10:00:00.000Z'
+            ),
+            buildEpgItem(
+                'current',
+                'Current Show',
+                '2026-04-05T11:30:00.000Z',
+                '2026-04-05T12:30:00.000Z'
+            ),
+        ]);
+
+        component.playLive(sampleChannel);
+        fixture.detectChanges();
+
+        const timeline = fixture.debugElement.query(
+            By.directive(StubEpgTimelineComponent)
+        );
+        expect(timeline.componentInstance.archivePlaybackAvailable()).toBe(
+            true
+        );
+    });
+
+    // Collapsing with a selected category and no stream renders the real
+    // `app-channel-list-hidden-state` (its TranslatePipe needs a
+    // TranslateService); this spec is at the max-lines budget, so that branch
+    // is covered by video-player-sidebar.spec.ts and the Electron E2E instead.
+    describe('auto-open from Ctrl+F search navigation state', () => {
+        const searchChannel = {
+            xtream_id: 202,
+            name: 'Search Channel',
+            category_id: '7',
+            stream_icon: 'search-channel.png',
+            tv_archive: 0,
+            tv_archive_duration: 0,
+        };
+
+        function triggerNavigationEnd() {
+            routerEvents.next(
+                new NavigationEnd(
+                    1,
+                    '/workspace/xtreams/playlist-1/live',
+                    '/workspace/xtreams/playlist-1/live'
+                )
+            );
+        }
+
+        beforeEach(() => {
+            window.history.replaceState(
+                { openXtreamLiveItemId: searchChannel.xtream_id },
+                ''
+            );
+        });
+
+        afterEach(() => {
+            window.history.replaceState({}, '');
+        });
+
+        it('plays and selects a channel found in liveStreams on NavigationEnd', () => {
+            liveStreams.set([searchChannel]);
+            fixture.detectChanges();
+
+            triggerNavigationEnd();
+            fixture.detectChanges();
+
+            expect(xtreamStore.constructStreamUrl).toHaveBeenCalledWith(
+                searchChannel
+            );
+            expect(xtreamStore.setSelectedItem).toHaveBeenCalledWith(
+                searchChannel
+            );
+        });
+
+        it('sets the channel category so the sidebar highlights the correct entry', () => {
+            liveStreams.set([searchChannel]);
+            fixture.detectChanges();
+
+            triggerNavigationEnd();
+            fixture.detectChanges();
+
+            expect(xtreamStore.setSelectedCategory).toHaveBeenCalledWith(7);
+        });
+
+        it('does not auto-open while selectedContentType is not live', () => {
+            selectedContentType.set('vod');
+            liveStreams.set([searchChannel]);
+            fixture.detectChanges();
+
+            triggerNavigationEnd();
+            fixture.detectChanges();
+
+            expect(xtreamStore.constructStreamUrl).not.toHaveBeenCalledWith(
+                searchChannel
+            );
+        });
+
+        it('waits for liveStreams to populate before playing', () => {
+            liveStreams.set([]);
+            fixture.detectChanges();
+
+            triggerNavigationEnd();
+            fixture.detectChanges();
+
+            expect(xtreamStore.constructStreamUrl).not.toHaveBeenCalled();
+
+            liveStreams.set([searchChannel]);
+            fixture.detectChanges();
+
+            expect(xtreamStore.constructStreamUrl).toHaveBeenCalledWith(
+                searchChannel
+            );
+        });
+
+        it('clears the pending ID when the channel is not found in liveStreams', () => {
+            liveStreams.set([{ ...searchChannel, xtream_id: 999 }]);
+            fixture.detectChanges();
+
+            triggerNavigationEnd();
+            fixture.detectChanges();
+
+            expect(xtreamStore.constructStreamUrl).not.toHaveBeenCalledWith(
+                searchChannel
+            );
+        });
+
+        it('re-triggers auto-open on re-navigation when component is reused', () => {
+            liveStreams.set([searchChannel]);
+            fixture.detectChanges();
+
+            // First navigation — clears the pending state
+            triggerNavigationEnd();
+            fixture.detectChanges();
+            xtreamStore.constructStreamUrl.mockClear();
+
+            // Simulate navigating away and back with the same state
+            window.history.replaceState(
+                { openXtreamLiveItemId: searchChannel.xtream_id },
+                ''
+            );
+            triggerNavigationEnd();
+            fixture.detectChanges();
+
+            expect(xtreamStore.constructStreamUrl).toHaveBeenCalledWith(
+                searchChannel
+            );
+        });
+    });
+
+    it('hides the archive-unavailable notice when there are no past programs yet', () => {
+        const nonArchiveChannel = {
+            ...sampleChannel,
+            tv_archive: 0,
+            tv_archive_duration: null,
+        };
+        selectedItem.set(nonArchiveChannel);
+        epgItems.set([
+            buildEpgItem(
+                'current',
+                'Current Show',
+                '2026-04-05T11:30:00.000Z',
+                '2026-04-05T12:30:00.000Z'
+            ),
+            buildEpgItem(
+                'future',
+                'Future Show',
+                '2026-04-05T12:30:00.000Z',
+                '2026-04-05T13:30:00.000Z'
+            ),
+        ]);
+
+        component.playLive(nonArchiveChannel);
+        fixture.detectChanges();
+
+        const timeline = fixture.debugElement.query(
+            By.directive(StubEpgTimelineComponent)
+        );
+        expect(timeline.componentInstance.archivePlaybackAvailable()).toBe(
+            false
+        );
+    });
+});
+
+const buildArchivedProgram = (): EpgProgram => ({
+    start: '2026-04-04T10:00:00.000Z',
+    stop: '2026-04-04T11:00:00.000Z',
+    channel: 'channel-101',
+    title: 'Archived Show',
+    desc: null,
+    category: null,
+});
+
+function buildEpgItem(
+    id: string,
+    title: string,
+    start: string,
+    stop: string
+): EpgItem {
+    return {
+        id,
+        epg_id: `epg-${id}`,
+        title,
+        description: '',
+        lang: 'en',
+        start,
+        stop,
+        end: stop,
+        channel_id: 'channel-101',
+        start_timestamp: String(Math.floor(Date.parse(start) / 1000)),
+        stop_timestamp: String(Math.floor(Date.parse(stop) / 1000)),
+    };
+}

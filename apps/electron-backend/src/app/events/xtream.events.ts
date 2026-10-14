@@ -1,0 +1,362 @@
+import { sourceProbeControl } from './source-probe-control';
+import type { SourceProbeContext } from '@iptvnator/shared/interfaces';
+/**
+ * This module handles all Xtream Codes API related IPC communications
+ * between the frontend and the electron backend.
+ */
+
+import axios from 'axios';
+import { ipcMain } from 'electron';
+import {
+    PortalDebugEvent,
+    XTREAM_CANCEL_SESSION,
+    XTREAM_CLIENT_USER_AGENT,
+    XTREAM_MAIN_PERFORMANCE_PHASE,
+    createPortalRequestFailureEnvelope,
+    normalizeXtreamServerUrl,
+    describeXtreamConnectionFailure,
+} from '@iptvnator/shared/interfaces';
+import { emitPortalDebugEvent } from './portal-debug.events';
+import {
+    classifyExpectedPortalFailure,
+    logPortalRequestFailure,
+} from './portal-request-outcome';
+import { UnsafeUrlError } from './url-safety';
+import {
+    requestWithValidatedRedirects,
+    ValidatedAxiosRequestConfig,
+} from '../util/validated-axios';
+import {
+    HostConnectivityGuardError,
+    HostRequestToken,
+    beginGuardedHostRequest,
+    reportGuardedHostConnected,
+    reportGuardedHostFailure,
+    reportGuardedHostSuccess,
+    releaseGuardedHostRequest,
+} from '../util/host-connectivity-guard';
+import {
+    createXtreamMainPerformanceCaptureForRequest,
+    createXtreamMeasuredTransformResponse,
+} from './xtream-performance';
+import { cancelXtreamSessionRequests } from './xtream-session-cancellation';
+
+export default class XtreamEvents {
+    static bootstrapXtreamEvents(): Electron.IpcMain {
+        return ipcMain;
+    }
+}
+
+function buildXtreamApiUrl(url: string, params: Record<string, string>): URL {
+    const baseUrl = normalizeXtreamServerUrl(url);
+    const apiUrl = new URL(`${baseUrl}/player_api.php`);
+    Object.entries(params).forEach(([key, value]) => {
+        apiUrl.searchParams.append(
+            key,
+            key === 'username' || key === 'password' ? value.trim() : value
+        );
+    });
+
+    return apiUrl;
+}
+
+/**
+ * Handle Xtream Codes API requests
+ */
+ipcMain.handle(
+    'XTREAM_REQUEST',
+    async (
+        event,
+        payload: {
+            url: string;
+            params: Record<string, string>;
+            requestId?: string;
+            probe?: SourceProbeContext;
+            sessionId?: string;
+            suppressErrorLog?: boolean;
+            connectionTest?: boolean;
+        }
+    ) => {
+        const probeControl = sourceProbeControl(
+            event.sender?.id ?? 0,
+            payload.probe
+        );
+        const startedAt = Date.now();
+        const performanceCapture = createXtreamMainPerformanceCaptureForRequest(
+            payload.requestId
+        );
+        let initialResponded = false;
+        // Set by the transport once the panel accepts the TCP connection, so a
+        // timeout can be told apart from a host that never answered at all.
+        let socketConnected = false;
+        let activeRequestKey: string | null = null;
+        let requestUrlForLog = payload.url;
+        let guardToken: HostRequestToken | null = null;
+        try {
+            const { url, params, requestId, sessionId } = payload;
+
+            // Build URL with query parameters
+            // Xtream API endpoint is always at /player_api.php
+            const apiUrl = buildXtreamApiUrl(url, params);
+            requestUrlForLog = apiUrl.toString();
+
+            // Browsing a dead portal would otherwise queue dozens of 30-second
+            // timeouts in a row. Throws once the host has stopped answering.
+            guardToken = beginGuardedHostRequest(requestUrlForLog);
+
+            const controller = new AbortController();
+            if (requestId || sessionId) {
+                activeRequestKey = requestId ?? crypto.randomUUID();
+                activeXtreamRequests.set(activeRequestKey, {
+                    controller,
+                    sessionId,
+                });
+            }
+
+            // Configure axios request
+            const config: ValidatedAxiosRequestConfig = {
+                onResponse: () => {
+                    initialResponded = true;
+                },
+                onConnect: () => {
+                    socketConnected = true;
+                    reportGuardedHostConnected(guardToken);
+                },
+                method: 'GET',
+                url: apiUrl.toString(),
+                headers: {
+                    'User-Agent': XTREAM_CLIENT_USER_AGENT,
+                    Accept: 'application/json',
+                },
+                timeout: 30000, // 30 seconds timeout for Xtream API
+                validateStatus: (status) => status < 500, // Don't throw on 4xx errors
+                signal: probeControl.signal ?? controller.signal,
+            };
+            if (performanceCapture) {
+                config.transformResponse =
+                    createXtreamMeasuredTransformResponse(
+                        performanceCapture,
+                        axios.defaults.transformResponse
+                    );
+            }
+
+            const response = performanceCapture
+                ? await performanceCapture.measureAsync(
+                      XTREAM_MAIN_PERFORMANCE_PHASE.NETWORK_TOTAL,
+                      () =>
+                          requestWithValidatedRedirects<unknown>(
+                              apiUrl.toString(),
+                              config,
+                              { allowPrivateNetworks: true }
+                          )
+                  )
+                : await requestWithValidatedRedirects<unknown>(
+                      apiUrl.toString(),
+                      config,
+                      { allowPrivateNetworks: true }
+                  );
+
+            // The host answered — whatever the status says, it is reachable.
+            reportGuardedHostSuccess(guardToken);
+            guardToken = null;
+
+            // Check if response is successful
+            if (response.status >= 400) {
+                // `status` lets the catch block tell a 401/403 (resolved as
+                // an envelope) from the other 4xx, which keep rejecting.
+                throw Object.assign(
+                    payload.probe
+                        ? new Error(`HTTP Error ${response.status}`)
+                        : { message: `HTTP Error: ${response.statusText}` },
+                    { status: response.status, statusText: response.statusText }
+                );
+            }
+
+            if (requestId) {
+                const debugEvent: PortalDebugEvent = {
+                    requestId,
+                    provider: 'xtream',
+                    operation: params.action ?? 'unknown',
+                    transport: 'electron-main',
+                    startedAt: new Date(startedAt).toISOString(),
+                    durationMs: Date.now() - startedAt,
+                    status: 'success',
+                    request: {
+                        method: config.method ?? 'GET',
+                        url: apiUrl.toString(),
+                        headers: config.headers,
+                        timeout: config.timeout,
+                        params,
+                    },
+                    response: response.data,
+                };
+                emitPortalDebugEvent(debugEvent);
+            }
+
+            // Xtream API returns JSON data
+            const result = {
+                payload: response.data,
+                action: params.action,
+            };
+            return performanceCapture
+                ? performanceCapture.measure(
+                      XTREAM_MAIN_PERFORMANCE_PHASE.RESPONSE_READY,
+                      () => result
+                  )
+                : result;
+        } catch (error) {
+            const requestId = payload.requestId;
+            if (requestId) {
+                const apiUrl = (() => {
+                    try {
+                        return buildXtreamApiUrl(
+                            payload.url,
+                            payload.params ?? {}
+                        ).toString();
+                    } catch {
+                        return requestUrlForLog;
+                    }
+                })();
+
+                const debugEvent: PortalDebugEvent = {
+                    requestId,
+                    provider: 'xtream',
+                    operation: payload.params?.action ?? 'unknown',
+                    transport: 'electron-main',
+                    startedAt: new Date(startedAt).toISOString(),
+                    durationMs: Date.now() - startedAt,
+                    status: 'error',
+                    request: {
+                        method: 'GET',
+                        url: apiUrl,
+                        headers: {
+                            'User-Agent': XTREAM_CLIENT_USER_AGENT,
+                            Accept: 'application/json',
+                        },
+                        timeout: 30000,
+                        params: payload.params,
+                    },
+                    error,
+                };
+                emitPortalDebugEvent(debugEvent);
+            }
+
+            if (payload.connectionTest) {
+                reportGuardedHostFailure(guardToken, error, {
+                    requestUrl: requestUrlForLog,
+                    connected: socketConnected,
+                });
+                return {
+                    payload: null,
+                    action: payload.params?.action,
+                    connectionFailure:
+                        error instanceof UnsafeUrlError
+                            ? { kind: 'connection', canTryHttp: false }
+                            : describeXtreamConnectionFailure(
+                                  error,
+                                  initialResponded
+                              ),
+                };
+            }
+
+            if (error instanceof HostConnectivityGuardError) {
+                // The failures that tripped the guard were logged when they
+                // happened; a line per skipped request would be the very log
+                // spam the guard exists to stop.
+                throw error;
+            }
+
+            reportGuardedHostFailure(guardToken, error, {
+                requestUrl: requestUrlForLog,
+                connected: socketConnected,
+            });
+
+            // A cancelled request and an HTTP 401/403 are routine: resolve
+            // them as a structured envelope so Electron does not log the
+            // handler as failed. The renderer's data service rethrows them
+            // (an AbortError, or an `HTTP Error <code>` carrying `status`),
+            // so a cancellation is never read as an empty answer. Everything
+            // else keeps the rejection shapes below and their error log.
+            const expected = classifyExpectedPortalFailure(error);
+            if (!payload.suppressErrorLog) {
+                logPortalRequestFailure(
+                    'XTREAM_REQUEST',
+                    expected,
+                    error,
+                    requestUrlForLog,
+                    payload.params?.action
+                );
+            }
+            if (expected) {
+                return createPortalRequestFailureEnvelope(expected);
+            }
+
+            // Format error response
+            if (axios.isAxiosError(error)) {
+                if (payload.probe) {
+                    if (typeof error.response?.status === 'number')
+                        throw new Error(`HTTP Error ${error.response.status}`);
+                    throw new Error(
+                        error.message || 'Xtream network request failed'
+                    );
+                }
+                const errorResponse = {
+                    type: 'ERROR',
+                    message:
+                        error.response?.data?.message ||
+                        error.message ||
+                        'Failed to fetch data from Xtream server',
+                    status: error.response?.status || 500,
+                };
+                throw errorResponse;
+            } else if (
+                error &&
+                typeof error === 'object' &&
+                'message' in error
+            ) {
+                throw error;
+            } else {
+                throw {
+                    type: 'ERROR',
+                    message: 'An unknown error occurred',
+                    status: 500,
+                };
+            }
+        } finally {
+            probeControl.dispose();
+            releaseGuardedHostRequest(guardToken);
+            if (activeRequestKey) {
+                activeXtreamRequests.delete(activeRequestKey);
+            }
+        }
+    }
+);
+
+ipcMain.handle(
+    XTREAM_CANCEL_SESSION,
+    async (
+        _event,
+        sessionId: string
+    ): Promise<{ success: boolean; cancelled: number }> => {
+        const capture = createXtreamMainPerformanceCaptureForRequest();
+        return capture
+            ? capture.measure(
+                  XTREAM_MAIN_PERFORMANCE_PHASE.CANCEL_SESSION,
+                  () =>
+                      cancelXtreamSessionRequests(
+                          activeXtreamRequests.values(),
+                          sessionId
+                      )
+              )
+            : cancelXtreamSessionRequests(
+                  activeXtreamRequests.values(),
+                  sessionId
+              );
+    }
+);
+type ActiveXtreamRequest = {
+    controller: AbortController;
+    sessionId?: string;
+};
+
+const activeXtreamRequests = new Map<string, ActiveXtreamRequest>();

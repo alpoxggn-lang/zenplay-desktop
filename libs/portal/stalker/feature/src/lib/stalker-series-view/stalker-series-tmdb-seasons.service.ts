@@ -1,0 +1,243 @@
+import { Injectable, inject, signal } from '@angular/core';
+import {
+    TmdbEnrichmentService,
+    mergeEpisodesWithTmdb,
+    tmdbSeasonPosterUrl,
+    type TmdbEpisode,
+} from '@iptvnator/services';
+import {
+    XtreamSerieEpisode,
+    resolveEnrichmentSeasonNumber,
+} from '@iptvnator/shared/interfaces';
+
+interface FetchedTmdbSeason {
+    /** Resolved TMDB season number this entry was fetched for */
+    seasonNumber: number;
+    episodes: TmdbEpisode[];
+}
+
+/**
+ * Component-scoped holder for lazily fetched TMDB season data (episode
+ * lists and season overviews) in the Stalker series view (provide it in
+ * the component's `providers`).
+ *
+ * Entries are keyed by `${tmdbId}|${seasonKey}` so data from a previously
+ * shown series can never leak into the current one, and each entry records
+ * the RESOLVED TMDB season it holds: per-season slices of one show share
+ * (tmdbId, provider key "1") but resolve to different seasons, and a fetch
+ * made with stale navigation context must be overwritten once the real
+ * context re-resolves — plain key idempotency would block both.
+ */
+@Injectable()
+export class StalkerSeriesTmdbSeasonsService {
+    private readonly tmdbEnrichment = inject(TmdbEnrichmentService);
+
+    private readonly seasonsByKey = signal<
+        ReadonlyMap<string, FetchedTmdbSeason>
+    >(new Map());
+    private readonly overviewsByKey = signal<ReadonlyMap<string, string>>(
+        new Map()
+    );
+    /** mapKey → full URL of the season's own TMDB poster */
+    private readonly postersByKey = signal<ReadonlyMap<string, string>>(
+        new Map()
+    );
+    /** mapKey → season number currently being fetched (in-flight dedup) */
+    private readonly pending = new Map<string, number>();
+    /** mapKeys whose fetch has finished, with or without a result. */
+    private readonly settledKeys = signal<ReadonlySet<string>>(new Set());
+
+    /**
+     * Overlays fetched TMDB episode data (real names, overviews, stills)
+     * onto provider season maps — a no-op while nothing is fetched.
+     * Reads a signal, so callers can use it inside a `computed`.
+     */
+    overlay(
+        seasons: Record<string, XtreamSerieEpisode[]>,
+        tmdbId: number | null | undefined
+    ): Record<string, XtreamSerieEpisode[]> {
+        const fetched = this.seasonsByKey();
+        if (!tmdbId || fetched.size === 0) {
+            return seasons;
+        }
+
+        const merged: Record<string, XtreamSerieEpisode[]> = {};
+        for (const [seasonKey, episodes] of Object.entries(seasons)) {
+            const forSeason = fetched.get(`${tmdbId}|${seasonKey}`)?.episodes;
+            merged[seasonKey] = forSeason?.length
+                ? mergeEpisodesWithTmdb(episodes, forSeason)
+                : episodes;
+        }
+        return merged;
+    }
+
+    /**
+     * Season overviews for the season tabs, keyed by season key of the
+     * given show. Reads a signal, so callers can use it in a `computed`.
+     */
+    descriptions(tmdbId: number | null | undefined): Record<string, string> {
+        return this.forShow(this.overviewsByKey(), tmdbId);
+    }
+
+    /**
+     * Season poster URLs for the season cover and the fullscreen episode
+     * panel, keyed by season key of the given show. Stalker rows carry no
+     * provider season art, so this is the only source. Reads a signal.
+     */
+    posters(tmdbId: number | null | undefined): Record<string, string> {
+        return this.forShow(this.postersByKey(), tmdbId);
+    }
+
+    /**
+     * True once the season's TMDB fetch has finished (or the season is
+     * cached), whatever it returned. Reads a signal, so callers can use it
+     * in a `computed`: the series view keeps rows it would render bare as
+     * skeletons until then.
+     */
+    isSeasonSettled(
+        tmdbId: number | null | undefined,
+        seasonKey: string
+    ): boolean {
+        const mapKey = `${tmdbId}|${seasonKey}`;
+        return (
+            this.settledKeys().has(mapKey) || this.seasonsByKey().has(mapKey)
+        );
+    }
+
+    private markSettled(mapKey: string): void {
+        if (!this.settledKeys().has(mapKey)) {
+            this.settledKeys.update((keys) => new Set(keys).add(mapKey));
+        }
+    }
+
+    private forShow(
+        entries: ReadonlyMap<string, string>,
+        tmdbId: number | null | undefined
+    ): Record<string, string> {
+        if (!tmdbId || entries.size === 0) {
+            return {};
+        }
+
+        const prefix = `${tmdbId}|`;
+        const bySeason: Record<string, string> = {};
+        for (const [mapKey, value] of entries) {
+            if (mapKey.startsWith(prefix)) {
+                bySeason[mapKey.slice(prefix.length)] = value;
+            }
+        }
+        return bySeason;
+    }
+
+    /**
+     * Lazily pulls the TMDB season (episode list + overview) for an opened
+     * season; a no-op without a show-level TMDB match, with enrichment
+     * disabled, or when the entry already holds the resolved season.
+     * `context` carries the raw provider title and total season count so a
+     * per-season slice ("The Mandalorian (2 season)" with its single season
+     * renumbered to 1) fetches the season the title names instead of the
+     * provider's number. A later call resolving a DIFFERENT season for the
+     * same key (another slice of the show, or corrected navigation context)
+     * refetches and overwrites the entry.
+     */
+    async fetchSeason(
+        tmdbId: number | null | undefined,
+        seasonKey: string,
+        episodes: XtreamSerieEpisode[] | undefined,
+        context?: { rawTitle?: string | null; seasonCount?: number }
+    ): Promise<void> {
+        if (!tmdbId) {
+            return;
+        }
+
+        const providerSeasonNumber = Number(episodes?.[0]?.season ?? seasonKey);
+        if (!Number.isFinite(providerSeasonNumber)) {
+            this.markSettled(`${tmdbId}|${seasonKey}`);
+            return;
+        }
+
+        const seasonNumber = resolveEnrichmentSeasonNumber({
+            rawTitle: context?.rawTitle,
+            providerSeasonNumber,
+            providerSeasonCount: context?.seasonCount ?? 0,
+        });
+
+        const mapKey = `${tmdbId}|${seasonKey}`;
+        const cached = this.seasonsByKey().get(mapKey);
+        if (
+            cached?.seasonNumber === seasonNumber ||
+            this.pending.get(mapKey) === seasonNumber
+        ) {
+            return;
+        }
+
+        this.pending.set(mapKey, seasonNumber);
+
+        // A mismatched entry belongs to another slice/context of this
+        // show — drop it BEFORE fetching so a failed replacement fetch
+        // can never leave the wrong season's metadata on screen (the
+        // overlay then falls back to provider data until a retry).
+        if (cached) {
+            this.deleteEntry(mapKey);
+        }
+        try {
+            const season = await this.tmdbEnrichment.getSeason(
+                tmdbId,
+                seasonNumber
+            );
+
+            // A newer resolution for this key superseded us mid-flight —
+            // only the latest requested fetch may store its result.
+            if (this.pending.get(mapKey) !== seasonNumber) {
+                return;
+            }
+            if (!season) {
+                // Transient failure — stays uncached so a later trigger
+                // can retry.
+                return;
+            }
+
+            const overviews = new Map(this.overviewsByKey());
+            if (season.overview) {
+                overviews.set(mapKey, season.overview);
+            } else {
+                overviews.delete(mapKey);
+            }
+            this.overviewsByKey.set(overviews);
+
+            const posters = new Map(this.postersByKey());
+            const poster = tmdbSeasonPosterUrl(season.poster_path);
+            if (poster) {
+                posters.set(mapKey, poster);
+            } else {
+                posters.delete(mapKey);
+            }
+            this.postersByKey.set(posters);
+
+            const next = new Map(this.seasonsByKey());
+            next.set(mapKey, {
+                seasonNumber,
+                episodes: season.episodes ?? [],
+            });
+            this.seasonsByKey.set(next);
+        } finally {
+            if (this.pending.get(mapKey) === seasonNumber) {
+                this.pending.delete(mapKey);
+                this.markSettled(mapKey);
+            }
+        }
+    }
+
+    private deleteEntry(mapKey: string): void {
+        const next = new Map(this.seasonsByKey());
+        next.delete(mapKey);
+        this.seasonsByKey.set(next);
+
+        const overviews = new Map(this.overviewsByKey());
+        overviews.delete(mapKey);
+        this.overviewsByKey.set(overviews);
+
+        const posters = new Map(this.postersByKey());
+        posters.delete(mapKey);
+        this.postersByKey.set(posters);
+    }
+}

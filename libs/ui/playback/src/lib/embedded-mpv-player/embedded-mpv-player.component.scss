@@ -1,0 +1,508 @@
+@use '../../../../styles/focus-ring';
+
+:host {
+    display: block;
+    height: 100%;
+}
+
+.embedded-mpv-player {
+    // The native-view dock is app chrome; overlays over video own a separate
+    // fixed contrast pair. Never mix a dark fallback with inherited app text.
+    --embedded-mpv-accent: var(--app-selection-color);
+    --embedded-mpv-track: color-mix(
+        in srgb,
+        var(--app-on-surface) 28%,
+        transparent
+    );
+    --embedded-mpv-thumb-ring: var(--app-widget-bg);
+    --embedded-mpv-glass: var(--app-widget-bg);
+    --embedded-mpv-border: var(--app-separator);
+    --embedded-mpv-text: var(--app-on-surface);
+    --embedded-mpv-text-muted: color-mix(
+        in srgb,
+        var(--app-on-surface) 76%,
+        transparent
+    );
+    --embedded-mpv-disabled: color-mix(
+        in srgb,
+        var(--app-on-surface) 45%,
+        transparent
+    );
+    --embedded-mpv-controls-height: 64px;
+
+    position: relative;
+    display: block;
+    height: 100%;
+    min-height: 0;
+    background: #000;
+    border-radius: inherit;
+    overflow: hidden;
+}
+
+.embedded-mpv-player--cursor-hidden {
+    cursor: none;
+}
+
+.embedded-mpv-player:fullscreen,
+.embedded-mpv-player--fullscreen {
+    width: 100vw;
+    height: 100vh;
+    border-radius: 0;
+    background: #000;
+}
+
+.embedded-mpv-player:fullscreen .embedded-mpv-player__viewport,
+.embedded-mpv-player--fullscreen .embedded-mpv-player__viewport {
+    background: #000;
+}
+
+.embedded-mpv-player__viewport {
+    position: absolute;
+    inset: 0;
+    min-height: 0;
+    background: #000;
+}
+
+// Frame-copy engine: video frames are painted onto this canvas by the
+// preload frame pump. The helper renders at the aspect-fit size of the
+// video inside the viewport (no letterbox bars are baked into frames), so
+// object-fit: contain centers the content over the black video viewport in
+// both windowed and fullscreen mode.
+.embedded-mpv-player__frame-canvas {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    background: transparent;
+}
+
+.embedded-mpv-player--controls-enabled .embedded-mpv-player__viewport {
+    bottom: var(--embedded-mpv-controls-height);
+}
+
+.embedded-mpv-player__loader {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    grid-auto-rows: max-content;
+    place-content: center;
+    justify-items: center;
+    gap: 12px;
+    color: var(--embedded-mpv-text);
+    font-size: 0.85rem;
+    pointer-events: none;
+    z-index: 1;
+}
+
+.embedded-mpv-player__loader span {
+    color: var(--embedded-mpv-text-muted);
+}
+
+.embedded-mpv-player__stalled {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    grid-auto-rows: max-content;
+    place-content: center;
+    justify-items: center;
+    gap: 14px;
+    padding: 24px;
+    text-align: center;
+    color: var(--embedded-mpv-text);
+    z-index: 1;
+}
+
+.embedded-mpv-player__stalled > mat-icon {
+    color: var(--app-live-color);
+    font-size: 36px;
+    width: 36px;
+    height: 36px;
+}
+
+.embedded-mpv-player__stalled p {
+    margin: 0;
+    max-width: 360px;
+    color: var(--embedded-mpv-text-muted);
+}
+
+.embedded-mpv-player__feedback {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 18px;
+    color: var(--embedded-mpv-text);
+    background: color-mix(in srgb, #000 65%, transparent);
+    border-radius: 999px;
+    font-size: 0.95rem;
+    font-variant-numeric: tabular-nums;
+    pointer-events: none;
+    z-index: 2;
+    animation: embedded-mpv-feedback 700ms ease-out forwards;
+}
+
+.embedded-mpv-player__feedback mat-icon {
+    font-size: 22px;
+    width: 22px;
+    height: 22px;
+    color: #ffffff;
+}
+
+@keyframes embedded-mpv-feedback {
+    0% {
+        opacity: 0;
+        transform: translate(-50%, -50%) scale(0.92);
+    }
+    18% {
+        opacity: 1;
+        transform: translate(-50%, -50%) scale(1);
+    }
+    70% {
+        opacity: 1;
+        transform: translate(-50%, -50%) scale(1);
+    }
+    100% {
+        opacity: 0;
+        transform: translate(-50%, -50%) scale(1);
+    }
+}
+
+.embedded-mpv-player__status {
+    position: absolute;
+    inset: 16px 16px auto auto;
+    max-width: min(60%, 360px);
+    padding: 10px 12px;
+    color: var(--embedded-mpv-text);
+    background: var(--embedded-mpv-glass);
+    border: 1px solid var(--embedded-mpv-border);
+    border-radius: 12px;
+    backdrop-filter: blur(14px);
+    font-size: 0.85rem;
+    line-height: 1.4;
+    pointer-events: none;
+    z-index: 1;
+}
+
+.embedded-mpv-player__controls {
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 2;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 16px;
+    align-items: center;
+    align-content: center;
+    min-height: var(--embedded-mpv-controls-height);
+    padding: 8px 16px 10px;
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(8px);
+    background: var(--embedded-mpv-glass);
+    border-top: 1px solid var(--embedded-mpv-border);
+    backdrop-filter: blur(18px);
+    transition:
+        opacity 180ms ease-out,
+        transform 200ms ease-out;
+}
+
+.embedded-mpv-player__controls--visible {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translateY(0);
+}
+
+.embedded-mpv-player__transport {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.embedded-mpv-player__timeline {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+}
+
+.embedded-mpv-player__time {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    color: var(--embedded-mpv-text-muted);
+    font-size: 0.78rem;
+    font-variant-numeric: tabular-nums;
+}
+
+.embedded-mpv-player__recording-status {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    color: var(--embedded-mpv-text-muted);
+    font-size: 0.72rem;
+    font-variant-numeric: tabular-nums;
+}
+
+.embedded-mpv-player__recording-status mat-icon {
+    flex: 0 0 auto;
+    width: 16px;
+    height: 16px;
+    font-size: 16px;
+    color: var(--embedded-mpv-accent);
+}
+
+.embedded-mpv-player__recording-status span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.embedded-mpv-player__recording-status--active {
+    color: var(--app-live-color);
+    font-weight: 700;
+}
+
+.embedded-mpv-player__recording-status--active mat-icon {
+    color: var(--app-live-color);
+}
+
+.embedded-mpv-player__live-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    color: var(--app-widget-bg);
+    background: var(--app-live-color);
+    font-size: 0.66rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+}
+
+.embedded-mpv-player__live-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: currentColor;
+    animation: embedded-mpv-live-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes embedded-mpv-live-pulse {
+    50% {
+        opacity: 0.35;
+    }
+}
+
+.embedded-mpv-player__actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    // Let the actions cell shrink below its content so the inline volume
+    // (a scroll container) clips its own slider instead of pushing the
+    // fullscreen button past the overflow:hidden player edge on narrow
+    // sidebar-constrained widths (viewport wider than the 720px breakpoint).
+    min-width: 0;
+}
+
+.embedded-mpv-player__volume-group {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+}
+
+.embedded-mpv-player__control-button {
+    position: relative;
+}
+
+/* A dock panel morphs the whole controls row into a single full-width
+   cell; the strip keeps its fixed height so MPV bounds stay untouched. */
+.embedded-mpv-player__controls--panel {
+    grid-template-columns: minmax(0, 1fr);
+}
+
+.embedded-mpv-player__record-button--active {
+    color: var(--app-live-color);
+}
+
+.embedded-mpv-player__slider {
+    --slider-progress: 0%;
+    width: 100%;
+    height: 18px;
+    appearance: none;
+    -webkit-appearance: none;
+    background: transparent;
+    cursor: pointer;
+}
+
+.embedded-mpv-player__slider:focus-visible {
+    @include focus-ring.focus-ring-declarations($offset: 4px);
+    border-radius: 4px;
+}
+
+/* WebKit / Chromium — track shows played portion via linear-gradient. */
+.embedded-mpv-player__slider::-webkit-slider-runnable-track {
+    height: 4px;
+    border-radius: 999px;
+    background: linear-gradient(
+        to right,
+        var(--embedded-mpv-accent) var(--slider-progress),
+        var(--embedded-mpv-track) var(--slider-progress)
+    );
+}
+
+.embedded-mpv-player__slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 14px;
+    height: 14px;
+    margin-top: -5px;
+    border: 2px solid var(--embedded-mpv-thumb-ring);
+    border-radius: 50%;
+    background: var(--embedded-mpv-accent);
+    box-shadow: 0 1px 6px rgba(0, 0, 0, 0.55);
+    transition: transform 120ms ease-out;
+}
+
+.embedded-mpv-player__slider:hover::-webkit-slider-thumb,
+.embedded-mpv-player__slider:focus-visible::-webkit-slider-thumb {
+    transform: scale(1.18);
+}
+
+.embedded-mpv-player__slider:disabled::-webkit-slider-runnable-track {
+    background: var(--embedded-mpv-track);
+}
+
+.embedded-mpv-player__slider:disabled::-webkit-slider-thumb {
+    background: var(--embedded-mpv-disabled);
+    border-color: var(--embedded-mpv-disabled);
+    box-shadow: none;
+}
+
+/* Firefox — native ::-moz-range-progress for played portion. */
+.embedded-mpv-player__slider::-moz-range-track {
+    height: 4px;
+    border-radius: 999px;
+    background: var(--embedded-mpv-track);
+}
+
+.embedded-mpv-player__slider::-moz-range-progress {
+    height: 4px;
+    border-radius: 999px;
+    background: var(--embedded-mpv-accent);
+}
+
+.embedded-mpv-player__slider::-moz-range-thumb {
+    width: 14px;
+    height: 14px;
+    border: 2px solid var(--embedded-mpv-thumb-ring);
+    border-radius: 50%;
+    background: var(--embedded-mpv-accent);
+    box-shadow: 0 1px 6px rgba(0, 0, 0, 0.55);
+    transition: transform 120ms ease-out;
+}
+
+.embedded-mpv-player__slider:hover::-moz-range-thumb,
+.embedded-mpv-player__slider:focus-visible::-moz-range-thumb {
+    transform: scale(1.18);
+}
+
+.embedded-mpv-player__slider:disabled::-moz-range-thumb {
+    background: var(--embedded-mpv-disabled);
+    border-color: var(--embedded-mpv-disabled);
+    box-shadow: none;
+}
+
+/* Volume expands inline next to the mute icon, inside the actions row —
+   never above the strip, so it needs no compositor workarounds. */
+.embedded-mpv-player__volume-inline {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    overflow: hidden;
+    animation: embedded-mpv-volume-in 160ms ease-out;
+}
+
+@keyframes embedded-mpv-volume-in {
+    from {
+        max-width: 0;
+        opacity: 0;
+    }
+    to {
+        max-width: 200px;
+        opacity: 1;
+    }
+}
+
+.embedded-mpv-player__volume-inline .embedded-mpv-player__slider--volume {
+    width: 132px;
+}
+
+.embedded-mpv-player__volume-value {
+    color: var(--embedded-mpv-text-muted);
+    font-size: 0.74rem;
+    font-variant-numeric: tabular-nums;
+    min-width: 34px;
+    text-align: end;
+    white-space: nowrap;
+}
+
+// Material-owned icons use their component tokens, including disabled state.
+.embedded-mpv-player__controls {
+    --mat-icon-button-icon-color: var(--embedded-mpv-text);
+    --mat-icon-button-disabled-icon-color: var(--embedded-mpv-disabled);
+    --mat-icon-button-state-layer-color: var(--embedded-mpv-text);
+    color: var(--embedded-mpv-text);
+}
+
+.embedded-mpv-player__controls button[mat-icon-button]:enabled:hover {
+    background: var(--app-hover-overlay);
+}
+
+.embedded-mpv-player__controls button[mat-icon-button]:focus-visible {
+    @include focus-ring.focus-ring-declarations($offset: -2px);
+}
+
+// These surfaces cover video, so their foreground and scrim stay paired.
+.embedded-mpv-player__loader,
+.embedded-mpv-player__stalled {
+    --embedded-mpv-text: #fff;
+    --embedded-mpv-text-muted: rgba(255, 255, 255, 0.85);
+    background: rgba(0, 0, 0, 0.82);
+}
+
+.embedded-mpv-player__stalled button {
+    --mat-button-outlined-label-text-color: #fff;
+    --mat-button-outlined-outline-color: rgba(255, 255, 255, 0.6);
+}
+
+.embedded-mpv-player__feedback {
+    color: #fff;
+}
+
+@media (max-width: 720px) {
+    .embedded-mpv-player {
+        --embedded-mpv-controls-height: 88px;
+    }
+
+    .embedded-mpv-player__controls {
+        grid-template-columns: 1fr;
+        gap: 8px;
+    }
+
+    .embedded-mpv-player__actions {
+        justify-content: flex-end;
+        min-width: 0;
+    }
+
+    .embedded-mpv-player__volume-inline .embedded-mpv-player__slider--volume {
+        width: 96px;
+    }
+}

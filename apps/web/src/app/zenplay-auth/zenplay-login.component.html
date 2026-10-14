@@ -1,0 +1,63 @@
+<main class="zenplay-auth-page">
+    <section class="zenplay-auth-card" aria-labelledby="login-title">
+        <img
+            class="zenplay-auth-logo"
+            src="assets/branding/zenplay-logo.png"
+            alt="ZenPlay"
+        />
+        <div class="zenplay-auth-copy">
+            <p class="zenplay-auth-eyebrow">
+                TU ENTRETENIMIENTO, EN UN SOLO LUGAR
+            </p>
+            <h1 id="login-title">Inicia sesión</h1>
+            <p>Ingresa los datos de tu cuenta ZenPlay.</p>
+        </div>
+
+        <form [formGroup]="form" (ngSubmit)="submit()" novalidate>
+            <label for="zenplay-username">Usuario</label>
+            <input
+                id="zenplay-username"
+                type="text"
+                formControlName="username"
+                autocomplete="username"
+                inputmode="text"
+            />
+
+            <label for="zenplay-password">Contraseña</label>
+            <div class="zenplay-password-field">
+                <input
+                    id="zenplay-password"
+                    [type]="passwordVisible() ? 'text' : 'password'"
+                    formControlName="password"
+                    autocomplete="current-password"
+                />
+                <button
+                    class="zenplay-password-toggle"
+                    type="button"
+                    (click)="passwordVisible.set(!passwordVisible())"
+                    [attr.aria-label]="
+                        passwordVisible()
+                            ? 'Ocultar contraseña'
+                            : 'Mostrar contraseña'
+                    "
+                >
+                    {{ passwordVisible() ? 'Ocultar' : 'Mostrar' }}
+                </button>
+            </div>
+
+            @if (errorMessage()) {
+                <p class="zenplay-auth-error" role="alert">
+                    {{ errorMessage() }}
+                </p>
+            }
+
+            <button
+                class="zenplay-primary-action"
+                type="submit"
+                [disabled]="busy()"
+            >
+                {{ busy() ? 'Validando…' : 'Continuar' }}
+            </button>
+        </form>
+    </section>
+</main>

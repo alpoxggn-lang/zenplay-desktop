@@ -1,0 +1,222 @@
+@if (displayItem(); as serial) {
+    @let hero = heroPresenter.hero;
+    <app-portal-detail-shell
+        [title]="hero.title()"
+        [kindLabel]="hero.kindLabel()"
+        [description]="serial.info.description"
+        [posterUrl]="serial.info.movie_image"
+        [backdropUrl]="serial.info.tmdb_backdrop"
+        [trailerBackdropUrl]="heroPresenter.trailerBackdropUrl()"
+        [contentKey]="'stalker-series:' + currentSeriesKey()"
+        [playbackActive]="!!inlinePlayback()"
+        (backClicked)="goBack()"
+        (closePlayerRequested)="closeInlinePlayer()"
+    >
+        <ng-template appDetailTags>
+            @if (hero.seasonChip(); as season) {
+                <app-meta-chip data-test-id="series-season-chip">
+                    {{ 'PORTALS.SEASON_TAB' | translate: { number: season } }}
+                </app-meta-chip>
+            }
+            @if (hero.statusLabel(); as status) {
+                <app-meta-chip
+                    variant="status"
+                    data-test-id="series-status-chip"
+                >
+                    {{ status }}
+                </app-meta-chip>
+            }
+            @if (hero.year(); as year) {
+                <app-meta-chip>
+                    @if (
+                        serial.info.releasedate &&
+                        discover.canOpenYear(serial.info.releasedate)
+                    ) {
+                        <button
+                            type="button"
+                            class="meta-chip__facet"
+                            (click)="discover.openYear(serial.info.releasedate)"
+                        >
+                            {{ year }}
+                        </button>
+                    } @else {
+                        {{ year }}
+                    }
+                </app-meta-chip>
+            }
+            @if (hero.genreChips().length) {
+                <app-meta-chip>
+                    @for (genre of hero.genreChips(); track genre.label) {
+                        @if (!$first) {
+                            <span class="meta-chip__sep" aria-hidden="true"
+                                >·</span
+                            >
+                        }
+                        @if (genre.facet; as facet) {
+                            <button
+                                type="button"
+                                class="meta-chip__facet"
+                                (click)="discover.openGenre(facet)"
+                            >
+                                {{ genre.label }}
+                            </button>
+                        } @else {
+                            {{ genre.label }}
+                        }
+                    }
+                </app-meta-chip>
+            }
+            @for (country of hero.countryChips(); track country.label) {
+                <app-meta-chip>
+                    @if (country.facet; as facet) {
+                        <button
+                            type="button"
+                            class="meta-chip__facet"
+                            (click)="discover.openCountry(facet)"
+                        >
+                            {{ country.label }}
+                        </button>
+                    } @else {
+                        {{ country.label }}
+                    }
+                </app-meta-chip>
+            }
+            @if (serial.info.rating_imdb) {
+                <app-meta-chip variant="rating"
+                    >★ {{ serial.info.rating_imdb }}</app-meta-chip
+                >
+            }
+            @if (serial.info.rating_kinopoisk) {
+                <app-meta-chip
+                    >KP {{ serial.info.rating_kinopoisk }}</app-meta-chip
+                >
+            }
+        </ng-template>
+
+        <ng-template appDetailMeta>
+            <app-detail-credits
+                [cast]="hero.castNames()"
+                [directors]="hero.directorNames()"
+                (moreRequested)="scrollToCast()"
+            />
+        </ng-template>
+
+        <ng-template appDetailActions>
+            @if (hero.primaryAction(); as primary) {
+                <app-detail-action-button
+                    [label]="primary.label"
+                    [meta]="primary.meta"
+                    [icon]="primary.icon"
+                    [disabled]="primary.disabled"
+                    testId="series-quick-start"
+                    (pressed)="playQuickStartEpisode()"
+                />
+            } @else if (episodeListLoading()) {
+                <app-detail-action-skeleton />
+            }
+            @if (heroPresenter.trailerEmbedUrl()) {
+                <app-detail-action-button
+                    variant="secondary"
+                    icon="smart_display"
+                    [label]="'PORTALS.DETAIL.TRAILER' | translate"
+                    testId="series-trailer"
+                    (pressed)="heroPresenter.openTrailer()"
+                />
+            }
+            <app-favorites-button
+                appearance="icon"
+                [itemId]="serial.id"
+                [item]="serial"
+            />
+            <app-vod-more-menu
+                [sections]="menu.sections()"
+                [label]="'PORTALS.DETAIL.MORE_ACTIONS' | translate"
+                testId="series-more-menu"
+                (selected)="menu.run($event)"
+            />
+            <app-view-in-portal-action />
+        </ng-template>
+
+        @if (inlinePlayback(); as playback) {
+            <app-portal-inline-player
+                detail-player
+                [playbackSessionKey]="playbackSessionKey()"
+                [playback]="playback"
+                [episodeMetadata]="inlineEpisodeMetadata()"
+                [seriesTitle]="serial.info.name"
+                [seriesNavigation]="inlineSeriesNavigation()"
+                [upNextEpisodes]="upNextEpisodes()"
+                [seriesEpisodes]="mappedSeasons()"
+                [seasonPosters]="seasonPosters()"
+                [episodePlaybackPositions]="episodePlaybackPositions()"
+                [seasonLoadStates]="vodSeasonLoadStates()"
+                (timeUpdate)="handleInlineTimeUpdate($event)"
+                (closed)="closeInlinePlayer()"
+                (streamUrlCopied)="showCopyNotification()"
+                (playbackEnded)="handleInlinePlaybackEnded()"
+                (previousEpisodeRequested)="playPreviousEpisode()"
+                (nextEpisodeRequested)="playNextEpisode()"
+                (upNextEpisodeSelected)="playUpNextEpisode($event)"
+                (episodePanelSeasonSelected)="onSeasonSelected($event)"
+                (externalFallbackRequested)="
+                    handleExternalFallbackRequest($event)
+                "
+            />
+        }
+
+        <!-- Seasons & Episodes -->
+        @if (mappedSeasons()) {
+            <app-season-container
+                detail-episodes
+                [seasons]="mappedSeasons()"
+                [seriesId]="toSeriesId(serial.id)"
+                [playlistId]="stalkerStore.currentPlaylist()?._id ?? ''"
+                [seriesTitle]="serial.info.name"
+                [seriesDescription]="serial.info.description"
+                [seriesPosterUrl]="serial.info.movie_image"
+                [metadataLoading]="seasonMetadataLoading()"
+                [playbackPositions]="episodePlaybackPositions()"
+                [openingEpisodeId]="openingEpisodeId()"
+                [activeEpisodeId]="activeEpisodeId()"
+                [playingEpisodeId]="
+                    inlinePlayback()?.contentInfo?.contentXtreamId ?? null
+                "
+                [seasonDescriptions]="seasonDescriptions()"
+                [seasonPosters]="seasonPosters()"
+                [downloadsEnabled]="!providerOnly()"
+                [downloadAdapter]="episodeDownloadAdapter()"
+                [isLoading]="episodeListLoading()"
+                [seasonWatchBatchRunning]="seasonWatchBatchRunning()"
+                [hasUnloadedSeasons]="hasUnloadedVodSeasons()"
+                [seasonLoadStates]="vodSeasonLoadStates()"
+                [unloadedSeasonKeys]="unloadedVodSeasonKeys()"
+                (seasonSelected)="onSeasonSelected($event)"
+                (episodeClicked)="onEpisodeClicked($event)"
+                (episodeRestartRequested)="onEpisodeRestartRequested($event)"
+                (playbackToggleRequested)="
+                    handlePlaybackToggleRequestedFromUi($event)
+                "
+                (seasonPlaybackToggleRequested)="
+                    handleSeasonPlaybackToggleRequestedFromUi($event)
+                "
+                (seriesPlaybackToggleRequested)="
+                    handleSeriesPlaybackToggleRequestedFromUi($event)
+                "
+                #seasonContainer
+            />
+        }
+
+        <div detail-extras>
+            <app-cast-crew-row
+                [cast]="hero.castMembers()"
+                [directors]="hero.directorMembers()"
+                (personSelected)="openActor($event)"
+            />
+            <app-similar-rail
+                [title]="'XTREAM.SIMILAR' | translate"
+                [items]="heroPresenter.similarRailItems()"
+                (selected)="heroPresenter.openSimilarRailItem($event)"
+            />
+        </div>
+    </app-portal-detail-shell>
+}

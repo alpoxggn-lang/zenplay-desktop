@@ -1,0 +1,347 @@
+import {
+    Component,
+    Directive,
+    input,
+    signal,
+    ChangeDetectionStrategy,
+} from '@angular/core';
+import { ComponentFixture, TestBed } from '@angular/core/testing';
+import { By } from '@angular/platform-browser';
+import { MatIcon } from '@angular/material/icon';
+import { TranslatePipe, TranslateService } from '@ngx-translate/core';
+import { of } from 'rxjs';
+import { LiveLayoutSidebarStateService } from '@iptvnator/portal/shared/util';
+import { StalkerStore } from '@iptvnator/portal/stalker/data-access';
+import { XtreamStore } from '@iptvnator/portal/xtream/data-access';
+import { WorkspaceShellContextSidebarComponent } from './workspace-shell-context-sidebar.component';
+import { WorkspaceShellContextDrawerService } from '@iptvnator/workspace/shell/util';
+
+@Directive({
+    selector: '[appResizable]',
+    standalone: true,
+})
+class MockResizableDirective {
+    readonly minWidth = input<number | null>(null);
+    readonly maxWidth = input<number | null>(null);
+    readonly defaultWidth = input<number | null>(null);
+    readonly storageKey = input<string | null>(null);
+}
+
+@Component({
+    selector: 'app-workspace-context-panel',
+    template: '',
+    changeDetection: ChangeDetectionStrategy.Eager,
+    standalone: true,
+})
+class MockWorkspaceContextPanelComponent {
+    readonly context = input.required<unknown>();
+    readonly section = input.required<string>();
+    readonly focusTarget = jest.fn<HTMLElement | null, []>(() => null);
+}
+
+@Component({
+    selector: 'app-workspace-collection-context-panel',
+    template: '',
+    changeDetection: ChangeDetectionStrategy.Eager,
+    standalone: true,
+})
+class MockWorkspaceCollectionContextPanelComponent {}
+
+@Component({
+    selector: 'app-workspace-settings-context-panel',
+    template: '',
+    changeDetection: ChangeDetectionStrategy.Eager,
+    standalone: true,
+})
+class MockWorkspaceSettingsContextPanelComponent {}
+
+@Component({
+    selector: 'app-workspace-sources-filters-panel',
+    template: '',
+    changeDetection: ChangeDetectionStrategy.Eager,
+    standalone: true,
+})
+class MockWorkspaceSourcesFiltersPanelComponent {}
+
+describe('WorkspaceShellContextSidebarComponent', () => {
+    let fixture: ComponentFixture<WorkspaceShellContextSidebarComponent>;
+    let liveSidebarService: LiveLayoutSidebarStateService;
+    const xtreamSelectedCategoryId = signal<number | null>(1);
+    const stalkerSelectedCategoryId = signal<string | null>('7');
+    const drawerOpen = signal(false);
+
+    beforeEach(async () => {
+        localStorage.removeItem('live-sidebar-state:portal');
+        xtreamSelectedCategoryId.set(1);
+        stalkerSelectedCategoryId.set('7');
+        drawerOpen.set(false);
+
+        await TestBed.configureTestingModule({
+            imports: [WorkspaceShellContextSidebarComponent],
+            providers: [
+                {
+                    provide: WorkspaceShellContextDrawerService,
+                    useValue: { close: jest.fn(), isOpen: drawerOpen },
+                },
+                {
+                    provide: XtreamStore,
+                    useValue: { selectedCategoryId: xtreamSelectedCategoryId },
+                },
+                {
+                    provide: StalkerStore,
+                    useValue: { selectedCategoryId: stalkerSelectedCategoryId },
+                },
+                {
+                    provide: TranslateService,
+                    useValue: {
+                        instant: (key: string) => key,
+                        get: (key: string) => of(key),
+                        stream: (key: string) => of(key),
+                        onLangChange: of(null),
+                        onTranslationChange: of(null),
+                        onDefaultLangChange: of(null),
+                        currentLang: 'en',
+                        defaultLang: 'en',
+                    },
+                },
+            ],
+        })
+            .overrideComponent(WorkspaceShellContextSidebarComponent, {
+                set: {
+                    imports: [
+                        MatIcon,
+                        MockResizableDirective,
+                        MockWorkspaceContextPanelComponent,
+                        MockWorkspaceCollectionContextPanelComponent,
+                        MockWorkspaceSettingsContextPanelComponent,
+                        MockWorkspaceSourcesFiltersPanelComponent,
+                        TranslatePipe,
+                    ],
+                },
+            })
+            .compileComponents();
+
+        fixture = TestBed.createComponent(
+            WorkspaceShellContextSidebarComponent
+        );
+        liveSidebarService = TestBed.inject(LiveLayoutSidebarStateService);
+        liveSidebarService.setState('portal', 'expanded');
+    });
+
+    it('closes the phone drawer from its always-available close button', () => {
+        fixture.componentRef.setInput('variant', 'settings');
+        fixture.detectChanges();
+
+        const button: HTMLButtonElement = fixture.nativeElement.querySelector(
+            '[data-test-id="context-drawer-close"]'
+        );
+        expect(button).not.toBeNull();
+        expect(button.getAttribute('aria-label')).toBe('CLOSE');
+
+        button.click();
+
+        const drawer = TestBed.inject(
+            WorkspaceShellContextDrawerService
+        ) as unknown as { close: jest.Mock };
+        expect(drawer.close).toHaveBeenCalledTimes(1);
+    });
+
+    it('renders the settings panel for the settings variant', () => {
+        fixture.componentRef.setInput('variant', 'settings');
+        fixture.detectChanges();
+
+        expect(
+            fixture.nativeElement.querySelector(
+                'app-workspace-settings-context-panel'
+            )
+        ).not.toBeNull();
+    });
+
+    it('renders the route context panel for category routes', () => {
+        fixture.componentRef.setInput('variant', 'category');
+        fixture.componentRef.setInput('context', {
+            provider: 'xtreams',
+            playlistId: 'pl-1',
+        });
+        fixture.componentRef.setInput('section', 'vod');
+        fixture.detectChanges();
+
+        expect(
+            fixture.nativeElement.querySelector('app-workspace-context-panel')
+        ).not.toBeNull();
+    });
+
+    it('renders the shared collection panel for collection routes', () => {
+        fixture.componentRef.setInput('variant', 'collection');
+        fixture.detectChanges();
+
+        expect(
+            fixture.nativeElement.querySelector(
+                'app-workspace-collection-context-panel'
+            )
+        ).not.toBeNull();
+    });
+
+    describe('live sidebar collapse', () => {
+        function setupLiveCategory(section: 'live' | 'itv' | 'vod'): void {
+            fixture.componentRef.setInput('variant', 'category');
+            fixture.componentRef.setInput('context', {
+                provider: 'xtreams',
+                playlistId: 'pl-1',
+            });
+            fixture.componentRef.setInput('section', section);
+            fixture.detectChanges();
+        }
+
+        it('collapses the categories rail when the shared service is collapsed on a live route', () => {
+            setupLiveCategory('live');
+
+            liveSidebarService.setState('portal', 'collapsed');
+            fixture.detectChanges();
+
+            const aside = fixture.nativeElement.querySelector(
+                'aside.context-panel--route'
+            );
+            expect(aside.classList.contains('context-panel--collapsed')).toBe(
+                true
+            );
+        });
+
+        it('folds the categories rail on the first level already (categories-hidden)', () => {
+            setupLiveCategory('live');
+
+            liveSidebarService.setState('portal', 'categories-hidden');
+            fixture.detectChanges();
+
+            const aside = fixture.nativeElement.querySelector(
+                'aside.context-panel--route'
+            );
+            expect(aside.classList.contains('context-panel--collapsed')).toBe(
+                true
+            );
+        });
+
+        it('keeps the rail on the live root (no selected category) at categories-hidden, since no channels rail exists to host the way back', () => {
+            xtreamSelectedCategoryId.set(null);
+            setupLiveCategory('live');
+
+            liveSidebarService.setState('portal', 'categories-hidden');
+            fixture.detectChanges();
+
+            const aside = fixture.nativeElement.querySelector(
+                'aside.context-panel--route'
+            );
+            expect(aside.classList.contains('context-panel--collapsed')).toBe(
+                false
+            );
+
+            // Player-only still folds it: the floating restore handle lives
+            // in the content area and stays reachable there.
+            liveSidebarService.setState('portal', 'collapsed');
+            fixture.detectChanges();
+            expect(aside.classList.contains('context-panel--collapsed')).toBe(
+                true
+            );
+        });
+
+        it('takes the folded rail out of the focus order with inert, except inside the open phone drawer', () => {
+            setupLiveCategory('live');
+            const aside = fixture.nativeElement.querySelector(
+                'aside.context-panel--route'
+            );
+
+            liveSidebarService.setState('portal', 'categories-hidden');
+            fixture.detectChanges();
+            expect(aside.hasAttribute('inert')).toBe(true);
+
+            drawerOpen.set(true);
+            fixture.detectChanges();
+            expect(aside.hasAttribute('inert')).toBe(false);
+
+            drawerOpen.set(false);
+            liveSidebarService.setState('portal', 'expanded');
+            fixture.detectChanges();
+            expect(aside.hasAttribute('inert')).toBe(false);
+        });
+
+        it('hands focus to the panel whenever the rail actually unfolds, including from player-only on the live root', async () => {
+            xtreamSelectedCategoryId.set(null);
+            liveSidebarService.setState('portal', 'categories-hidden');
+            setupLiveCategory('live');
+            const panel = fixture.debugElement.query(
+                By.directive(MockWorkspaceContextPanelComponent)
+            ).componentInstance as MockWorkspaceContextPanelComponent;
+
+            (document.activeElement as HTMLElement | null)?.blur();
+
+            // Root at categories-hidden: the rail is visible, no transition.
+            liveSidebarService.collapse('portal');
+            fixture.detectChanges();
+            liveSidebarService.expand('portal');
+            fixture.detectChanges();
+            await new Promise<void>((resolve) =>
+                queueMicrotask(() => resolve())
+            );
+
+            // The panel offered no control (categories not loaded), so the
+            // rail itself takes focus.
+            expect(panel.focusTarget).toHaveBeenCalledTimes(1);
+            expect(document.activeElement).toBe(
+                fixture.nativeElement.querySelector('aside.context-panel--route')
+            );
+
+            const control = document.createElement('button');
+            fixture.nativeElement.appendChild(control);
+            panel.focusTarget.mockReturnValue(control);
+            (document.activeElement as HTMLElement | null)?.blur();
+            liveSidebarService.collapse('portal');
+            fixture.detectChanges();
+            liveSidebarService.expand('portal');
+            fixture.detectChanges();
+            await new Promise<void>((resolve) =>
+                queueMicrotask(() => resolve())
+            );
+
+            expect(document.activeElement).toBe(control);
+        });
+
+        it('also collapses on the Stalker itv section', () => {
+            setupLiveCategory('itv');
+
+            liveSidebarService.setState('portal', 'collapsed');
+            fixture.detectChanges();
+
+            const aside = fixture.nativeElement.querySelector(
+                'aside.context-panel--route'
+            );
+            expect(aside.classList.contains('context-panel--collapsed')).toBe(
+                true
+            );
+        });
+
+        it('does not collapse the categories rail on non-live sections', () => {
+            setupLiveCategory('vod');
+
+            liveSidebarService.setState('portal', 'collapsed');
+            fixture.detectChanges();
+
+            const aside = fixture.nativeElement.querySelector(
+                'aside.context-panel--route'
+            );
+            expect(aside.classList.contains('context-panel--collapsed')).toBe(
+                false
+            );
+        });
+
+        it('keeps the categories rail expanded when the service is expanded', () => {
+            setupLiveCategory('live');
+
+            const aside = fixture.nativeElement.querySelector(
+                'aside.context-panel--route'
+            );
+            expect(aside.classList.contains('context-panel--collapsed')).toBe(
+                false
+            );
+        });
+    });
+});

@@ -1,0 +1,188 @@
+import type { PlayerSubtitleStyle } from './subtitle-style.util';
+import type { RecordingStartMetadata } from './recording-metadata.interface';
+
+export type EmbeddedMpvSessionStatus =
+    'idle' | 'loading' | 'playing' | 'paused' | 'ended' | 'error' | 'closed';
+
+export interface EmbeddedMpvBounds {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+}
+
+export interface EmbeddedMpvCapabilities {
+    subtitles: boolean;
+    playbackSpeed: boolean;
+    aspectOverride: boolean;
+    screenshot: boolean;
+    recording: boolean;
+    /** Loading an external subtitle file via `sub-add` (frame-copy engine). */
+    externalSubtitles?: boolean;
+    /** Adjusting `sub-delay` at runtime (frame-copy engine). */
+    subtitleDelay?: boolean;
+    /** Adjusting `sub-scale`/`sub-color` at runtime (frame-copy engine). */
+    subtitleStyle?: boolean;
+}
+
+/**
+ * Subtitle presentation preferences forwarded to mpv: `sizePercent` maps to
+ * `sub-scale` (100 = 1.0); `color` maps to `sub-color`, null restores mpv's
+ * default. Alias of the canonical shared shape so the renderer controls and
+ * the IPC contract cannot drift structurally.
+ */
+export type EmbeddedMpvSubtitleStyle = PlayerSubtitleStyle;
+
+export type EmbeddedMpvEngine = 'native' | 'frame-copy';
+
+export interface EmbeddedMpvSupport {
+    supported: boolean;
+    platform: string;
+    reason?: string;
+    /**
+     * True when `supported: false` is not a verdict on this machine yet: the
+     * Linux native-view `mpv` executable was looked up before the login shell
+     * PATH arrived, and is looked up again once the shell answers. Never
+     * persist a decision made from such an answer; ask again later.
+     */
+    inconclusive?: boolean;
+    capabilities?: EmbeddedMpvCapabilities;
+    /**
+     * Rendering engine the main process will use for new sessions.
+     * `native` = platform video surface (NSOpenGLView/HWND/X11 wid),
+     * `frame-copy` = helper process + shm ring + renderer canvas.
+     */
+    engine?: EmbeddedMpvEngine;
+    /**
+     * True when this machine could run the frame-copy engine (macOS arm64
+     * or Linux x64, after its helper/runtime capability gate), regardless of
+     * whether it is active.
+     * Drives the Settings toggle; switching engines requires an app restart.
+     */
+    frameCopyAvailable?: boolean;
+    /**
+     * Stable fail-closed capability reason when frameCopyAvailable is false.
+     * Intended for startup tracing and support diagnostics, not user copy.
+     */
+    frameCopyUnavailableReason?: string;
+}
+
+/**
+ * Where the renderer's frame pump finds the current shm frame ring of a
+ * frame-copy session. A new generation is announced after every viewport
+ * resize; the pump re-attaches to the new segment.
+ */
+export interface EmbeddedMpvFrameSource {
+    shmName: string;
+    width: number;
+    height: number;
+    generation: number;
+    readerPath: string;
+}
+
+export interface EmbeddedMpvAudioTrack {
+    id: number;
+    title?: string;
+    language?: string;
+    selected: boolean;
+    defaultTrack?: boolean;
+    forced?: boolean;
+}
+
+export type EmbeddedMpvSubtitleTrack = EmbeddedMpvAudioTrack;
+
+/** One entry of mpv's `chapter-list`, in file order. */
+export interface EmbeddedMpvChapter {
+    /** Chapter start, in media seconds. */
+    timeSeconds: number;
+    title?: string;
+}
+
+export interface EmbeddedMpvRecordingState {
+    active: boolean;
+    targetPath?: string;
+    startedAt?: string;
+    error?: string;
+}
+
+/**
+ * Live stream diagnostics mpv reports for the player's info popover. Every
+ * field is optional: a property mpv has not answered yet (or an engine that
+ * does not observe it) simply omits its row rather than reporting a zero.
+ */
+export interface EmbeddedMpvStreamStats {
+    /** mpv `estimated-vf-fps` — the measured, not the container, rate. */
+    fps?: number;
+    /** mpv `video-bitrate` / `audio-bitrate`, in bits per second. */
+    videoBitrateBps?: number;
+    audioBitrateBps?: number;
+    /** mpv `video-format` / `audio-codec-name`, e.g. `h264` / `aac`. */
+    videoCodec?: string;
+    audioCodec?: string;
+    /** mpv `audio-params/channels`, e.g. `stereo` or `5.1`. */
+    audioChannels?: string;
+    /** mpv `audio-params/samplerate`, in Hz. */
+    audioSampleRateHz?: number;
+    /** mpv `file-format`, e.g. `mpegts` or `hls`. */
+    container?: string;
+    /** mpv `demuxer-cache-duration`: media buffered ahead, in seconds. */
+    bufferedAheadSeconds?: number;
+    /** mpv `frame-drop-count` plus `decoder-frame-drop-count`. */
+    droppedFrames?: number;
+}
+
+export interface EmbeddedMpvRecordingStartOptions {
+    directory?: string;
+    title?: string;
+    /**
+     * Channel/EPG snapshot captured by the live host at recording start; the
+     * main-process recording tracker persists it. See
+     * recording-metadata.interface.ts for why capture must happen up front.
+     */
+    metadata?: RecordingStartMetadata;
+}
+
+export interface EmbeddedMpvSession {
+    id: string;
+    title: string;
+    streamUrl: string;
+    status: EmbeddedMpvSessionStatus;
+    positionSeconds: number;
+    durationSeconds: number | null;
+    volume: number;
+    audioTracks: EmbeddedMpvAudioTrack[];
+    selectedAudioTrackId: number | null;
+    subtitleTracks: EmbeddedMpvSubtitleTrack[];
+    selectedSubtitleTrackId: number | null;
+    playbackSpeed: number;
+    aspectOverride: string;
+    /**
+     * The file's chapters (mpv `chapter-list`). Absent from an addon built
+     * before chapters were observed and from the Linux `--wid` backend.
+     */
+    chapters?: EmbeddedMpvChapter[];
+    /** Source video size (mpv dwidth/dheight); frame-copy engine only. */
+    videoWidth?: number;
+    videoHeight?: number;
+    /** Live diagnostics for the info popover; absent when mpv reports none. */
+    stats?: EmbeddedMpvStreamStats;
+    recording?: EmbeddedMpvRecordingState;
+    startedAt: string;
+    updatedAt: string;
+    error?: string;
+    /**
+     * Present while the main process is waiting to reload a dropped stream
+     * or has such a reload in flight; absent once playback is back or the
+     * attempts are exhausted. Display only — the renderer never schedules.
+     */
+    reconnect?: EmbeddedMpvReconnectInfo;
+}
+
+/** Progress of the main-process automatic reconnect for one session. */
+export interface EmbeddedMpvReconnectInfo {
+    /** 1-based number of the attempt that is scheduled or in flight. */
+    attempt: number;
+    maxAttempts: number;
+    /** ISO timestamp at which the scheduled attempt fires. */
+    nextAttemptAt: string;
+}

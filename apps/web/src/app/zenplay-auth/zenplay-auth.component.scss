@@ -1,0 +1,214 @@
+:host {
+    display: block;
+    min-height: 100%;
+}
+
+.zenplay-auth-page {
+    min-height: 100dvh;
+    display: grid;
+    place-items: center;
+    box-sizing: border-box;
+    padding: max(24px, env(safe-area-inset-top))
+        max(20px, env(safe-area-inset-right))
+        max(24px, env(safe-area-inset-bottom))
+        max(20px, env(safe-area-inset-left));
+    color: var(--app-on-surface);
+    background:
+        radial-gradient(
+            circle at 18% 12%,
+            rgb(69 214 255 / 18%),
+            transparent 34rem
+        ),
+        radial-gradient(
+            circle at 82% 82%,
+            rgb(90 50 200 / 24%),
+            transparent 32rem
+        ),
+        var(--app-content-bg);
+}
+
+.zenplay-auth-card {
+    width: min(100%, 430px);
+    box-sizing: border-box;
+    padding: clamp(24px, 6vw, 44px);
+    border: 1px solid var(--app-glass-border);
+    border-radius: 28px;
+    background: var(--app-glass-bg-strong);
+    box-shadow: 0 24px 70px rgb(0 0 0 / 34%);
+}
+
+.zenplay-profile-card {
+    width: min(100%, 560px);
+}
+
+.zenplay-auth-logo {
+    display: block;
+    width: 112px;
+    height: 112px;
+    margin: 0 auto 20px;
+    border-radius: 24px;
+}
+
+.zenplay-auth-logo--small {
+    width: 86px;
+    height: 86px;
+}
+
+.zenplay-auth-copy {
+    margin-bottom: 28px;
+    text-align: center;
+}
+
+.zenplay-auth-copy h1 {
+    margin: 0 0 8px;
+    font-size: clamp(1.9rem, 6vw, 2.6rem);
+    line-height: 1.05;
+    font-weight: 700;
+}
+
+.zenplay-auth-copy p {
+    margin: 0;
+    color: var(--app-muted-color);
+}
+
+.zenplay-auth-eyebrow {
+    margin-bottom: 12px !important;
+    color: var(--app-selection-color) !important;
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.11em;
+}
+
+form {
+    display: grid;
+    gap: 12px;
+}
+
+label {
+    font-size: 0.88rem;
+    font-weight: 600;
+}
+
+input {
+    width: 100%;
+    min-height: 50px;
+    box-sizing: border-box;
+    padding: 0 15px;
+    border: 1px solid var(--app-search-border);
+    border-radius: 14px;
+    outline: none;
+    color: var(--app-on-surface);
+    background: var(--app-search-bg);
+    font: inherit;
+}
+
+input:focus-visible {
+    border-color: var(--app-selection-color);
+    box-shadow: 0 0 0 3px
+        color-mix(in srgb, var(--app-selection-color) 25%, transparent);
+}
+
+.zenplay-password-field {
+    position: relative;
+}
+
+.zenplay-password-field input {
+    padding-right: 86px;
+}
+
+.zenplay-password-toggle {
+    position: absolute;
+    inset: 0 8px 0 auto;
+    border: 0;
+    color: var(--app-selection-color);
+    background: transparent;
+    font: inherit;
+    font-size: 0.8rem;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.zenplay-primary-action {
+    min-height: 52px;
+    margin-top: 8px;
+    border: 0;
+    border-radius: 16px;
+    color: var(--app-selection-on-color);
+    background: var(--app-selection-color);
+    font: inherit;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.zenplay-primary-action:disabled {
+    cursor: wait;
+    opacity: 0.65;
+}
+
+.zenplay-auth-error {
+    margin: 2px 0;
+    color: var(--mat-sys-error);
+    font-size: 0.88rem;
+}
+
+.zenplay-profile-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(104px, 1fr));
+    gap: 14px;
+    margin-bottom: 28px;
+}
+
+.zenplay-profile-option {
+    display: grid;
+    justify-items: center;
+    gap: 9px;
+    min-width: 0;
+    padding: 10px;
+    border: 1px solid transparent;
+    border-radius: 18px;
+    color: var(--app-on-surface);
+    background: transparent;
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.zenplay-profile-option:hover,
+.zenplay-profile-option:focus-visible {
+    border-color: var(--app-glass-border);
+    background: var(--app-hover-overlay);
+    outline: none;
+}
+
+.zenplay-profile-avatar {
+    display: grid;
+    place-items: center;
+    width: 70px;
+    height: 70px;
+    border-radius: 22px;
+    color: var(--app-selection-on-color);
+    background: var(--app-accent-gradient);
+    font-size: 1.8rem;
+    font-weight: 700;
+}
+
+@media (min-width: 768px) and (orientation: landscape) {
+    .zenplay-auth-card:not(.zenplay-profile-card) {
+        display: grid;
+        grid-template-columns: 150px 1fr;
+        column-gap: 32px;
+        width: min(760px, 100%);
+    }
+
+    .zenplay-auth-logo {
+        grid-row: 1 / span 2;
+        align-self: center;
+        width: 140px;
+        height: 140px;
+        margin: 0;
+    }
+
+    .zenplay-auth-copy {
+        text-align: left;
+    }
+}

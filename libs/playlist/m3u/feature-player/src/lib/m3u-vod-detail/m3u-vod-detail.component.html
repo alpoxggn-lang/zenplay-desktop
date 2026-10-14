@@ -1,0 +1,66 @@
+<app-portal-detail-shell
+    [backAvailable]="false"
+    [contentKey]="heroKey()"
+    [title]="title()"
+    [kindLabel]="kindLabel()"
+    [description]="overview()"
+    [posterUrl]="posterUrl()"
+    [backdropUrl]="backdropUrl()"
+    [playbackActive]="playbackActive()"
+    (closePlayerRequested)="closeInlinePlayback()"
+>
+    <ng-template appDetailTags>
+        @if (year()) {
+            <app-meta-chip>{{ year() }}</app-meta-chip>
+        }
+        @if (runtimeLabel(); as runtime) {
+            <app-meta-chip>{{ runtime }}</app-meta-chip>
+        }
+        @if (genres(); as genreList) {
+            <app-meta-chip>{{ genreList }}</app-meta-chip>
+        }
+        @if (rating()) {
+            <app-meta-chip variant="rating">★ {{ rating() }}</app-meta-chip>
+        }
+    </ng-template>
+
+    <ng-template appDetailMeta>
+        <app-detail-credits
+            [cast]="castNames()"
+            [directors]="directorNames()"
+            (moreRequested)="scrollToCast()"
+        />
+    </ng-template>
+
+    <ng-template appDetailActions>
+        @if (canPlayInline() && !playbackActive()) {
+            <app-detail-action-button
+                [label]="'XTREAM.PLAY' | translate"
+                [meta]="runtimeLabel()"
+                testId="m3u-vod-play"
+                (pressed)="startPlayback()"
+            />
+        }
+    </ng-template>
+
+    @if (inlinePlayback(); as playback) {
+        <app-portal-inline-player
+            detail-player
+            [playbackSessionKey]="playbackSessionKey()"
+            [playback]="playback"
+            [volume]="volume()"
+            [playerOverride]="playerOverride()"
+            (closed)="closeInlinePlayback()"
+            (externalFallbackRequested)="externalFallbackRequested.emit($event)"
+        />
+    }
+
+    <div detail-extras>
+        <!-- M3U has no actor page: the people stay plain entries -->
+        <app-cast-crew-row
+            [cast]="cast()"
+            [directors]="directorMembers()"
+            [interactive]="false"
+        />
+    </div>
+</app-portal-detail-shell>

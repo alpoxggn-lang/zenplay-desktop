@@ -1,0 +1,10 @@
+@use '../../../../../../ui/styles/account-dialog';
+
+:host {
+    display: block;
+    color: var(--app-body-color, var(--mat-sys-on-surface));
+    --account-dialog-accent: var(
+        --app-provider-xtream,
+        var(--mat-sys-primary)
+    );
+}

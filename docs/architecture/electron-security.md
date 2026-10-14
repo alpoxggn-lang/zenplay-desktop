@@ -1,0 +1,288 @@
+# Electron Security Contract
+
+This document records the Electron runtime security contract for the desktop app.
+
+## BrowserWindow Defaults
+
+The main window is created in `apps/electron-backend/src/app/app.ts` with an
+explicit hardened `webPreferences` object:
+
+- `contextIsolation: true`
+- `nodeIntegration: false`
+- `sandbox: !frameCopyExperiment` — `true` by default; the opt-in Embedded MPV
+  frame-copy experiment is the one path that disables the renderer sandbox
+  (`contextIsolation`/`nodeIntegration` stay hardened regardless)
+- `webSecurity: true`
+- `backgroundThrottling: true` — Chromium's default, kept explicit: a hidden
+  or minimized window must report `document.hidden` so idle timers pause and
+  the playback keep-awake gate works (see the player controls contract).
+  Audible media and picture-in-picture keep running at full rate regardless.
+- `preload: apps/electron-backend/src/app/api/main.preload.ts`
+
+Renderer code must use the preload bridge exposed as `window.electron`.
+Do not re-enable direct Node.js access from Angular code. New desktop-only APIs
+should be added to the preload bridge and backed by an `ipcMain.handle(...)`
+owner in the Electron backend.
+
+## Preload API Type Contract
+
+The canonical renderer bridge type is
+`libs/shared/interfaces/src/lib/electron-api.interface.ts`.
+
+Keep these surfaces in sync when adding or changing a preload method:
+
+1. `ElectronBridgeApi` in `@iptvnator/shared/interfaces`
+2. `apps/electron-backend/src/app/api/main.preload.ts`
+3. the owning `ipcMain.handle(...)` event module
+4. renderer capability checks or runtime bridge services that consume the method
+
+`global.d.ts` and `apps/web/src/typings.d.ts` should reference
+`ElectronBridgeApi` instead of redeclaring `window.electron` method lists.
+`main.preload.ts` is typed as `ElectronBridgeApi`, so missing or extra preload
+methods fail typecheck instead of silently drifting from renderer typings.
+
+## Navigation And External URLs
+
+The main window owns three navigation gates:
+
+- `setWindowOpenHandler` denies every new window. `http:` and `https:` targets
+  are opened in the operating system browser through `shell.openExternal`.
+- `will-navigate` allows only the trusted renderer URL. Development mode allows
+  `http://localhost:4200`, `http://127.0.0.1:4200`, and `http://[::1]:4200`.
+- `will-redirect` applies the same allow/deny rules so server-side redirects
+  cannot move the app window to an untrusted origin.
+
+Packaged mode allows only the app's resolved `index.html` renderer file, not
+arbitrary `file:` URLs. External web navigations are denied in the app window
+and opened in the operating system browser.
+
+Do not add broad protocol allow-lists for renderer navigation. If a new
+desktop-only flow needs to open a URL outside IPTVnator, route it through the
+default browser unless the app window is deliberately meant to host that URL.
+
+## Desktop Auto Updates
+
+Desktop application updates are owned by the Electron main process. Renderer
+code talks only through the typed preload bridge:
+
+- `window.electron.getAppUpdateStatus()`
+- `window.electron.checkForAppUpdate()`
+- `window.electron.downloadAppUpdate()`
+- `window.electron.installAppUpdate()`
+- `window.electron.getAppUpdateReleaseNotes(...)`
+- `window.electron.onAppUpdateStatusChange(...)`
+
+The backend implementation lives in
+`apps/electron-backend/src/app/services/app-update.service.ts` and registers IPC
+handlers through `apps/electron-backend/src/app/events/app-update.events.ts`.
+The service uses `electron-updater` with `autoDownload = false`, so renderer
+actions explicitly ask to download and install. The main process starts one
+packaged startup check after IPC registration; it never downloads during that
+check. After a successful download, the renderer may show a restart/install
+action backed by `quitAndInstall()`.
+
+Self-update is supported only for packaged macOS builds, Windows NSIS builds,
+and Linux AppImage builds. Other Linux packages still point users to the latest
+GitHub Release through `manualDownloadUrl` because Snap, Flatpak, DEB, RPM, and
+Pacman installs have package-manager/store-specific update ownership. Packaged
+non-AppImage Linux builds may still check GitHub Releases for a newer stable
+version, but their update action remains a browser handoff to GitHub.
+
+Release notes are also fetched by the main process from the public GitHub
+Releases API. The updater service caches release pages lazily and filters out
+draft/prerelease entries before returning Markdown to the renderer. The Angular
+dialog renders that Markdown with the local Markdown renderer and Angular HTML
+sanitization; do not bypass sanitizer for release body content.
+
+Release CI must publish both installer artifacts and updater metadata generated
+by electron-builder (`latest.yml`, `latest-mac.yml`, `latest-linux*.yml`, and
+blockmap files when present). macOS must keep a signed/notarized app bundle,
+produce both `dmg` and `zip` targets, and publish a single merged
+`latest-mac.yml` containing both x64 and arm64 zip entries.
+
+## Content Security Policy
+
+The Angular shell defines a baseline CSP in `apps/web/src/index.html`.
+
+The policy keeps the application self-hosted for scripts, blocks object
+embedding (`object-src 'none'`) while allowing frames only from
+`https://www.youtube-nocookie.com` (`frame-src`, used for TMDB trailers),
+limits forms to the app origin, and allows IPTV playback sources through
+`media-src` and `connect-src` for `http:`, `https:`, `blob:`, and `data:`. The
+policy keeps `script-src` self-hosted and currently keeps `unsafe-inline` for
+existing inline styles.
+
+Angular production builds must not rely on inline event handlers for stylesheet
+activation. Keep `web:build:production` and `web:build:pwa` configured without
+critical CSS stylesheet deferral (`optimization.styles.inlineCritical: false`)
+unless the CSP is intentionally changed and runtime-validated in both Electron
+and the self-hosted PWA.
+
+Before tightening either value, validate both Electron development startup and
+the PWA/electron build configurations. Playback-heavy changes should also check
+that HLS, MPEG-TS, thumbnails, and local file playback are still allowed by the
+policy.
+
+## Scoped Request Header Overrides
+
+Inline playback can request temporary `User-Agent`, `Referer`, and `Origin`
+header overrides — and, for auth-gated portal streams, `Cookie` and
+`Authorization` credentials — through `window.electron.setUserAgent(userAgent,
+referer, scopeUrl, credentials?)`.
+
+The Electron backend handles that IPC in `apps/electron-backend/src/app/events/shared.events.ts`
+and delegates to `apps/electron-backend/src/app/services/request-header-overrides.service.ts`.
+The service registers one `session.defaultSession.webRequest.onBeforeSendHeaders`
+listener and updates layered in-memory overrides instead of stacking a new
+listener for every channel change.
+
+`ElectronStreamHeadersService` (`libs/ui/playback`) is the single renderer
+owner of the scoped override slot: it extracts the full header set from the
+resolved playback (including the Stalker mac cookie and Bearer token), and
+its `clear()` releases the slot only while the caller's stream still owns it,
+so a consumer being destroyed cannot wipe an override a newer consumer just
+configured. Three surfaces apply it: `WebPlayerViewComponent` for every
+built-in video player (configuring the override **before** handing the
+source over, clearing on destroy), and — for the dedicated radio audio
+player, which never mounts a `WebPlayerViewComponent` — the Stalker live
+layout and the unified collection tab (global/portal Favorites and Recently
+Viewed). Individual player components must not call the bridge themselves —
+a narrower call would overwrite the credentialed override.
+
+Rules:
+
+- empty playlist-level `userAgent` and `referer` clear all active overrides
+- empty channel-level values with a `scopeUrl` clear only the scoped channel
+  override, preserving playlist-level defaults
+- channel playback should pass the stream URL as `scopeUrl`
+- scoped overrides apply only to the active stream origin and referer origin
+- playlist-level user agents and referrers may call the bridge without a
+  `scopeUrl`; that is intentionally broader because playlist settings apply to
+  the whole M3U playlist
+- header names are replaced case-insensitively before canonical `User-Agent`,
+  `Referer`, and `Origin` names are written
+- header values containing control characters are rejected outright (header
+  smuggling)
+
+Credential rules (`credentials.cookie` / `credentials.authorization`) are
+deliberately stricter than the general scope:
+
+- credentials are accepted **only** with a `scopeUrl` that parses to a
+  concrete origin; an unscoped (playlist-level) call silently drops them —
+  fail closed, never fail broad
+- they are attached **only** to requests whose origin equals the stream URL's
+  exact origin — never to the referer-origin sibling that `User-Agent`/`Referer`
+  also cover, and never to third-party hosts an HLS manifest may point at
+- they live only in the in-memory override: never in the session cookie jar,
+  never on disk, so they cannot outlive the app process
+- they are dropped whenever the scoped override is replaced (channel or
+  source change) or released — player close/destroy, a radio host's close, or
+  a new selection that mounts no player surface. The media `ended` event
+  deliberately does **not** clear the override: the mounted player still owns
+  the session (replay, or a seek into an unbuffered range, must keep working
+  against a gated stream), and the credentials only ever travel to the exact
+  origin that issued them; every dismount path above releases them
+
+The header-injection design was chosen over `session.cookies.set()`
+deliberately: jar cookies only attach to credentialed requests, which would
+force `withCredentials` into every web engine and break against the
+`Access-Control-Allow-Origin: *` that IPTV panels typically send, and jar
+scoping is domain-based (port-blind) — weaker than the exact-origin match
+above. Injecting at `onBeforeSendHeaders` sits below the CORS/credentials
+layer, so the request stays "uncredentialed" for the fetch spec while the
+wire request carries the portal session.
+
+When changing this flow, keep stale header cleanup covered. Switching from a
+channel or playlist with custom headers to one without custom headers must clear
+the previous override. The Electron e2e
+`apps/electron-backend-e2e/src/stalker-playback-headers.e2e.ts` pins the
+end-to-end contract against a mock stream that answers 403 without the portal
+credentials.
+
+## Main-Process Remote Requests
+
+Renderer-triggered HTTP requests must pass through the URL policy in
+`apps/electron-backend/src/app/events/url-safety.ts`. The policy rejects
+non-HTTP(S) URLs and embedded credentials, and strict callers also reject
+loopback, private, reserved, and DNS-resolved private addresses. IPv4-mapped
+IPv6 literals are decoded before classification, including hexadecimal forms
+such as `::ffff:7f00:1`, so alternate IPv6 spelling cannot bypass IPv4 rules.
+
+Remote request callers must use the validated Axios redirect helper so every
+redirect target is checked before the main process follows it. Under the strict
+policy, the helper pins the socket lookup to the IP addresses that passed
+validation while retaining the original hostname for TLS SNI, certificate
+validation, and virtual hosting. This prevents DNS rebinding between validation
+and connection. Callers with custom TLS policy provide a typed agent factory;
+the validated request layer supplies the pinned lookup instead of copying
+private Node `Agent.options` state. Credential stripping is scoped to the host
+rather than the origin, with one transport-security carve-out: same-hostname
+redirects that upgrade the scheme (http→https) or move ports keep
+`Authorization`, `Cookie`, basic auth, `params`, and request bodies, because
+IPTV portals routinely answer with such redirects and losing the session
+cookie/token there breaks the portal outright (#1158) while disclosing nothing
+to a third party. Redirects that change the host **or downgrade https→http**
+must not forward any of those — the former would hand provider credentials to a
+third party, the latter would replay a TLS-obtained session in cleartext.
+
+EPG URLs are strict by default because an M3U playlist can supply them through
+`url-tvg`. Operators who intentionally use a LAN-hosted EPG source should prefer
+the renderer's source-scoped “Allow source” action, which persists the exact EPG
+URL in settings and retries that source only. The
+`IPTVNATOR_ALLOW_PRIVATE_NETWORK_URLS=1` environment flag remains an
+emergency/development process-wide override for strict EPG fetches. Directly
+configured Xtream, Stalker, and playlist providers retain private-network
+support, but still require HTTP(S), reject embedded credentials, and validate
+redirects.
+
+Callers that allow private-network provider URLs but only need redirects within
+the same provider origin should pass both `allowPrivateNetworkRedirects: false`
+and `pinAllowedPrivateNetworkHosts: true` to the validated Axios helper. This
+keeps same-origin LAN redirects working, reuses the initially resolved addresses
+for same-origin redirect hops, and requires cross-origin redirects to resolve to
+public addresses. A provider-controlled URL cannot bounce the Electron main
+process to another private or loopback host or rebind the same hostname between
+redirect hops.
+
+Remote playlist TLS certificates are validated by default. The
+renderer can persist a host-scoped invalid-certificate trust decision for a
+playlist or EPG source host. The `IPTVNATOR_ALLOW_INSECURE_TLS=1` escape hatch
+is only for explicitly trusted providers with invalid or self-signed
+certificates when the host-scoped UI path is not available.
+
+## Sensitive Diagnostic Logging
+
+Settings, portal requests/responses, IPC trace payloads, and remote-request
+errors can contain provider credentials. Code at those boundaries must pass
+structured values through `redactSensitiveData` from
+`@iptvnator/shared/logging`, or through the portal `createLogger`/portal-debug
+helpers that apply it. Do not send a raw settings object, request params,
+response, or `Error` directly to `console.*`.
+
+The redactor preserves non-sensitive diagnostic fields while replacing
+credential fields case-insensitively, including usernames, passwords, tokens,
+API keys, authorization/cookie headers, and MAC addresses. It also sanitizes
+URL query parameters, serialized JSON, nested query values, errors, arrays,
+and cyclic objects without mutating the original value. Depth, collection,
+object-key, and string limits keep opt-in debug traces bounded.
+
+When adding a new logging boundary, extend the closest regression test with a
+synthetic secret and assert that the exact value is absent from captured log
+output. Never use a real provider credential to validate logging.
+
+## Filesystem Capabilities
+
+Renderer IPC payloads are not filesystem authorization.
+
+- `write-file` accepts only a path returned to the same renderer by the native
+  save dialog. The capability is single-use and is consumed before the write,
+  including when the filesystem operation fails.
+- Download folders are owned by the Electron main process. The OS downloads
+  directory is always allowed; a custom directory is accepted only after the
+  native folder dialog selects it.
+- The selected download directory is persisted under Electron `userData` and
+  returned by `DOWNLOADS_GET_DEFAULT_FOLDER`, so renderer-managed settings
+  cannot substitute an arbitrary host path.
+- Downloads do not overwrite an existing destination file.
+- Reveal and playback handlers accept only file paths recorded in IPTVnator's
+  downloads database.

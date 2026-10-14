@@ -1,0 +1,654 @@
+import { faker } from '@faker-js/faker';
+import {
+    MarketingMovieCategoryKey,
+    POSTER_SHOWCASE_MOVIES,
+} from '@iptvnator/shared/marketing-fixtures';
+import {
+    generateMarketingChannels,
+    generateMarketingEpg,
+    generateMarketingItvCategories,
+    marketingEpgTitlesFor,
+    marketingLogoPath,
+} from './marketing-live.generator.js';
+import { ScenarioConfig } from './scenarios.js';
+
+// ---------------------------------------------------------------------------
+// Shared types (mirror the Stalker API response shapes)
+// ---------------------------------------------------------------------------
+
+export interface RawCategory {
+    id: string;
+    title: string;
+    alias: string;
+    /** Ministra adult-genre flag ('1' = censored). */
+    censored?: string;
+}
+
+/**
+ * The two flags that tell a client whether the row needs `create_link`. Real
+ * portals send them on every ITV/radio row as `'0'`/`'1'` strings; a client
+ * that honours them plays the static `cmd` when both are `'0'`.
+ */
+export interface RawTemporaryLinkFlags {
+    use_http_tmp_link: '0' | '1';
+    use_load_balancing: '0' | '1';
+}
+
+export interface RawChannel extends RawTemporaryLinkFlags {
+    id: string;
+    name: string;
+    o_name: string;
+    cmd: string;
+    logo: string;
+    category_id: string;
+    tv_genre_id: string;
+    xmltv_id: string;
+}
+
+export interface RawRadioStation extends RawTemporaryLinkFlags {
+    id: string;
+    name: string;
+    o_name: string;
+    cmd: string;
+    logo: string;
+    category_id: string;
+    tv_genre_id: string;
+    number: string;
+    radio: true;
+}
+
+export interface RawVodItem {
+    id: string;
+    name: string;
+    o_name: string;
+    title: string;
+    cmd: string;
+    screenshot_uri: string;
+    cover: string;
+    description: string;
+    actors: string;
+    director: string;
+    year: string;
+    genre: string;
+    genres_str: string;
+    rating_imdb: string;
+    rating_kinopoisk: string;
+    category_id: string;
+    is_series: 0 | 1 | '1';
+    has_files: number;
+    /** vclub-style embedded episode numbers, e.g. ['1', '2', '3'] */
+    series?: string[];
+}
+
+export interface RawSeriesItem {
+    id: string;
+    name: string;
+    o_name: string;
+    title: string;
+    cmd: string;
+    screenshot_uri: string;
+    cover: string;
+    description: string;
+    actors: string;
+    director: string;
+    year: string;
+    genres_str: string;
+    rating_imdb: string;
+    rating_kinopoisk: string;
+    category_id: string;
+    is_series: 0;
+    has_files: 0;
+}
+
+export interface RawSeason {
+    id: string;
+    name: string;
+    cmd: string;
+    description: string;
+    director: string;
+    actors: string;
+    year: string;
+    genres_str: string;
+    age: string;
+    rating_imdb: string;
+    rating_kinopoisk: string;
+    screenshot_uri: string;
+    added: string;
+    series: string[];
+}
+
+export interface RawEpgProgram {
+    id: string;
+    name: string;
+    start: string;
+    stop: string;
+    start_timestamp: number;
+    stop_timestamp: number;
+    descr: string;
+    category: string;
+}
+
+export interface GeneratedPortalData {
+    itvCategories: RawCategory[];
+    vodCategories: RawCategory[];
+    seriesCategories: RawCategory[];
+    radioCategories: RawCategory[];
+    channels: Map<string, RawChannel[]>; // categoryId -> channels
+    radio: Map<string, RawRadioStation[]>; // categoryId -> radio stations
+    vod: Map<string, RawVodItem[]>;       // categoryId -> items
+    /** Preserves the provider-neutral fixture order for the "*" VOD listing. */
+    vodOrder?: RawVodItem[];
+    series: Map<string, RawSeriesItem[]>; // categoryId -> items
+    seasons: Map<string, RawSeason[]>;    // seriesItemId -> seasons
+    epg: Map<string, RawEpgProgram[]>;    // channelId -> programs
+}
+
+// ---------------------------------------------------------------------------
+// Public test HLS streams used for create_link responses
+// ---------------------------------------------------------------------------
+const TEST_HLS_STREAMS = [
+    'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8',
+    'https://devstreaming-cdn.apple.com/videos/streaming/examples/bipbop_4x3/bipbop_4x3_variant.m3u8',
+    'https://playertest.longtailvideo.com/adaptive/oceans/oceans.m3u8',
+    'https://playertest.longtailvideo.com/adaptive/bbbfull/bbbfull.m3u8',
+];
+
+function pickStream(index: number): string {
+    return TEST_HLS_STREAMS[index % TEST_HLS_STREAMS.length];
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function coverUrl(seed: string, width = 300, height = 200): string {
+    return `https://picsum.photos/seed/${seed}/${width}/${height}`;
+}
+
+function logoUrl(seed: string): string {
+    return `https://picsum.photos/seed/logo-${seed}/100/100`;
+}
+
+const STALKER_MARKETING_VOD_CATEGORIES: RawCategory[] = [
+    { id: '2901', title: 'Action & Mystery', alias: 'action_mystery' },
+    { id: '2902', title: 'Cosmic & Future Worlds', alias: 'future_worlds' },
+    { id: '2903', title: 'Family & Comedy', alias: 'family_comedy' },
+    {
+        id: '2904',
+        title: 'Documentary & Drama',
+        alias: 'documentary_drama',
+    },
+];
+
+const STALKER_MARKETING_VOD_CATEGORY_IDS: Record<
+    MarketingMovieCategoryKey,
+    string
+> = {
+    'action-mystery': '2901',
+    'future-fantasy': '2902',
+    'family-comedy': '2903',
+    'drama-documentary': '2904',
+};
+
+function generateMarketingVodItems(): RawVodItem[] {
+    const assetBaseUrl = '/assets/marketing/poster';
+
+    return POSTER_SHOWCASE_MOVIES.map((movie, index) => {
+        const id = String(29_000 + index);
+        const posterUrl = `${assetBaseUrl}/${movie.slug}.png`;
+        const rating = movie.rating.toFixed(1);
+
+        return {
+            id,
+            name: movie.name,
+            o_name: movie.name,
+            title: movie.name,
+            cmd: `ffrt4://vod/${id}/index.m3u8`,
+            screenshot_uri: posterUrl,
+            cover: posterUrl,
+            description: `${movie.tagline} ${movie.description}`,
+            actors: movie.actors,
+            director: movie.director,
+            year: String(movie.year),
+            genre: movie.genre,
+            genres_str: movie.genre,
+            rating_imdb: rating,
+            rating_kinopoisk: rating,
+            category_id: STALKER_MARKETING_VOD_CATEGORY_IDS[movie.categoryKey],
+            is_series: 0,
+            has_files: 1,
+        };
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Generator
+// ---------------------------------------------------------------------------
+
+export function generatePortalData(config: ScenarioConfig): GeneratedPortalData {
+    faker.seed(config.seed);
+
+    const data: GeneratedPortalData = {
+        itvCategories: [],
+        vodCategories: [],
+        seriesCategories: [],
+        radioCategories: [],
+        channels: new Map(),
+        radio: new Map(),
+        vod: new Map(),
+        series: new Map(),
+        seasons: new Map(),
+        epg: new Map(),
+    };
+
+    // ------ ITV categories + channels ------
+    if (config.marketingFixture) {
+        // Screenshot-safe: shared fictional channels, logos served by this
+        // process, no censored category to keep out of a published frame.
+        data.itvCategories = generateMarketingItvCategories();
+        const marketingChannels = generateMarketingChannels();
+        for (const cat of data.itvCategories) {
+            const channels = marketingChannels.filter(
+                (channel) => channel.category_id === cat.id
+            );
+            data.channels.set(cat.id, channels);
+            for (const ch of channels) {
+                data.epg.set(
+                    ch.id,
+                    generateMarketingEpg(ch.name, marketingEpgTitlesFor(ch.name))
+                );
+            }
+        }
+    } else {
+        data.itvCategories = generateCategories(
+            'itv',
+            config.categoryCount.itv
+        );
+        // Real Ministra portals mark adult genres as censored and EXCLUDE
+        // their channels from get_all_channels / the "*" listing; the
+        // channels are only served by paging the specific genre. Mirror that
+        // with one extra censored category so clients can exercise the
+        // fallback path.
+        data.itvCategories.push({
+            id: '1099',
+            title: 'For adults',
+            alias: 'for_adults',
+            censored: '1',
+        });
+        let channelIndex = 0;
+        for (const cat of data.itvCategories) {
+            const channels = generateChannels(
+                cat.id,
+                config.itemsPerCategory,
+                channelIndex,
+                config.staticChannelCmd === true
+            );
+            data.channels.set(cat.id, channels);
+            for (const ch of channels) {
+                data.epg.set(ch.id, generateEpg(ch.name));
+            }
+            channelIndex += config.itemsPerCategory;
+        }
+    }
+
+    // ------ Radio categories + stations ------
+    data.radioCategories = generateCategories(
+        'radio',
+        config.categoryCount.radio
+    );
+    let radioIndex = 0;
+    for (const cat of data.radioCategories) {
+        const stations = generateRadioStations(
+            cat.id,
+            config.itemsPerCategory,
+            radioIndex,
+            config.marketingFixture === true
+        );
+        data.radio.set(cat.id, stations);
+        radioIndex += config.itemsPerCategory;
+    }
+
+    // ------ VOD categories + items ------
+    if (config.marketingFixture) {
+        data.vodCategories = STALKER_MARKETING_VOD_CATEGORIES.map(
+            (category) => ({ ...category })
+        );
+        const marketingVodItems = generateMarketingVodItems();
+        data.vodOrder = marketingVodItems;
+        for (const category of data.vodCategories) {
+            data.vod.set(
+                category.id,
+                marketingVodItems.filter(
+                    (item) => item.category_id === category.id
+                )
+            );
+        }
+    } else {
+        data.vodCategories = generateCategories(
+            'vod',
+            config.categoryCount.vod
+        );
+        let vodIndex = 0;
+        for (const cat of data.vodCategories) {
+            const items = generateVodItems(
+                cat.id,
+                config.itemsPerCategory,
+                vodIndex,
+                config.isSeriesFraction,
+                config.embeddedSeriesFraction,
+                config.seasonsPerSeries,
+                config.episodesPerSeason
+            );
+            data.vod.set(cat.id, items);
+            vodIndex += config.itemsPerCategory;
+        }
+    }
+
+    // ------ Series categories + items ------
+    data.seriesCategories = generateCategories('series', config.categoryCount.series);
+    let seriesIndex = 0;
+    for (const cat of data.seriesCategories) {
+        const items = generateSeriesItems(cat.id, config.itemsPerCategory, seriesIndex);
+        data.series.set(cat.id, items);
+        for (const item of items) {
+            data.seasons.set(item.id, generateSeasons(item, config.seasonsPerSeries, config.episodesPerSeason));
+        }
+        seriesIndex += config.itemsPerCategory;
+    }
+
+    return data;
+}
+
+// ---------------------------------------------------------------------------
+// Category generators
+// ---------------------------------------------------------------------------
+
+const ITV_GENRE_NAMES = [
+    'News', 'Sports', 'Movies', 'Entertainment', 'Kids',
+    'Documentary', 'Music', 'Comedy', 'Drama', 'Reality TV',
+    'Lifestyle', 'Travel', 'Food', 'Tech', 'Science',
+    'History', 'Nature', 'Animation', 'Gaming', 'Shopping',
+];
+
+const VOD_GENRE_NAMES = [
+    'Action', 'Comedy', 'Drama', 'Horror', 'Thriller',
+    'Romance', 'Sci-Fi', 'Fantasy', 'Animation', 'Documentary',
+    'Biography', 'Crime', 'Mystery', 'Adventure', 'Family',
+    'War', 'Western', 'Musical', 'Sport', 'History',
+];
+
+const SERIES_GENRE_NAMES = [
+    'Drama Series', 'Comedy Series', 'Crime Series', 'Sci-Fi Series',
+    'Reality Shows', 'Anime', 'Soap Opera', 'Mini Series',
+    'Documentary Series', 'Kids Shows', 'Action Series', 'Fantasy Series',
+    'Medical', 'Legal', 'Political', 'Romance Series', 'Historical',
+    'Thriller Series', 'Horror Series', 'Western Series',
+];
+
+const RADIO_GENRE_NAMES = [
+    'News Radio', 'Talk Radio', 'Jazz', 'Classical', 'Rock',
+    'Pop Hits', 'Electronic', 'World Music', 'Sports Radio', 'Public Radio',
+    'Local Stations', 'Latin', 'Hip Hop', 'Ambient', 'Oldies',
+    'Country', 'Reggae', 'Soul', 'Dance', 'Weather',
+];
+
+function getGenreNames(type: 'itv' | 'vod' | 'series' | 'radio'): string[] {
+    if (type === 'itv') return ITV_GENRE_NAMES;
+    if (type === 'vod') return VOD_GENRE_NAMES;
+    if (type === 'radio') return RADIO_GENRE_NAMES;
+    return SERIES_GENRE_NAMES;
+}
+
+function generateCategories(
+    type: 'itv' | 'vod' | 'series' | 'radio',
+    count: number
+): RawCategory[] {
+    const names = getGenreNames(type);
+    return Array.from({ length: count }, (_, i) => {
+        const idBase =
+            type === 'itv'
+                ? 1000
+                : type === 'vod'
+                  ? 2000
+                  : type === 'series'
+                    ? 3000
+                    : 4000;
+        const id = String(idBase + i + 1);
+        const title = names[i % names.length];
+        return { id, title, alias: title.toLowerCase().replace(/\s+/g, '_') };
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Channel generators
+// ---------------------------------------------------------------------------
+
+function generateChannels(
+    categoryId: string,
+    count: number,
+    startIndex: number,
+    staticCmd: boolean
+): RawChannel[] {
+    return Array.from({ length: count }, (_, i) => {
+        const globalIndex = startIndex + i;
+        const id = String(10000 + globalIndex);
+        const name = `${faker.company.name()} TV`;
+        return {
+            id,
+            name,
+            o_name: name,
+            // A static row carries a playable address with the usual
+            // `<solution> <url>` prefix; the default `ffrt4://` command is a
+            // portal-internal pseudo-URL that only `create_link` can resolve,
+            // which is exactly what `use_http_tmp_link` announces.
+            cmd: staticCmd
+                ? `ffrt3 ${pickStream(globalIndex)}`
+                : `ffrt4://ch/live/${id}/index.m3u8`,
+            logo: logoUrl(`ch-${id}`),
+            category_id: categoryId,
+            tv_genre_id: categoryId,
+            xmltv_id: `channel-${id}.example`,
+            use_http_tmp_link: staticCmd ? '0' : '1',
+            use_load_balancing: '0',
+        };
+    });
+}
+
+function generateRadioStations(
+    categoryId: string,
+    count: number,
+    startIndex: number,
+    localLogos = false
+): RawRadioStation[] {
+    return Array.from({ length: count }, (_, i) => {
+        const globalIndex = startIndex + i;
+        const id = String(40000 + globalIndex);
+        const name = `${faker.music.genre()} ${faker.word.noun()} Radio`;
+        return {
+            id,
+            name,
+            o_name: name,
+            cmd: `ffrt4://radio/${id}/index.mp3`,
+            logo: localLogos ? marketingLogoPath(name) : logoUrl(`radio-${id}`),
+            category_id: categoryId,
+            tv_genre_id: categoryId,
+            number: String(globalIndex + 1),
+            radio: true,
+            use_http_tmp_link: '1',
+            use_load_balancing: '0',
+        };
+    });
+}
+
+// ---------------------------------------------------------------------------
+// VOD generators
+// ---------------------------------------------------------------------------
+
+function generateVodItems(
+    categoryId: string,
+    count: number,
+    startIndex: number,
+    isSeriesFraction: number,
+    embeddedSeriesFraction: number,
+    seasonsPerSeries: number,
+    episodesPerSeason: number
+): RawVodItem[] {
+    return Array.from({ length: count }, (_, i) => {
+        const globalIndex = startIndex + i;
+        const id = String(20000 + globalIndex);
+        const title = faker.music.songName() + ': ' + faker.lorem.words(2);
+        const isSeries = i / count < isSeriesFraction;
+        const hasEmbeddedSeries = !isSeries && (i / count < isSeriesFraction + embeddedSeriesFraction);
+
+        const item: RawVodItem = {
+            id,
+            name: title,
+            o_name: title,
+            title,
+            cmd: `ffrt4://vod/${id}/index.m3u8`,
+            screenshot_uri: coverUrl(`vod-${id}`),
+            cover: coverUrl(`vod-cover-${id}`, 300, 450),
+            description: faker.lorem.paragraph(),
+            actors: Array.from({ length: 4 }, () => faker.person.fullName()).join(', '),
+            director: faker.person.fullName(),
+            year: String(faker.date.past({ years: 20 }).getFullYear()),
+            genre: faker.music.genre(),
+            genres_str: [faker.music.genre(), faker.music.genre()].join(', '),
+            rating_imdb: (Math.random() * 4 + 5).toFixed(1),
+            rating_kinopoisk: (Math.random() * 4 + 5).toFixed(1),
+            category_id: categoryId,
+            is_series: isSeries ? '1' : 0,
+            has_files: isSeries ? 0 : 1,
+        };
+
+        if (hasEmbeddedSeries) {
+            // Real vclub portals expose embedded episodes as an array of
+            // episode numbers; playback appends the number to the item cmd.
+            item.series = generateEmbeddedEpisodes(
+                seasonsPerSeries * episodesPerSeason
+            );
+        }
+
+        return item;
+    });
+}
+
+function generateEmbeddedEpisodes(count: number): string[] {
+    return Array.from({ length: count }, (_, i) => String(i + 1));
+}
+
+// ---------------------------------------------------------------------------
+// Series generators
+// ---------------------------------------------------------------------------
+
+function generateSeriesItems(categoryId: string, count: number, startIndex: number): RawSeriesItem[] {
+    return Array.from({ length: count }, (_, i) => {
+        const globalIndex = startIndex + i;
+        const id = String(30000 + globalIndex);
+        const title = faker.company.catchPhrase();
+        return {
+            id,
+            name: title,
+            o_name: title,
+            title,
+            cmd: `ffrt4://series/${id}`,
+            screenshot_uri: coverUrl(`series-${id}`),
+            cover: coverUrl(`series-cover-${id}`, 300, 450),
+            description: faker.lorem.paragraph(),
+            actors: Array.from({ length: 4 }, () => faker.person.fullName()).join(', '),
+            director: faker.person.fullName(),
+            year: String(faker.date.past({ years: 10 }).getFullYear()),
+            genres_str: [faker.music.genre(), faker.music.genre()].join(', '),
+            rating_imdb: (Math.random() * 4 + 5).toFixed(1),
+            rating_kinopoisk: (Math.random() * 4 + 5).toFixed(1),
+            category_id: categoryId,
+            is_series: 0,
+            has_files: 0,
+        };
+    });
+}
+
+export function generateSeasons(
+    series: RawSeriesItem,
+    seasonCount: number,
+    episodesPerSeason: number
+): RawSeason[] {
+    return Array.from({ length: seasonCount }, (_, s) => {
+        const seasonId = `${series.id}-s${s + 1}`;
+        const episodes = Array.from({ length: episodesPerSeason }, (_, e) =>
+            String(e + 1)
+        );
+        return {
+            id: seasonId,
+            name: `Season ${s + 1}`,
+            cmd: `ffrt4://series/${series.id}/season/${s + 1}`,
+            description: faker.lorem.sentence(),
+            director: series.director,
+            actors: series.actors,
+            year: series.year,
+            genres_str: series.genres_str,
+            age: '16',
+            rating_imdb: series.rating_imdb,
+            rating_kinopoisk: series.rating_kinopoisk,
+            screenshot_uri: coverUrl(`${seasonId}`),
+            added: new Date(Date.now() - Math.random() * 1e10).toISOString(),
+            series: episodes,
+        };
+    });
+}
+
+// ---------------------------------------------------------------------------
+// EPG generator
+// ---------------------------------------------------------------------------
+
+const EPG_PROGRAM_TYPES = [
+    'News',
+    'Movie',
+    'Documentary',
+    'Entertainment',
+    'Sports',
+    'Kids',
+    'Series',
+];
+
+export function generateEpg(channelName: string): RawEpgProgram[] {
+    const programs: RawEpgProgram[] = [];
+    const SLOT_MINUTES = 120;
+    const SLOTS_PER_DAY = (24 * 60) / SLOT_MINUTES;
+    const TOTAL_DAYS = 7;
+    const dayStart = new Date();
+    dayStart.setUTCHours(0, 0, 0, 0);
+
+    for (let i = 0; i < SLOTS_PER_DAY * TOTAL_DAYS; i++) {
+        const startDate = new Date(
+            dayStart.getTime() + i * SLOT_MINUTES * 60 * 1000
+        );
+        const stopDate = new Date(
+            startDate.getTime() + SLOT_MINUTES * 60 * 1000
+        );
+        const category = EPG_PROGRAM_TYPES[i % EPG_PROGRAM_TYPES.length];
+        programs.push({
+            id: String(i + 1),
+            name: `${channelName}: ${faker.company.catchPhrase()}`,
+            start: startDate.toISOString(),
+            stop: stopDate.toISOString(),
+            start_timestamp: Math.floor(startDate.getTime() / 1000),
+            stop_timestamp: Math.floor(stopDate.getTime() / 1000),
+            descr: faker.lorem.sentence(),
+            category,
+        });
+    }
+
+    return programs;
+}
+
+// ---------------------------------------------------------------------------
+// create_link helper
+// ---------------------------------------------------------------------------
+
+export function resolveStreamUrl(cmd: string, itemIndex: number): string {
+    if (cmd.startsWith('ffrt4://')) {
+        return pickStream(itemIndex);
+    }
+    return pickStream(0);
+}

@@ -1,0 +1,2220 @@
+import {
+    _electron as electron,
+    APIRequestContext,
+    ElectronApplication,
+    expect,
+    Locator,
+    Page,
+    test as base,
+} from '@playwright/test';
+import { spawn, type ChildProcess } from 'child_process';
+import { createServer, Server } from 'http';
+import {
+    accessSync,
+    constants as fsConstants,
+    existsSync,
+    mkdtempSync,
+    readdirSync,
+    readFileSync,
+    rmSync,
+    statSync,
+    writeFileSync,
+} from 'fs';
+import { tmpdir } from 'os';
+import { dirname, join, resolve } from 'path';
+import {
+    dataDirPrefix,
+    reapOrphanedDataDirs,
+    writeDataDirOwnerMarker,
+} from './data-dir-reaper';
+import {
+    captureElectronProcess,
+    closeElectronApplicationAndConfirmExit,
+    type ElectronExitConfirmationOptions,
+    prepareElectronApplication,
+} from './electron-process-lifecycle';
+import {
+    waitForXtreamImportCompleted,
+    xtreamPlaylistIdFromUrl,
+} from './xtream-import-wait';
+
+export const workspaceRoot = resolve(__dirname, '../../..');
+export const electronMainPath = join(
+    workspaceRoot,
+    'dist/apps/electron-backend/main.js'
+);
+export const packagedRendererIndexPath = join(
+    workspaceRoot,
+    'dist/apps/web/index.html'
+);
+export const m3uFixturePath = join(
+    workspaceRoot,
+    'apps/web-e2e/src/fixtures/test.m3u'
+);
+export const stalkerMockPort = process.env['MOCK_PORT'] ?? '3210';
+export const xtreamMockPort = process.env['XTREAM_MOCK_PORT'] ?? '3211';
+export const stalkerMockServer = `http://localhost:${stalkerMockPort}`;
+export const xtreamMockServer = `http://localhost:${xtreamMockPort}`;
+export const defaultXtreamPortalName = 'Mock Xtream Portal';
+export const defaultStalkerPortalName = 'Mock Stalker Portal';
+export const defaultXtreamUsername = 'user1';
+export const defaultXtreamPassword = 'pass1';
+export const defaultStalkerMacAddress = '00:1A:79:00:00:01';
+const electronAppCloseTimeoutMs = Number(
+    process.env['IPTVNATOR_E2E_CLOSE_TIMEOUT_MS'] ?? '10000'
+);
+const electronAppKillWaitMs = 2000;
+
+export type PortalProvider = 'stalker' | 'xtream';
+
+export type M3uTestChannel = {
+    groupTitle?: string;
+    logo?: string;
+    name: string;
+    radio?: boolean;
+    tvgCountry?: string;
+    tvgId?: string;
+    tvgLanguage?: string;
+    tvgName?: string;
+    url: string;
+};
+
+export type MutableTextServer = {
+    close: () => Promise<void>;
+    origin: string;
+    resourceUrl: string;
+    setBody: (body: string) => void;
+};
+
+type ElectronFixtures = {
+    dataDir: string;
+};
+
+export type LaunchElectronAppOptions = {
+    /** Test bootstrap that loads the real main entry after installing probes. */
+    entryPoint?: string;
+    /** Electron/Chromium switches — they must precede the entry point. */
+    args?: readonly string[];
+    /**
+     * Arguments for the app itself, appended *after* the entry point so they
+     * land in `process.argv` the way a file-association launch does.
+     */
+    appArgs?: readonly string[];
+    environmentInheritance?: 'all' | 'runtime-only';
+    env?: Record<string, string | undefined>;
+    omitEnvKeys?: readonly string[];
+};
+
+export type PortalDebugEvent = {
+    durationMs: number;
+    operation: string;
+    provider: PortalProvider;
+    request: unknown;
+    requestId: string;
+    response?: unknown;
+    startedAt: string;
+    status: 'success' | 'error';
+    transport: 'electron-main' | 'electron-renderer' | 'pwa-http';
+};
+
+export type DbOperationEvent = {
+    operationId?: string;
+    operation: string;
+    playlistId?: string;
+    status: 'started' | 'progress' | 'completed' | 'cancelled' | 'error';
+    phase?: string;
+    current?: number;
+    total?: number;
+    increment?: number;
+    error?: string;
+};
+
+declare global {
+    interface Window {
+        __dbOperationEvents?: DbOperationEvent[];
+        __dbOperationUnsubscribe?: (() => void) | undefined;
+        __portalDebugEvents?: PortalDebugEvent[];
+        __portalDebugUnsubscribe?: (() => void) | undefined;
+        __rendererFrameCount?: number;
+        __rendererFrameRequestId?: number;
+    }
+}
+
+export type LaunchedElectronApp = {
+    electronApp: ElectronApplication;
+    mainWindow: Page;
+};
+
+export type CompetingElectronInstanceResult = {
+    exitCode: number | null;
+    signal: NodeJS.Signals | null;
+    stderr: string;
+    timedOut: boolean;
+};
+
+const competingInstanceStderrLimit = 4000;
+
+/**
+ * Removes a run's data directory, tolerating handles the OS has not released
+ * yet.
+ *
+ * Electron's single-instance lock keeps `SingletonLock`/`SingletonSocket`
+ * (`lockfile` on Windows) open for the whole process lifetime, and Windows
+ * releases those handles asynchronously as the process dies — so a removal
+ * issued right after `closeElectronApp` can still hit EBUSY. This is throwaway
+ * temp state, so a stubborn directory is a warning, never a test failure.
+ */
+function removeDataDir(dataDir: string): void {
+    try {
+        rmSync(dataDir, {
+            force: true,
+            maxRetries: 20,
+            recursive: true,
+            retryDelay: 250,
+        });
+    } catch (error) {
+        console.warn(`Could not remove E2E data dir ${dataDir}:`, error);
+    }
+}
+
+let reapedOrphanedDataDirs = false;
+
+export const test = base.extend<ElectronFixtures>({
+    dataDir: async ({ browserName }, use) => {
+        void browserName;
+        if (!reapedOrphanedDataDirs) {
+            reapedOrphanedDataDirs = true;
+            reapOrphanedDataDirs();
+        }
+        const dataDir = mkdtempSync(join(tmpdir(), dataDirPrefix));
+        writeDataDirOwnerMarker(dataDir);
+
+        await use(dataDir);
+
+        removeDataDir(dataDir);
+    },
+});
+
+export { expect };
+
+/**
+ * Builds the argv every locally launched Electron process must share.
+ *
+ * Headless Linux CI has no usable sandbox or GPU, and an Electron started
+ * without these flags there dies on a signal instead of running — so any
+ * helper that spawns the app itself has to use the same list. `appArgs` land
+ * after the entry point, which is where the OS puts an opened file's path.
+ */
+export function buildElectronLaunchArgs(
+    extraArgs: readonly string[] = [],
+    appArgs: readonly string[] = [],
+    entryPoint = electronMainPath
+): string[] {
+    const args = [...extraArgs, entryPoint, ...appArgs];
+
+    if (process.platform === 'linux' && process.env['CI']) {
+        args.unshift('--no-sandbox', '--disable-gpu');
+    }
+
+    return args;
+}
+
+export async function launchElectronApp(
+    dataDir: string,
+    options: LaunchElectronAppOptions = {}
+): Promise<LaunchedElectronApp> {
+    if (!existsSync(electronMainPath)) {
+        throw new Error(
+            `Electron build not found at ${electronMainPath}. Run the build before executing the E2E suite.`
+        );
+    }
+    assertPackagedRendererBuildIsElectronSafe();
+
+    const args = buildElectronLaunchArgs(
+        options.args,
+        options.appArgs,
+        options.entryPoint
+    );
+
+    const electronApp = await electron.launch({
+        args,
+        env: buildElectronLaunchEnvironment(dataDir, options),
+    });
+    const electronProcess = captureElectronProcess(electronApp);
+    return prepareElectronApplication({
+        application: electronApp,
+        dispose: (application) =>
+            closeElectronApplicationAndConfirmExit(application, {
+                closeTimeoutMs: electronAppCloseTimeoutMs,
+                exitTimeoutMs: electronAppKillWaitMs,
+            }),
+        prepare: async (application) => {
+            attachElectronProcessDiagnostics(electronProcess);
+            const mainWindow = await findMainWindow(application);
+            await waitForAppReady(mainWindow);
+            await startPortalDebugCapture(mainWindow);
+            await startDbOperationCapture(mainWindow);
+            await startRendererFrameCapture(mainWindow);
+            return {
+                electronApp: application,
+                mainWindow,
+            };
+        },
+    });
+}
+
+export function buildElectronLaunchEnvironment(
+    dataDir: string,
+    options: LaunchElectronAppOptions = {},
+    inheritedEnvironment: NodeJS.ProcessEnv = process.env
+): Record<string, string> {
+    if (
+        options.environmentInheritance !== undefined &&
+        options.environmentInheritance !== 'all' &&
+        options.environmentInheritance !== 'runtime-only'
+    ) {
+        throw new Error('Electron environment inheritance mode is invalid');
+    }
+    const runtimeOnly = options.environmentInheritance === 'runtime-only';
+    const environment: Record<string, string | undefined> = {
+        ...(runtimeOnly
+            ? selectElectronRuntimeEnvironment(inheritedEnvironment)
+            : inheritedEnvironment),
+        // Electron E2E uses local mock HTTP servers for playlists, portals, and EPG sources.
+        IPTVNATOR_ALLOW_PRIVATE_NETWORK_URLS: runtimeOnly
+            ? '1'
+            : (inheritedEnvironment['IPTVNATOR_ALLOW_PRIVATE_NETWORK_URLS'] ??
+              '1'),
+        ...options.env,
+        ELECTRON_IS_DEV: '0',
+        IPTVNATOR_E2E_DATA_DIR: dataDir,
+        NODE_ENV: 'test',
+    };
+    for (const key of options.omitEnvKeys ?? []) {
+        delete environment[key];
+    }
+    return Object.fromEntries(
+        Object.entries(environment).filter(
+            (entry): entry is [string, string] => typeof entry[1] === 'string'
+        )
+    );
+}
+
+export const ELECTRON_RUNTIME_ENVIRONMENT_KEYS = Object.freeze([
+    'APPDATA',
+    'COMSPEC',
+    'DBUS_SESSION_BUS_ADDRESS',
+    'DISPLAY',
+    'HOME',
+    'LANG',
+    'LANGUAGE',
+    'LC_ALL',
+    'LC_CTYPE',
+    'LOCALAPPDATA',
+    'LOGNAME',
+    'PATH',
+    'PATHEXT',
+    'SYSTEMROOT',
+    'TEMP',
+    'TMP',
+    'TMPDIR',
+    'USER',
+    'USERPROFILE',
+    'WAYLAND_DISPLAY',
+    'WINDIR',
+    'XAUTHORITY',
+    'XDG_RUNTIME_DIR',
+    'XDG_SESSION_TYPE',
+    '__CF_USER_TEXT_ENCODING',
+] as const);
+
+function selectElectronRuntimeEnvironment(
+    inheritedEnvironment: NodeJS.ProcessEnv
+): Record<string, string> {
+    const selected: Record<string, string> = {};
+    const allowed = new Set(
+        ELECTRON_RUNTIME_ENVIRONMENT_KEYS.map((key) => key.toUpperCase())
+    );
+    for (const [key, value] of Object.entries(inheritedEnvironment)) {
+        if (typeof value === 'string' && allowed.has(key.toUpperCase())) {
+            selected[key] = value;
+        }
+    }
+    return selected;
+}
+
+/**
+ * Resolve the x64 unpacked Linux executable produced by electron-builder.
+ * An explicit path wins so CI can point at an AppImage/Flatpak extraction
+ * without relying on electron-builder's local output directory names.
+ */
+export function resolvePackagedLinuxExecutable(
+    explicitPath = process.env['IPTVNATOR_E2E_PACKAGED_EXECUTABLE']
+): string | undefined {
+    if (explicitPath?.trim()) {
+        return resolve(explicitPath.trim());
+    }
+
+    const executablesRoot = join(workspaceRoot, 'dist', 'executables');
+    if (!existsSync(executablesRoot)) {
+        return undefined;
+    }
+
+    const unpackedDirectories = readdirSync(executablesRoot, {
+        withFileTypes: true,
+    })
+        .filter(
+            (entry) =>
+                entry.isDirectory() &&
+                entry.name.startsWith('linux') &&
+                entry.name.endsWith('-unpacked') &&
+                !entry.name.includes('arm')
+        )
+        .sort((left, right) => {
+            const leftPriority = left.name === 'linux-unpacked' ? 0 : 1;
+            const rightPriority = right.name === 'linux-unpacked' ? 0 : 1;
+            return (
+                leftPriority - rightPriority ||
+                left.name.localeCompare(right.name)
+            );
+        });
+
+    for (const directory of unpackedDirectories) {
+        for (const executableName of ['IPTVnator', 'iptvnator']) {
+            const candidate = join(
+                executablesRoot,
+                directory.name,
+                executableName
+            );
+            try {
+                accessSync(candidate, fsConstants.X_OK);
+                if (statSync(candidate).isFile()) {
+                    return candidate;
+                }
+            } catch {
+                // Keep looking for the next unpacked x64 layout.
+            }
+        }
+    }
+
+    return undefined;
+}
+
+export function getPackagedLinuxNativeDir(executablePath: string): string {
+    return join(
+        dirname(resolve(executablePath)),
+        'resources',
+        'app.asar.unpacked',
+        'electron-backend',
+        'native'
+    );
+}
+
+export function resolvePackagedElectronLaunchArgs(
+    getuid: (() => number) | undefined
+): string[] {
+    const args = ['--ignore-gpu-blocklist'];
+    if (typeof getuid === 'function' && getuid() === 0) {
+        args.push('--no-sandbox');
+    }
+    return args;
+}
+
+/**
+ * Launch a real packaged Linux executable. Unlike the regular source E2E
+ * launcher, this deliberately keeps Chromium's GPU path enabled and ignores
+ * its GPU blocklist: the frame-copy smoke sets LIBGL_ALWAYS_SOFTWARE=1, and
+ * CI's llvmpipe WebGL2 context must prove that the shared-memory frame reaches
+ * the renderer canvas.
+ */
+export async function launchPackagedElectronApp(
+    executablePath: string,
+    dataDir: string,
+    options: LaunchElectronAppOptions = {}
+): Promise<LaunchedElectronApp> {
+    if (process.platform !== 'linux') {
+        throw new Error(
+            'The packaged embedded-MPV launcher is available on Linux only.'
+        );
+    }
+
+    const resolvedExecutablePath = resolve(executablePath);
+    try {
+        accessSync(resolvedExecutablePath, fsConstants.X_OK);
+        if (!statSync(resolvedExecutablePath).isFile()) {
+            throw new Error('not a regular file');
+        }
+    } catch (error) {
+        throw new Error(
+            `Packaged Linux executable is not a regular executable file at ${resolvedExecutablePath}: ${
+                error instanceof Error ? error.message : String(error)
+            }`
+        );
+    }
+
+    const electronApp = await electron.launch({
+        executablePath: resolvedExecutablePath,
+        args: resolvePackagedElectronLaunchArgs(process.getuid),
+        env: {
+            ...process.env,
+            IPTVNATOR_ALLOW_PRIVATE_NETWORK_URLS:
+                process.env['IPTVNATOR_ALLOW_PRIVATE_NETWORK_URLS'] ?? '1',
+            ...options.env,
+            ELECTRON_IS_DEV: '0',
+            IPTVNATOR_E2E_DATA_DIR: dataDir,
+            NODE_ENV: 'test',
+        },
+    });
+    const electronProcess = captureElectronProcess(electronApp);
+    return prepareElectronApplication({
+        application: electronApp,
+        dispose: (application) =>
+            closeElectronApplicationAndConfirmExit(application, {
+                closeTimeoutMs: electronAppCloseTimeoutMs,
+                exitTimeoutMs: electronAppKillWaitMs,
+            }),
+        prepare: async (application) => {
+            attachElectronProcessDiagnostics(electronProcess);
+            const mainWindow = await findMainWindow(application);
+            await waitForAppReady(mainWindow);
+            return {
+                electronApp: application,
+                mainWindow,
+            };
+        },
+    });
+}
+
+function attachElectronProcessDiagnostics(childProcess: ChildProcess): void {
+    if (!process.env['CI']) {
+        return;
+    }
+
+    childProcess.stdout?.on('data', (chunk: Buffer) => {
+        console.log(`[electron stdout] ${chunk.toString().trimEnd()}`);
+    });
+    childProcess.stderr?.on('data', (chunk: Buffer) => {
+        console.error(`[electron stderr] ${chunk.toString().trimEnd()}`);
+    });
+    childProcess.once('exit', (code, signal) => {
+        console.log(
+            `[electron process exit] code=${code ?? '<null>'} signal=${
+                signal ?? '<null>'
+            }`
+        );
+    });
+}
+
+/**
+ * Starts a raw second Electron process against an already-running instance's
+ * data directory and reports how it terminated.
+ *
+ * Deliberately not `launchElectronApp`: the expected outcome is that no window
+ * is ever created, because the single-instance guard hands the launch over to
+ * the running app. Two live instances would share a Chromium profile whose
+ * IndexedDB only one of them can lock, which is how settings silently stopped
+ * persisting (issues #102, #1156).
+ */
+export async function launchCompetingElectronInstance(
+    dataDir: string,
+    options: {
+        /** Arguments for the app itself, e.g. a playlist path to open. */
+        appArgs?: readonly string[];
+        timeoutMs?: number;
+    } = {}
+): Promise<CompetingElectronInstanceResult> {
+    const { appArgs = [], timeoutMs = 30000 } = options;
+    // In a Node context the `electron` package resolves to its binary path.
+    const electronBinaryPath = require('electron') as unknown as string;
+    const child = spawn(
+        electronBinaryPath,
+        buildElectronLaunchArgs([], appArgs),
+        {
+            env: {
+                ...process.env,
+                ELECTRON_IS_DEV: '0',
+                IPTVNATOR_E2E_DATA_DIR: dataDir,
+                NODE_ENV: 'test',
+            },
+            stdio: ['ignore', 'ignore', 'pipe'],
+        }
+    );
+
+    // Kept for the assertion message: a competing launch that dies for an
+    // unrelated reason (missing sandbox, missing GPU) looks exactly like a
+    // refused one from the outside.
+    let stderr = '';
+    child.stderr?.on('data', (chunk: Buffer) => {
+        stderr = `${stderr}${chunk.toString()}`.slice(
+            -competingInstanceStderrLimit
+        );
+    });
+
+    return new Promise((resolvePromise) => {
+        const timer = setTimeout(() => {
+            child.kill();
+            resolvePromise({
+                exitCode: null,
+                signal: null,
+                stderr,
+                timedOut: true,
+            });
+        }, timeoutMs);
+
+        child.once('exit', (code, signal) => {
+            clearTimeout(timer);
+            resolvePromise({
+                exitCode: code,
+                signal,
+                stderr,
+                timedOut: false,
+            });
+        });
+    });
+}
+
+export async function closeElectronApp(
+    app: LaunchedElectronApp
+): Promise<void> {
+    await closeElectronAppAndConfirmExit(app);
+}
+
+export async function closeElectronAppAndConfirmExit(
+    app: LaunchedElectronApp
+): Promise<void> {
+    await closeElectronApplicationAndConfirmExit(
+        app.electronApp,
+        electronAppExitConfirmationOptions()
+    );
+}
+
+/** The close/exit timeouts the shared fixture applies to every launch. */
+export function electronAppExitConfirmationOptions(): ElectronExitConfirmationOptions {
+    return {
+        closeTimeoutMs: electronAppCloseTimeoutMs,
+        exitTimeoutMs: electronAppKillWaitMs,
+    };
+}
+
+function assertPackagedRendererBuildIsElectronSafe(): void {
+    if (!existsSync(packagedRendererIndexPath)) {
+        throw new Error(
+            `Renderer build not found at ${packagedRendererIndexPath}. Run pnpm nx run electron-backend:build-e2e before executing the Electron E2E suite.`
+        );
+    }
+
+    const indexHtml = readFileSync(packagedRendererIndexPath, 'utf8');
+    const baseHrefMatch = indexHtml.match(/<base\s+href="([^"]*)"/i);
+    const baseHref = baseHrefMatch?.[1] ?? '<missing>';
+
+    if (baseHref !== './') {
+        throw new Error(
+            `Renderer build at ${packagedRendererIndexPath} is not file-safe for packaged Electron. Found base href ${JSON.stringify(baseHref)}. Run pnpm nx run electron-backend:build-e2e or use an Electron E2E Nx target so dist/apps/web is rebuilt with the electron-e2e configuration.`
+        );
+    }
+}
+
+async function findMainWindow(app: ElectronApplication): Promise<Page> {
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 2000));
+
+    const windows = app.windows();
+
+    for (const window of windows) {
+        const title = await window.title();
+
+        if (!title.includes('DevTools')) {
+            return window;
+        }
+    }
+
+    return app.firstWindow();
+}
+
+async function waitForAppReady(page: Page): Promise<void> {
+    await page.waitForLoadState('domcontentloaded');
+    await page.waitForSelector('app-root', { timeout: 30000 });
+    try {
+        await page.waitForFunction(
+            () => {
+                const appRoot = document.querySelector('app-root');
+
+                return Boolean(appRoot && appRoot.innerHTML.trim().length > 0);
+            },
+            { timeout: 30000 }
+        );
+    } catch (error) {
+        const diagnostics = await page.evaluate(() => ({
+            appRootLength:
+                document.querySelector('app-root')?.innerHTML.trim().length ??
+                0,
+            baseHref:
+                document.querySelector('base')?.getAttribute('href') ??
+                '<missing>',
+            readyState: document.readyState,
+            title: document.title,
+            url: location.href,
+        }));
+
+        const reason =
+            error instanceof Error ? error.message : 'unknown startup error';
+
+        throw new Error(
+            `Electron app did not render visible app-root within 30000ms. ${reason}. Diagnostics: ${JSON.stringify(
+                diagnostics
+            )}`
+        );
+    }
+}
+
+export async function openAddPlaylistDialog(page: Page): Promise<void> {
+    await page.getByRole('button', { name: 'Add playlist' }).click();
+    await expect(page.locator('mat-dialog-container').last()).toBeVisible();
+}
+
+async function getActiveDialog(page: Page): Promise<Locator> {
+    const dialog = page.locator('mat-dialog-container').last();
+    await expect(dialog).toBeVisible();
+    return dialog;
+}
+
+export async function stubNativePlaylistFileDialog(
+    electronApp: ElectronApplication,
+    filePath: string
+): Promise<void> {
+    await electronApp.evaluate(async ({ dialog }, selectedFilePath) => {
+        dialog.showOpenDialog = async () =>
+            ({
+                canceled: false,
+                filePaths: [selectedFilePath],
+            }) as any;
+    }, filePath);
+}
+
+export async function importM3uPlaylistFromNativeDialog(
+    app: LaunchedElectronApp,
+    filePath: string
+): Promise<void> {
+    await openAddPlaylistDialog(app.mainWindow);
+    const dialog = await getActiveDialog(app.mainWindow);
+    await clickDialogCategoryOption(dialog, /^m3u$/i);
+    await clickDialogSubtypeOption(
+        dialog,
+        /m3u\s*file|add\s+via\s+file\s+upload/i,
+        'mat-button-toggle[value="file"]'
+    );
+    const fileInput = dialog.locator('input[type="file"][name="playlist"]');
+
+    await fileInput.evaluate((element, selectedFilePath) => {
+        (element as HTMLInputElement).dataset['filePathOverride'] =
+            selectedFilePath;
+    }, filePath);
+    await fileInput.setInputFiles(filePath);
+    await expect(
+        dialog.getByRole('button', { name: /add playlist/i })
+    ).toBeEnabled({ timeout: 10000 });
+    await dialog.getByRole('button', { name: /add playlist/i }).click();
+    await dialog.waitFor({ state: 'detached' });
+}
+
+export async function dropM3uPlaylistOntoWorkspace(
+    page: Page,
+    filePath: string
+): Promise<void> {
+    await expect(page.locator('.workspace-shell')).toBeVisible({
+        timeout: 20000,
+    });
+
+    const inputHandle = await page.evaluateHandle(() => {
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.style.position = 'fixed';
+        input.style.left = '-9999px';
+        document.body.append(input);
+        return input;
+    });
+    const inputElement = inputHandle.asElement();
+    if (!inputElement) {
+        await inputHandle.dispose();
+        throw new Error('Could not create temporary file input.');
+    }
+
+    await inputElement.setInputFiles(filePath);
+
+    await page.evaluate((element) => {
+        const input = element as HTMLInputElement;
+        const file = input.files?.[0];
+        if (!file) {
+            throw new Error('Temporary file input did not receive a file.');
+        }
+
+        const target = document.querySelector('.workspace-shell');
+        if (!target) {
+            throw new Error('Workspace drop target was not found.');
+        }
+
+        const dataTransfer = new DataTransfer();
+        dataTransfer.items.add(file);
+
+        for (const type of ['dragenter', 'dragover', 'drop']) {
+            target.dispatchEvent(
+                new DragEvent(type, {
+                    bubbles: true,
+                    cancelable: true,
+                    dataTransfer,
+                })
+            );
+        }
+
+        input.remove();
+    }, inputElement);
+    await inputHandle.dispose();
+}
+
+export async function addXtreamPortal(
+    page: Page,
+    options: {
+        name?: string;
+        password?: string;
+        serverUrl?: string;
+        username?: string;
+    } = {}
+): Promise<void> {
+    const {
+        name = defaultXtreamPortalName,
+        password = defaultXtreamPassword,
+        serverUrl = xtreamMockServer,
+        username = defaultXtreamUsername,
+    } = options;
+
+    await openAddPlaylistDialog(page);
+    const dialog = await getActiveDialog(page);
+    await clickDialogCategoryOption(
+        dialog,
+        /xtream(\s+credentials)?/i,
+        'mat-button-toggle[value="xtream"]'
+    );
+
+    await setInputValue(dialog.locator('#title'), name);
+    await setInputValue(dialog.locator('#serverUrl'), serverUrl);
+    await setInputValue(dialog.locator('#username'), username);
+    await setInputValue(dialog.locator('#password'), password);
+    const addButton = dialog
+        .getByRole('button', { name: /^(add|add playlist)$/i })
+        .last();
+
+    await expect(addButton).toBeEnabled({ timeout: 10000 });
+    await addButton.click();
+    await dialog.waitFor({ state: 'detached' });
+}
+
+async function setInputValue(input: Locator, value: string): Promise<void> {
+    await input.fill('');
+    await input.fill(value);
+
+    if ((await input.inputValue()) === value) {
+        return;
+    }
+
+    await input.click();
+    await input.press('Control+A');
+    await input.press('Backspace');
+    await input.type(value);
+
+    if ((await input.inputValue()) === value) {
+        return;
+    }
+
+    await input.evaluate((element, nextValue) => {
+        const inputElement = element as HTMLInputElement;
+        inputElement.value = nextValue;
+        inputElement.dispatchEvent(new Event('input', { bubbles: true }));
+        inputElement.dispatchEvent(new Event('change', { bubbles: true }));
+        inputElement.dispatchEvent(new Event('blur', { bubbles: true }));
+    }, value);
+
+    await expect(input).toHaveValue(value);
+}
+
+/**
+ * Pick a source method on the Add Playlist dialog. Since v0.22 the dialog
+ * exposes a single flat 5-card radiogroup ("M3U URL", "M3U file", "Xtream
+ * credentials", "Stalker portal", "Raw m3u text") instead of the legacy
+ * 2-level category × subtype tabs/toggles. The helper still falls through
+ * to the old tab/button/legacy-selector lookups so we don't have to rewrite
+ * every call-site on each redesign — but the radio-based picker is the
+ * primary path now.
+ */
+async function clickDialogMethodOption(
+    dialog: Locator,
+    label: RegExp,
+    legacySelector?: string
+): Promise<void> {
+    const optionByRadio = dialog.getByRole('radio', { name: label }).first();
+    if ((await optionByRadio.count()) > 0) {
+        await optionByRadio.click();
+        return;
+    }
+
+    for (const tablistLabel of [
+        'Source method',
+        'Playlist category',
+        'M3U source',
+    ]) {
+        const tablist = dialog
+            .locator(`[role="tablist"][aria-label="${tablistLabel}"]`)
+            .first();
+        if ((await tablist.count()) > 0) {
+            const optionByTabRole = tablist
+                .getByRole('tab', { name: label })
+                .first();
+            if ((await optionByTabRole.count()) > 0) {
+                await optionByTabRole.click();
+                return;
+            }
+        }
+    }
+
+    const optionByGlobalTabRole = dialog
+        .getByRole('tab', { name: label })
+        .first();
+    if ((await optionByGlobalTabRole.count()) > 0) {
+        await optionByGlobalTabRole.click();
+        return;
+    }
+
+    const optionByButtonRole = dialog
+        .getByRole('button', { name: label })
+        .first();
+    if ((await optionByButtonRole.count()) > 0) {
+        await optionByButtonRole.click();
+        return;
+    }
+
+    if (!legacySelector) {
+        throw new Error(`Could not find dialog option matching ${label}.`);
+    }
+
+    await dialog.locator(legacySelector).click();
+}
+
+// Backwards-compat shims for the legacy two-step flow. Both helpers now route
+// through `clickDialogMethodOption` and use the patterns of the new flat
+// picker. `clickDialogCategoryOption` is a no-op for "M3U" since the new
+// picker has no parent "M3U" tile — callers immediately follow up with a
+// `clickDialogSubtypeOption` which picks the concrete M3U URL/file/text card.
+async function clickDialogCategoryOption(
+    dialog: Locator,
+    label: RegExp,
+    legacySelector?: string
+): Promise<void> {
+    // The legacy "M3U" category is now implicit — the new picker has no
+    // standalone "M3U" radio; callers always immediately specialise via
+    // `clickDialogSubtypeOption` below. Skip the click to avoid matching
+    // unrelated radios (e.g. "M3U URL" when caller wanted "M3U file").
+    if (/^\^?m3u\$?$/i.test(label.source)) {
+        return;
+    }
+    await clickDialogMethodOption(dialog, label, legacySelector);
+}
+
+async function clickDialogSubtypeOption(
+    dialog: Locator,
+    label: RegExp,
+    legacySelector?: string
+): Promise<void> {
+    await clickDialogMethodOption(dialog, label, legacySelector);
+}
+
+export async function addStalkerPortal(
+    page: Page,
+    options: {
+        macAddress?: string;
+        name?: string;
+        portalUrl?: string;
+    } = {}
+): Promise<void> {
+    const {
+        macAddress = defaultStalkerMacAddress,
+        name = defaultStalkerPortalName,
+        portalUrl = `${stalkerMockServer}/portal.php`,
+    } = options;
+
+    await openAddPlaylistDialog(page);
+    const dialog = await getActiveDialog(page);
+    await clickDialogCategoryOption(
+        dialog,
+        /stalker(\s+portal)?/i,
+        'mat-button-toggle[value="stalker"]'
+    );
+
+    await setInputValue(dialog.locator('input#title'), name);
+    await setInputValue(dialog.locator('input#portalUrl'), portalUrl);
+    await setInputValue(dialog.locator('input#macAddress'), macAddress);
+    const addButton = dialog
+        .getByRole('button', { name: /^(add|add playlist)$/i })
+        .last();
+
+    await expect(addButton).toBeEnabled({ timeout: 10000 });
+    await addButton.click();
+    await dialog.waitFor({ state: 'detached' });
+}
+
+export async function openSettings(page: Page): Promise<void> {
+    await page.locator('a[href$="/workspace/settings"]').click();
+    await expect(page.getByTestId('settings-container')).toBeVisible();
+}
+
+/**
+ * Settings render one section page at a time (`/workspace/settings/:section`),
+ * so a control can only be interacted with after its section page is open.
+ */
+export async function openSettingsSection(
+    page: Page,
+    sectionId: string
+): Promise<void> {
+    await page.getByTestId(`settings-section-${sectionId}`).click();
+    await page.waitForURL(new RegExp(`/workspace/settings/${sectionId}$`));
+}
+
+/**
+ * Material slide toggles render `aria-checked` after Angular's next change
+ * detection, later than Playwright's `check()` looks, which then reports
+ * that the click changed nothing. Click when needed and wait for the state.
+ */
+export async function setSwitch(
+    toggle: Locator,
+    checked: boolean
+): Promise<void> {
+    if ((await toggle.isChecked()) !== checked) {
+        await toggle.click();
+    }
+    await expect(toggle).toBeChecked({ checked });
+}
+
+export async function enableRemoteControl(
+    page: Page,
+    port: number
+): Promise<void> {
+    await openSettingsSection(page, 'remote-control');
+
+    const remoteControlSwitch = page.locator(
+        'mat-slide-toggle[formcontrolname="remoteControl"] [role="switch"]'
+    );
+
+    await remoteControlSwitch.scrollIntoViewIfNeeded();
+    await setSwitch(remoteControlSwitch, true);
+    await page.locator('#remoteControlPort').fill(String(port));
+}
+
+export async function saveSettings(page: Page): Promise<void> {
+    const saveButton = page.getByTestId('save-settings');
+
+    // The save control is a native form submit (`<button type="submit">`
+    // inside `<form (ngSubmit)="onSubmit()">`). Clicking it makes Chromium
+    // register a form-submission navigation, which Angular's `ngSubmit`
+    // handler immediately cancels via `preventDefault()` — no real navigation
+    // ever happens. Playwright's default post-click "wait for signals" barrier
+    // still observes that requested-then-cancelled navigation and waits for it
+    // to settle; on slow/loaded CI runners that wait can stall for the full
+    // timeout ("waiting for scheduled navigations to finish"). We never depend
+    // on a navigation here, so opt out of the barrier and instead assert the
+    // deterministic post-save state below.
+    await saveButton.click({ noWaitAfter: true });
+    // `onSubmit()` calls `applyChangedSettings()` -> `markAsPristine()` once the
+    // settings write resolves, which hides the whole unsaved-changes bar.
+    // Awaiting that is a stronger, race-free confirmation that the save
+    // actually committed.
+    await expect(saveButton).toBeHidden();
+    // Let the fire-and-forget `window.electron.updateSettings(...)` IPC flush to
+    // the main process before callers may relaunch the app to assert persistence.
+    await page.waitForTimeout(300);
+}
+
+export async function goToDashboard(page: Page): Promise<void> {
+    const dashboardLink = page
+        .locator('app-workspace-shell-rail a[href$="/workspace/dashboard"]')
+        .first();
+
+    await expect(dashboardLink).toBeVisible();
+    await dashboardLink.click();
+    await page.waitForURL(/\/workspace\/dashboard$/);
+}
+
+export async function openSources(page: Page): Promise<void> {
+    await page.getByRole('link', { name: 'Sources', exact: true }).click();
+    await page.waitForURL(/\/workspace\/sources(?:\?.*)?$/);
+}
+
+export async function restartElectronApp(
+    app: LaunchedElectronApp,
+    dataDir: string,
+    options: LaunchElectronAppOptions = {}
+): Promise<LaunchedElectronApp> {
+    await closeElectronApp(app);
+    return launchElectronApp(dataDir, options);
+}
+
+export async function importM3uPlaylistFromUrl(
+    page: Page,
+    playlistUrl: string,
+    userAgent?: string
+): Promise<void> {
+    await openAddPlaylistDialog(page);
+    const dialog = await getActiveDialog(page);
+    await clickDialogCategoryOption(dialog, /^m3u$/i);
+    await clickDialogSubtypeOption(
+        dialog,
+        /m3u\s*url|add\s+via\s+url/i,
+        'mat-button-toggle[value="url"]'
+    );
+
+    await setInputValue(
+        dialog.locator('input[formcontrolname="playlistUrl"]'),
+        playlistUrl
+    );
+    if (userAgent !== undefined) {
+        await setInputValue(dialog.getByRole('textbox', { name: 'User agent', exact: true }), userAgent);
+    }
+    await dialog.getByRole('button', { name: /Add playlist/i }).click();
+    await dialog.waitFor({ state: 'detached' });
+}
+
+export function buildM3uContent(channels: M3uTestChannel[]): string {
+    const lines = ['#EXTM3U'];
+
+    for (const channel of channels) {
+        const attributes = [
+            channel.tvgId ? `tvg-id="${channel.tvgId}"` : '',
+            channel.tvgCountry ? `tvg-country="${channel.tvgCountry}"` : '',
+            channel.tvgLanguage ? `tvg-language="${channel.tvgLanguage}"` : '',
+            channel.tvgName ? `tvg-name="${channel.tvgName}"` : '',
+            channel.logo ? `tvg-logo="${channel.logo}"` : '',
+            channel.groupTitle ? `group-title="${channel.groupTitle}"` : '',
+            channel.radio ? 'radio="true"' : '',
+        ]
+            .filter(Boolean)
+            .join(' ');
+
+        lines.push(
+            `#EXTINF:-1${attributes ? ` ${attributes}` : ''},${channel.name}`
+        );
+        lines.push(channel.url);
+    }
+
+    return `${lines.join('\n')}\n`;
+}
+
+export function writeTemporaryM3uFile(
+    dataDir: string,
+    fileName: string,
+    channels: M3uTestChannel[]
+): string {
+    const filePath = join(dataDir, fileName);
+    writeFileSync(filePath, buildM3uContent(channels), 'utf8');
+    return filePath;
+}
+
+export function parseM3uFixture(filePath: string): M3uTestChannel[] {
+    const content = readFileSync(filePath, 'utf8');
+    const items: M3uTestChannel[] = [];
+    const lines = content.split(/\r?\n/);
+    let pending:
+        | {
+              groupTitle?: string;
+              logo?: string;
+              name: string;
+              radio?: boolean;
+              tvgId?: string;
+              tvgName?: string;
+          }
+        | undefined;
+
+    for (const rawLine of lines) {
+        const line = rawLine.trim();
+        if (!line) {
+            continue;
+        }
+
+        if (line.startsWith('#EXTINF:')) {
+            pending = {
+                groupTitle:
+                    line.match(/group-title="([^"]*)"/)?.[1]?.trim() ?? '',
+                logo: line.match(/tvg-logo="([^"]*)"/)?.[1]?.trim() ?? '',
+                name: line.split(',').at(-1)?.trim() ?? '',
+                radio: /radio="true"/i.test(line),
+                tvgId: line.match(/tvg-id="([^"]*)"/)?.[1]?.trim() ?? '',
+                tvgName: line.match(/tvg-name="([^"]*)"/)?.[1]?.trim() ?? '',
+            };
+            continue;
+        }
+
+        if (!pending || line.startsWith('#')) {
+            continue;
+        }
+
+        items.push({
+            ...pending,
+            url: line,
+        });
+        pending = undefined;
+    }
+
+    return items.filter((item) => item.name.length > 0);
+}
+
+export async function createMutableTextServer(
+    initialBody: string,
+    options: {
+        contentType?: string;
+        resourcePath?: string;
+        requiredUserAgent?: string;
+    } = {}
+): Promise<MutableTextServer> {
+    const {
+        contentType = 'text/plain; charset=utf-8',
+        resourcePath = '/resource.txt',
+    } = options;
+    let body = initialBody;
+
+    const server = createServer((req, res) => {
+        const pathname = (req.url ?? '').split('?')[0];
+
+        if (pathname !== resourcePath) {
+            res.writeHead(404, {
+                'Content-Type': 'application/json; charset=utf-8',
+            });
+            res.end(JSON.stringify({ error: 'Not found' }));
+            return;
+        }
+
+        if (options.requiredUserAgent && req.headers['user-agent'] !== options.requiredUserAgent) {
+            res.writeHead(403);
+            res.end('User-Agent required');
+            return;
+        }
+
+        res.writeHead(200, { 'Content-Type': contentType });
+        res.end(body);
+    });
+
+    await listenOnRandomPort(server);
+    const address = server.address();
+
+    if (!address || typeof address === 'string') {
+        throw new Error('Failed to resolve the temporary HTTP server address.');
+    }
+
+    const origin = `http://127.0.0.1:${address.port}`;
+
+    return {
+        close: () => closeServer(server),
+        origin,
+        resourceUrl: `${origin}${resourcePath}`,
+        setBody(nextBody: string) {
+            body = nextBody;
+        },
+    };
+}
+
+export async function openWorkspaceSection(
+    page: Page,
+    label: string
+): Promise<void> {
+    if (label === 'Favorites') {
+        await openPlaylistFavorites(page);
+        return;
+    }
+
+    if (label === 'Recently viewed') {
+        await openPlaylistRecent(page);
+        return;
+    }
+
+    await page.getByRole('link', { name: label, exact: true }).click();
+}
+
+export async function openPlaylistFavorites(page: Page): Promise<void> {
+    await openGlobalFavorites(page);
+    await switchUnifiedCollectionScope(page, 'This playlist');
+}
+
+export async function openPlaylistRecent(page: Page): Promise<void> {
+    await openGlobalRecent(page);
+    await switchUnifiedCollectionScope(page, 'This playlist');
+}
+
+export async function openGlobalFavorites(page: Page): Promise<void> {
+    await openWorkspaceSection(page, 'Global favorites');
+    await page.waitForURL(/\/workspace\/global-favorites(?:\?.*)?$/);
+}
+
+export async function openGlobalRecent(page: Page): Promise<void> {
+    const dialog = await openCommandPalette(page);
+
+    await dialog.locator('input[type="search"]').fill('recent');
+    await dialog.getByRole('button', { name: /Open recently viewed/i }).click();
+    await page.waitForURL(/\/workspace\/global-recent(?:\?.*)?$/);
+}
+
+export async function switchUnifiedCollectionScope(
+    page: Page,
+    scopeLabel: 'This playlist' | 'All playlists'
+): Promise<void> {
+    const toggleGroup = page.locator('.scope-toggle');
+
+    await expect(toggleGroup).toBeVisible();
+    await clickButtonToggleOption(toggleGroup, scopeLabel);
+}
+
+export async function switchUnifiedCollectionContent(
+    page: Page,
+    contentLabel: 'Live TV' | 'Movies' | 'Series'
+): Promise<void> {
+    const toggleGroup = page.locator('.content-toggle');
+
+    await expect(toggleGroup).toBeVisible();
+    await clickButtonToggleOption(toggleGroup, contentLabel);
+}
+
+export async function clearCurrentUnifiedCollection(page: Page): Promise<void> {
+    await page
+        .getByRole('button', {
+            name: /Clear .* (favorites|recently viewed)/i,
+        })
+        .click();
+
+    const dialog = page.locator('mat-dialog-container').last();
+    await expect(dialog).toBeVisible();
+    await dialog.getByRole('button', { name: 'Clear', exact: true }).click();
+    await expect(dialog).toBeHidden();
+}
+
+async function clickButtonToggleOption(
+    toggleGroup: Locator,
+    label: string
+): Promise<void> {
+    const toggle = toggleGroup
+        .locator('mat-button-toggle')
+        .filter({ hasText: flexibleTextPattern(label) })
+        .first();
+
+    await expect(toggle).toBeVisible();
+
+    if (!(await isButtonToggleSelected(toggle))) {
+        await toggle.click();
+    }
+
+    await expect
+        .poll(() => isButtonToggleSelected(toggle), {
+            timeout: 10000,
+        })
+        .toBe(true);
+}
+
+export function channelItemByTitle(page: Page, title: string): Locator {
+    return page.getByTestId('channel-item').filter({
+        has: page.locator('.channel-name', {
+            hasText: flexibleTextPattern(title),
+        }),
+    });
+}
+
+export function contentCardByTitle(page: Page, title: string): Locator {
+    return page.locator('app-content-card').filter({
+        has: page.locator('h3', {
+            hasText: flexibleTextPattern(title),
+        }),
+    });
+}
+
+export async function expectVisibleContentCardTitle(
+    page: Page,
+    title: string
+): Promise<void> {
+    await expect
+        .poll(
+            async () => {
+                const titles = await visibleContentCardTitles(page);
+                return titles.some(
+                    (visibleTitle) =>
+                        normalizeVisibleText(visibleTitle) ===
+                        normalizeVisibleText(title)
+                );
+            },
+            { timeout: 20000 }
+        )
+        .toBe(true);
+}
+
+export async function expectPathname(
+    page: Page,
+    pattern: RegExp
+): Promise<void> {
+    await expect.poll(() => new URL(page.url()).pathname).toMatch(pattern);
+}
+
+export function playlistSwitcherTitle(page: Page): Locator {
+    return page
+        .locator('.playlist-switcher-trigger .playlist-info .name')
+        .first();
+}
+
+export function gridListCardByTitle(page: Page, title: string): Locator {
+    return page.locator('.category-content-layout mat-card').filter({
+        has: page.locator('.title', {
+            hasText: flexibleTextPattern(title),
+        }),
+    });
+}
+
+/**
+ * Waits for the first grid card to appear (skeleton loading done) and returns
+ * its display title. Use this instead of picking from fixture order, since the
+ * grid sorts by date-desc and may paginate items off the first page.
+ */
+export async function waitForFirstGridListCardTitle(
+    page: Page
+): Promise<string> {
+    const card = page.locator('.category-content-layout mat-card').first();
+    await expect(card).toBeVisible({ timeout: 20000 });
+    return ((await card.locator('.title').textContent()) ?? '').trim();
+}
+
+/**
+ * Waits for the first grid card to appear with a non-empty title, clicks it,
+ * and returns the title. Use this instead of waitForFirstGridListCardTitle +
+ * clickGridListCardByTitle to avoid a race condition where the grid re-renders
+ * between the title read and the subsequent search-by-title click.
+ */
+export async function clickFirstGridListCard(page: Page): Promise<string> {
+    const card = page.locator('.category-content-layout mat-card').first();
+    await expect(card).toBeVisible({ timeout: 20000 });
+    const titleEl = card.locator('.title');
+    let title = '';
+    await expect(async () => {
+        title = ((await titleEl.textContent()) ?? '').trim();
+        expect(title.length).toBeGreaterThan(0);
+    }).toPass({ timeout: 10000 });
+    await card.click();
+    return title;
+}
+
+export async function clickGridListCardByTitle(
+    page: Page,
+    title: string
+): Promise<void> {
+    const card = gridListCardByTitle(page, title).first();
+
+    await expect(card).toBeVisible({ timeout: 20000 });
+    await card.click();
+}
+
+export async function clickCategoryById(
+    page: Page,
+    categoryId: string
+): Promise<void> {
+    const category = page.locator(
+        `app-workspace-context-panel .category-item[data-category-id="${categoryId}"]:visible`
+    );
+
+    await expect(category.first()).toBeVisible({ timeout: 20000 });
+    await category.first().scrollIntoViewIfNeeded();
+    await category.first().click();
+    await expect
+        .poll(async () => {
+            const pathname = new URL(page.url()).pathname;
+            const isSelected =
+                (await category.first().getAttribute('aria-current')) ===
+                'true';
+
+            return (
+                isSelected ||
+                pathname.endsWith(`/${categoryId}`) ||
+                pathname.includes(`/${categoryId}/`)
+            );
+        })
+        .toBe(true);
+}
+
+export async function clickCategoryByNameExact(
+    page: Page,
+    categoryName: string
+): Promise<void> {
+    const categories = page
+        .locator('app-workspace-context-panel .category-item:visible')
+        .filter({
+            has: page.locator('.nav-item-label', {
+                hasText: new RegExp(`^\\s*${escapeRegex(categoryName)}\\s*$`),
+            }),
+        });
+    const category = await pickPreferredCategory(categories);
+
+    await expect(category).toBeVisible();
+    await expect(category).toBeEnabled();
+    await category.scrollIntoViewIfNeeded();
+    const categoryId =
+        (await category.getAttribute('data-category-id'))?.trim() ?? '';
+    await category.click();
+    const selectedCategory =
+        categoryId.length > 0
+            ? page
+                  .locator(
+                      `app-workspace-context-panel .category-item[data-category-id="${categoryId}"]:visible`
+                  )
+                  .first()
+            : category;
+    await expect(selectedCategory).toHaveAttribute('aria-current', 'true', {
+        timeout: 20000,
+    });
+}
+
+export function sourceRowByTitle(page: Page, title: string): Locator {
+    return page.locator('app-playlist-item').filter({
+        hasText: flexibleTextPattern(title),
+    });
+}
+
+export async function getVisibleSourceTitles(page: Page): Promise<string[]> {
+    return page.locator('app-playlist-item').evaluateAll((elements) =>
+        elements
+            .map((element) => {
+                const titleElement = element.querySelector('.playlist-title');
+                return titleElement?.textContent?.trim() ?? '';
+            })
+            .filter((title) => title.length > 0)
+    );
+}
+
+export async function selectSourceTypeFilter(
+    page: Page,
+    typeLabel: 'All' | 'M3U' | 'Xtream' | 'Stalker'
+): Promise<void> {
+    await selectSourcesTypeFilterOption(page, typeLabel);
+}
+
+export async function selectSourceSort(
+    page: Page,
+    sortLabel:
+        | 'Date added (Newest first)'
+        | 'Date added (Oldest first)'
+        | 'Name (A-Z)'
+        | 'Name (Z-A)'
+        | 'Custom order'
+): Promise<void> {
+    const sortTrigger = page.locator('app-workspace-sources .sort-trigger');
+
+    await expect(sortTrigger).toBeVisible();
+    await sortTrigger.click();
+
+    const option = page
+        .locator('.cdk-overlay-pane [role="menuitemradio"]')
+        .filter({
+            hasText: flexibleTextPattern(sortLabel),
+        })
+        .first();
+
+    await expect(option).toBeVisible();
+    await option.click();
+    await expect(option).toBeHidden();
+}
+
+export async function dragSourceBefore(
+    page: Page,
+    sourceTitle: string,
+    targetTitle: string
+): Promise<void> {
+    const source = sourceRowByTitle(page, sourceTitle).locator('.drag-icon');
+    const target = sourceRowByTitle(page, targetTitle).locator(
+        '.playlist-item'
+    );
+
+    await expect(source.first()).toBeVisible();
+    await expect(target.first()).toBeVisible();
+
+    const sourceBox = await source.first().boundingBox();
+    const targetBox = await target.first().boundingBox();
+
+    if (!sourceBox || !targetBox) {
+        throw new Error('Could not resolve source or target bounds for drag.');
+    }
+
+    await page.mouse.move(
+        sourceBox.x + sourceBox.width / 2,
+        sourceBox.y + sourceBox.height / 2
+    );
+    await page.mouse.down();
+    await page.mouse.move(
+        targetBox.x + targetBox.width / 2,
+        targetBox.y + targetBox.height / 3,
+        {
+            steps: 15,
+        }
+    );
+    await page.mouse.up();
+}
+
+export async function openSourceEditor(
+    page: Page,
+    title: string
+): Promise<Locator> {
+    const row = sourceRowByTitle(page, title).first();
+
+    await expect(row).toBeVisible();
+    await row.locator('.edit-btn').click();
+    const dialog = page.locator('mat-dialog-container').last();
+
+    await expect(dialog).toBeVisible();
+    // Material applies its initial focus after the opening transition.
+    await dialog.evaluate(async (element) => {
+        await Promise.all(element.getAnimations({ subtree: true }).map((animation) =>
+            animation.finished.catch(() => undefined)
+        ));
+    });
+    return dialog;
+}
+
+export async function updateSourceDialog(
+    dialog: Locator,
+    updates: Partial<
+        Record<
+            | 'macAddress'
+            | 'password'
+            | 'portalUrl'
+            | 'serverUrl'
+            | 'stalkerDeviceId1'
+            | 'stalkerDeviceId2'
+            | 'stalkerSerialNumber'
+            | 'stalkerSignature1'
+            | 'stalkerSignature2'
+            | 'title'
+            | 'url'
+            | 'userAgent'
+            | 'username',
+            string
+        > & {
+            autoRefresh: boolean;
+        }
+    >
+): Promise<void> {
+    for (const [field, value] of Object.entries(updates)) {
+        if (field === 'autoRefresh' || value == null) {
+            continue;
+        }
+
+        await setInputValue(
+            dialog.locator(`input[formcontrolname="${field}"]`),
+            value as string
+        );
+    }
+
+    if (typeof updates.autoRefresh === 'boolean') {
+        const checkbox = dialog.locator(
+            'mat-checkbox[formcontrolname="autoRefresh"] input[type="checkbox"]'
+        );
+
+        if (updates.autoRefresh) {
+            await checkbox.check();
+        } else {
+            await checkbox.uncheck();
+        }
+    }
+}
+
+export async function saveSourceDialog(
+    page: Page,
+    dialog: Locator
+): Promise<void> {
+    await dialog
+        .locator('mat-dialog-actions')
+        .getByRole('button', { name: 'Save', exact: true })
+        .click();
+    await page.waitForSelector('mat-dialog-container', { state: 'detached' });
+    await expectPlaylistUpdatedToast(page);
+}
+
+export async function expectSourceDialogValues(
+    dialog: Locator,
+    expected: Partial<
+        Record<
+            | 'macAddress'
+            | 'password'
+            | 'portalUrl'
+            | 'serverUrl'
+            | 'stalkerDeviceId1'
+            | 'stalkerDeviceId2'
+            | 'stalkerSerialNumber'
+            | 'stalkerSignature1'
+            | 'stalkerSignature2'
+            | 'title'
+            | 'url'
+            | 'userAgent'
+            | 'username',
+            string
+        > & {
+            autoRefresh: boolean;
+        }
+    >
+): Promise<void> {
+    for (const [field, value] of Object.entries(expected)) {
+        if (field === 'autoRefresh' || value == null) {
+            continue;
+        }
+
+        await expect(
+            dialog.locator(`input[formcontrolname="${field}"]`)
+        ).toHaveValue(value as string);
+    }
+
+    if (typeof expected.autoRefresh === 'boolean') {
+        const checkbox = dialog.locator(
+            'mat-checkbox[formcontrolname="autoRefresh"] input[type="checkbox"]'
+        );
+
+        if (expected.autoRefresh) {
+            await expect(checkbox).toBeChecked();
+        } else {
+            await expect(checkbox).not.toBeChecked();
+        }
+    }
+}
+
+export async function deleteSource(page: Page, title: string): Promise<void> {
+    const row = sourceRowByTitle(page, title).first();
+
+    await expect(row).toBeVisible();
+    await row.locator('.delete-btn').click();
+    await confirmDialog(page, 'Remove playlist');
+}
+
+export async function refreshSource(
+    page: Page,
+    title: string,
+    options: {
+        confirm?: boolean;
+    } = {}
+): Promise<void> {
+    const { confirm = false } = options;
+    const row = sourceRowByTitle(page, title).first();
+
+    await expect(row).toBeVisible();
+    await row.locator('.refresh-btn').click();
+
+    if (confirm) {
+        await confirmDialog(page, 'Refresh playlist');
+    }
+}
+
+export async function waitForSourceRowIdle(
+    page: Page,
+    title: string
+): Promise<void> {
+    const row = sourceRowByTitle(page, title).first();
+
+    await expect(row).toBeVisible();
+    await expect(row.locator('.busy-state__message')).toHaveCount(0, {
+        timeout: 60000,
+    });
+    await expect(row.locator('.action-spinner')).toHaveCount(0, {
+        timeout: 60000,
+    });
+}
+
+export async function waitForM3uCatalog(page: Page): Promise<void> {
+    await page.waitForURL(/\/workspace\/playlists\/.+\/all$/);
+    await expect(page.getByTestId('channel-item').first()).toBeVisible({
+        timeout: 20000,
+    });
+}
+
+export async function waitForXtreamCatalog(page: Page): Promise<void> {
+    await page.waitForURL(/\/workspace\/xtreams\/.+/);
+    await waitForXtreamImportToFinish(page);
+
+    const categories = page.locator(
+        'app-workspace-context-panel .category-item'
+    );
+    await expect(categories.first()).toBeVisible({ timeout: 20000 });
+
+    const contentItems = page.locator(
+        '.content-card, [data-test-id="channel-item"], mat-card'
+    );
+
+    try {
+        await expect(contentItems.first()).toBeVisible({ timeout: 5000 });
+        return;
+    } catch {
+        const category = await pickPreferredCategory(categories);
+        await category.scrollIntoViewIfNeeded();
+        await category.click();
+        await expect(contentItems.first()).toBeVisible({ timeout: 20000 });
+    }
+}
+
+export async function waitForXtreamWorkspaceReady(page: Page): Promise<void> {
+    await waitForXtreamCatalog(page);
+}
+
+export async function expectPlaylistUpdatedToast(page: Page): Promise<void> {
+    await expect(
+        page
+            .locator('.mat-mdc-snack-bar-label')
+            .filter({
+                hasText: 'Success! The playlist was successfully updated.',
+            })
+            .last()
+    ).toBeVisible({
+        timeout: 20000,
+    });
+}
+
+export async function waitForXtreamImportToFinish(page: Page): Promise<void> {
+    const overlay = page.locator('.workspace-loading-overlay');
+
+    try {
+        await overlay.waitFor({ state: 'visible', timeout: 5000 });
+    } catch {
+        // The overlay may already be gone, or not shown yet: it appears only
+        // once the portal has answered, so the import status decides below.
+    }
+
+    const playlistId = xtreamPlaylistIdFromUrl(page.url());
+    if (playlistId) {
+        await waitForXtreamImportCompleted(page, playlistId);
+    }
+
+    await expect(overlay).toHaveCount(0, { timeout: 30000 });
+}
+
+async function pickPreferredCategory(categories: Locator): Promise<Locator> {
+    const count = await categories.count();
+    let fallback: Locator | null = null;
+
+    for (let index = 0; index < count; index += 1) {
+        const candidate = categories.nth(index);
+
+        if (!(await candidate.isVisible())) {
+            continue;
+        }
+
+        fallback ??= candidate;
+
+        const countText =
+            (await candidate.locator('.item-count').first().textContent()) ??
+            '';
+        const itemCount = Number.parseInt(countText.trim(), 10);
+
+        if (Number.isFinite(itemCount) && itemCount > 0) {
+            return candidate;
+        }
+    }
+
+    return fallback ?? categories.first();
+}
+
+export async function waitForStalkerCatalog(page: Page): Promise<void> {
+    await page.waitForURL(/\/workspace\/stalker\/.+/);
+
+    const categories = page.locator('.category-item');
+    await expect(categories.first()).toBeVisible({ timeout: 20000 });
+    await categories.first().click();
+
+    const contentItems = page.locator(
+        '.content-card, [data-test-id="channel-item"], mat-card'
+    );
+    await expect(contentItems.first()).toBeVisible({ timeout: 20000 });
+}
+
+export async function fillWorkspaceSearch(
+    page: Page,
+    term: string,
+    options: {
+        submit?: boolean;
+    } = {}
+): Promise<void> {
+    const input = page.locator(
+        'app-workspace-shell-header .search-field input[type="search"]'
+    );
+
+    await expect(input).toBeEnabled();
+    await input.fill(term);
+
+    if (options.submit) {
+        await input.press('Enter');
+    }
+}
+
+export async function expectWorkspaceSearchScope(
+    page: Page,
+    expected: RegExp | string
+): Promise<void> {
+    await expect(
+        page.locator('app-workspace-shell-header .search-chip--scope')
+    ).toHaveText(expected);
+}
+
+export async function expectWorkspaceSearchStatus(
+    page: Page,
+    expected: RegExp | string
+): Promise<void> {
+    await expect(
+        page.locator('app-workspace-shell-header .search-chip--status')
+    ).toHaveText(expected);
+}
+
+/** The degraded-search hint chip must be absent (e.g. complete local search). */
+export async function expectNoWorkspaceSearchStatus(page: Page): Promise<void> {
+    await expect(
+        page.locator('app-workspace-shell-header .search-chip--status')
+    ).toHaveCount(0);
+}
+
+async function startPortalDebugCapture(page: Page): Promise<void> {
+    await page.evaluate(() => {
+        const electronApi = window.electron as typeof window.electron & {
+            onPortalDebugEvent?: (
+                callback: (event: PortalDebugEvent) => void
+            ) => (() => void) | undefined;
+        };
+
+        window.__portalDebugUnsubscribe?.();
+        window.__portalDebugEvents = [];
+
+        if (!electronApi.onPortalDebugEvent) {
+            return;
+        }
+
+        window.__portalDebugUnsubscribe = electronApi.onPortalDebugEvent(
+            (event: PortalDebugEvent) => {
+                window.__portalDebugEvents?.push(event as PortalDebugEvent);
+            }
+        );
+    });
+}
+
+async function startDbOperationCapture(page: Page): Promise<void> {
+    await page.evaluate(() => {
+        const electronApi = window.electron as typeof window.electron & {
+            onDbOperationEvent?: (
+                callback: (event: DbOperationEvent) => void
+            ) => (() => void) | undefined;
+        };
+
+        window.__dbOperationUnsubscribe?.();
+        window.__dbOperationEvents = [];
+
+        if (!electronApi.onDbOperationEvent) {
+            return;
+        }
+
+        window.__dbOperationUnsubscribe = electronApi.onDbOperationEvent(
+            (event: DbOperationEvent) => {
+                window.__dbOperationEvents?.push(event);
+            }
+        );
+    });
+}
+
+async function startRendererFrameCapture(page: Page): Promise<void> {
+    await page.evaluate(() => {
+        if (window.__rendererFrameRequestId) {
+            window.cancelAnimationFrame(window.__rendererFrameRequestId);
+        }
+
+        window.__rendererFrameCount = 0;
+
+        const tick = () => {
+            window.__rendererFrameCount =
+                (window.__rendererFrameCount ?? 0) + 1;
+            window.__rendererFrameRequestId =
+                window.requestAnimationFrame(tick);
+        };
+
+        window.__rendererFrameRequestId = window.requestAnimationFrame(tick);
+    });
+}
+
+export async function expectPortalDebugSuccess(
+    page: Page,
+    provider: PortalProvider
+): Promise<void> {
+    await expect
+        .poll(
+            async () => {
+                return page.evaluate((targetProvider) => {
+                    return (
+                        window.__portalDebugEvents?.filter(
+                            (event) =>
+                                event.provider === targetProvider &&
+                                event.status === 'success' &&
+                                event.transport === 'electron-main'
+                        ).length ?? 0
+                    );
+                }, provider);
+            },
+            { timeout: 20000 }
+        )
+        .toBeGreaterThan(0);
+}
+
+export async function waitForPortalDebugEvent(
+    page: Page,
+    options: {
+        operation: string;
+        predicate?: (event: PortalDebugEvent) => boolean;
+        provider: PortalProvider;
+        timeoutMs?: number;
+    }
+): Promise<PortalDebugEvent> {
+    const { operation, predicate, provider, timeoutMs = 20000 } = options;
+    const startedAt = Date.now();
+
+    while (Date.now() - startedAt <= timeoutMs) {
+        const events = await page.evaluate(
+            () => window.__portalDebugEvents ?? []
+        );
+        const match = events.find((event) => {
+            if (
+                event.provider !== provider ||
+                event.operation !== operation ||
+                event.status !== 'success' ||
+                event.transport !== 'electron-main'
+            ) {
+                return false;
+            }
+
+            return predicate ? predicate(event) : true;
+        });
+
+        if (match) {
+            return match;
+        }
+
+        await page.waitForTimeout(200);
+    }
+
+    const recentEvents = await page.evaluate(() =>
+        (window.__portalDebugEvents ?? []).slice(-10)
+    );
+
+    throw new Error(
+        `Timed out waiting for ${provider}:${operation}. Recent events: ${JSON.stringify(
+            recentEvents,
+            null,
+            2
+        )}`
+    );
+}
+
+export async function waitForDbOperationEvent(
+    page: Page,
+    options: {
+        operation: string;
+        operationId?: string;
+        phase?: string;
+        playlistId?: string;
+        predicate?: (event: DbOperationEvent) => boolean;
+        status?: DbOperationEvent['status'];
+        timeoutMs?: number;
+    }
+): Promise<DbOperationEvent> {
+    const {
+        operation,
+        operationId,
+        phase,
+        playlistId,
+        predicate,
+        status,
+        timeoutMs = 20000,
+    } = options;
+    const startedAt = Date.now();
+
+    while (Date.now() - startedAt <= timeoutMs) {
+        const events = await page.evaluate(
+            () => window.__dbOperationEvents ?? []
+        );
+        const match = events.find((event) => {
+            if (event.operation !== operation) {
+                return false;
+            }
+
+            if (operationId && event.operationId !== operationId) {
+                return false;
+            }
+
+            if (status && event.status !== status) {
+                return false;
+            }
+
+            if (phase && event.phase !== phase) {
+                return false;
+            }
+
+            if (playlistId && event.playlistId !== playlistId) {
+                return false;
+            }
+
+            return predicate ? predicate(event) : true;
+        });
+
+        if (match) {
+            return match;
+        }
+
+        await page.waitForTimeout(200);
+    }
+
+    const recentEvents = await page.evaluate(() =>
+        (window.__dbOperationEvents ?? []).slice(-20)
+    );
+
+    throw new Error(
+        `Timed out waiting for DB event ${operation}. Recent events: ${JSON.stringify(
+            recentEvents,
+            null,
+            2
+        )}`
+    );
+}
+
+export async function getRendererFrameCount(page: Page): Promise<number> {
+    return page.evaluate(() => window.__rendererFrameCount ?? 0);
+}
+
+export async function expectRendererFramesAdvance(
+    page: Page,
+    options: {
+        minimumDelta?: number;
+        sampleMs?: number;
+    } = {}
+): Promise<void> {
+    const { minimumDelta = 4, sampleMs = 300 } = options;
+    const startCount = await getRendererFrameCount(page);
+
+    await page.waitForTimeout(sampleMs);
+
+    await expect
+        .poll(async () => (await getRendererFrameCount(page)) - startCount, {
+            timeout: sampleMs + 1500,
+        })
+        .toBeGreaterThanOrEqual(minimumDelta);
+}
+
+export async function resetMockServers(
+    request: APIRequestContext,
+    providers: PortalProvider[]
+): Promise<void> {
+    for (const provider of providers) {
+        const server =
+            provider === 'stalker' ? stalkerMockServer : xtreamMockServer;
+        const response = await request.post(`${server}/reset`);
+        expect(response.ok()).toBeTruthy();
+    }
+}
+
+async function openCommandPalette(page: Page): Promise<Locator> {
+    const modifier = process.platform === 'darwin' ? 'Meta' : 'Control';
+    await page.locator('body').focus();
+    await page.keyboard.press(`${modifier}+K`);
+    const dialog = page.locator(
+        'mat-dialog-container app-workspace-command-palette'
+    );
+
+    await expect(dialog).toBeVisible();
+    return dialog;
+}
+
+async function confirmDialog(page: Page, buttonLabel: string): Promise<void> {
+    const dialog = page.locator('mat-dialog-container');
+
+    await expect(dialog).toBeVisible();
+    await dialog
+        .getByRole('button', { name: buttonLabel, exact: true })
+        .click();
+    await page.waitForSelector('mat-dialog-container', { state: 'detached' });
+}
+
+async function selectSourcesTypeFilterOption(
+    page: Page,
+    label: string
+): Promise<void> {
+    const option = page
+        .locator('app-workspace-sources-filters-panel .option-row')
+        .filter({
+            has: page.locator('.option-label', {
+                hasText: flexibleTextPattern(label),
+            }),
+        })
+        .first();
+
+    await expect(option).toBeVisible();
+    await option.click();
+}
+
+async function listenOnRandomPort(server: Server): Promise<void> {
+    await new Promise<void>((resolvePromise, reject) => {
+        server.once('error', reject);
+        server.listen(0, '127.0.0.1', () => {
+            server.off('error', reject);
+            resolvePromise();
+        });
+    });
+}
+
+async function closeServer(server: Server): Promise<void> {
+    await new Promise<void>((resolvePromise, reject) => {
+        server.close((error) => {
+            if (error) {
+                reject(error);
+                return;
+            }
+
+            resolvePromise();
+        });
+    });
+}
+
+function escapeRegex(value: string): string {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function flexibleTextPattern(value: string): RegExp {
+    return new RegExp(
+        value
+            .trim()
+            .split(/\s+/)
+            .map((part) => escapeRegex(part))
+            .join('\\s+'),
+        'i'
+    );
+}
+
+async function isButtonToggleSelected(toggle: Locator): Promise<boolean> {
+    try {
+        return await toggle.evaluate((element) => {
+            const host = element as HTMLElement;
+            const selectedDescendant = host.querySelector(
+                '[aria-checked="true"], [aria-pressed="true"]'
+            );
+
+            return (
+                host.classList.contains('mat-button-toggle-checked') ||
+                host.getAttribute('aria-checked') === 'true' ||
+                host.getAttribute('aria-pressed') === 'true' ||
+                selectedDescendant !== null
+            );
+        });
+    } catch {
+        return false;
+    }
+}
+
+async function visibleContentCardTitles(page: Page): Promise<string[]> {
+    return page
+        .locator('app-content-card h3')
+        .allInnerTexts()
+        .then((titles) => titles.map((title) => title.trim()).filter(Boolean));
+}
+
+function normalizeVisibleText(value: string): string {
+    return value.trim().replace(/\s+/g, ' ').toLowerCase();
+}

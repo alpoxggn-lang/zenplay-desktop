@@ -1,0 +1,100 @@
+import { Conf } from 'electron-conf/main';
+import { getElectronConfigDirectory } from '@iptvnator/shared/database';
+import type {
+    AppUpdateChannel,
+    StartupWindowMode,
+} from '@iptvnator/shared/interfaces';
+
+export const WINDOW_BOUNDS = 'WINDOW_BOUNDS';
+/** App-wide zoom, as the raw Electron zoom level (0 is default). */
+export const ZOOM_LEVEL = 'ZOOM_LEVEL';
+export const MPV_PLAYER_PATH = 'MPV_PLAYER_PATH';
+export const MPV_PLAYER_ARGUMENTS = 'MPV_PLAYER_ARGUMENTS';
+export const VLC_PLAYER_PATH = 'VLC_PLAYER_PATH';
+export const VLC_PLAYER_ARGUMENTS = 'VLC_PLAYER_ARGUMENTS';
+export const MPV_REUSE_INSTANCE = 'MPV_REUSE_INSTANCE';
+export const VLC_REUSE_INSTANCE = 'VLC_REUSE_INSTANCE';
+
+/**
+ * Embedded MPV frame-copy engine opt-in (macOS arm64, Linux x64). Lives in the
+ * main process config file because it must be readable synchronously before
+ * the BrowserWindow is created — the engine relaxes the window sandbox for
+ * its preload frame pump, which cannot change after window creation.
+ */
+export const EMBEDDED_MPV_FRAME_COPY = 'EMBEDDED_MPV_FRAME_COPY';
+/**
+ * Window presentation at launch (`normal` / `maximized` / `fullscreen`).
+ * Mirrored here from the renderer's settings by the SETTINGS_UPDATE handler
+ * for the same reason as the frame-copy flag: `initMainWindow` needs it
+ * synchronously, before any renderer exists to ask.
+ */
+export const STARTUP_WINDOW_MODE = 'STARTUP_WINDOW_MODE';
+
+/** Desktop portal request cooldown; absent means enabled. */
+export const PORTAL_CONNECTIVITY_GUARD = 'PORTAL_CONNECTIVITY_GUARD';
+
+/**
+ * Parental lock feature switch, mirrored from the renderer's settings by the
+ * SETTINGS_UPDATE handler. Read when the database worker starts and when a
+ * renderer reloads or dies, so the SQLite reads are locked before any page
+ * has announced its lock state. Absent means off.
+ */
+export const PARENTAL_LOCK_ENABLED = 'PARENTAL_LOCK_ENABLED';
+
+/**
+ * Update channel (`stable` / `nightly`). Mirrored here from the renderer's
+ * settings by the SETTINGS_UPDATE handler because the startup update check
+ * runs before the renderer's IndexedDB settings are reachable; absent means
+ * `stable`. Read and written only through `app-update-channel.ts`.
+ */
+export const APP_UPDATE_CHANNEL = 'APP_UPDATE_CHANNEL';
+
+/**
+ * Local XMLTV files the EPG importer may read: every path the native picker
+ * returned plus every hand-typed path the user allowed in the main-process
+ * confirmation (`epg-local-source-authorizer.ts`). Owned by main, never by
+ * the renderer, because the renderer is what this list defends against.
+ */
+export const TRUSTED_LOCAL_EPG_SOURCES = 'TRUSTED_LOCAL_EPG_SOURCES';
+
+/**
+ * Extra libmpv options for embedded sessions, one "key=value" per line, as
+ * typed in Settings > Playback. Mirrored here by the SETTINGS_UPDATE handler
+ * because sessions are created in the main process, where the renderer's
+ * IndexedDB settings are unreachable. Turned into addon arguments by
+ * `readEmbeddedMpvSessionOptions()`.
+ */
+export const EMBEDDED_MPV_EXTRA_OPTIONS = 'EMBEDDED_MPV_EXTRA_OPTIONS';
+
+/**
+ * Whether a dropped embedded MPV stream is reloaded automatically. Same
+ * mirror as above; absent means enabled.
+ */
+export const EMBEDDED_MPV_AUTO_RECONNECT = 'EMBEDDED_MPV_AUTO_RECONNECT';
+
+export type StoreType = {
+    [WINDOW_BOUNDS]: Electron.Rectangle;
+    [ZOOM_LEVEL]: number;
+    [MPV_PLAYER_PATH]: string;
+    [MPV_PLAYER_ARGUMENTS]: string;
+    [VLC_PLAYER_PATH]: string;
+    [VLC_PLAYER_ARGUMENTS]: string;
+    [MPV_REUSE_INSTANCE]: boolean;
+    [VLC_REUSE_INSTANCE]: boolean;
+    [EMBEDDED_MPV_FRAME_COPY]: boolean;
+    [EMBEDDED_MPV_EXTRA_OPTIONS]: string;
+    [EMBEDDED_MPV_AUTO_RECONNECT]: boolean;
+    [STARTUP_WINDOW_MODE]: StartupWindowMode;
+    [PORTAL_CONNECTIVITY_GUARD]: boolean;
+    [PARENTAL_LOCK_ENABLED]: boolean;
+    [APP_UPDATE_CHANNEL]: AppUpdateChannel;
+    [TRUSTED_LOCAL_EPG_SOURCES]: string[];
+};
+
+// Export singleton store instance
+const electronConfigDirectory = getElectronConfigDirectory();
+const storeOptions = electronConfigDirectory
+    ? { dir: electronConfigDirectory }
+    : {};
+
+export const store = new Conf<StoreType>(storeOptions);

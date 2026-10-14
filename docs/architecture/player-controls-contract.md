@@ -1,0 +1,1932 @@
+# Player-Controls Contract
+
+This document is the canonical reference for IPTVnator's additive,
+engine-agnostic player-controls contract and shared default controls.
+Embedded MPV rendering and native-view bounds behavior remain documented in
+[embedded-mpv-native.md](./embedded-mpv-native.md).
+
+## Current status
+
+The shared-controls preference checkbox is visible only when HTML5, Video.js
+or ArtPlayer is selected in Settings → Playback.
+
+The shared-controls foundation supports four runtime consumers and includes:
+
+- the `PlayerController` contract, default state, and capability presets;
+- the standalone `app-player-controls` presentation component and its
+  transient-state collaborators;
+- a generic `WebVideoControlsAdapter` plus small host helpers;
+- standard element picture-in-picture through that adapter for the guarded web
+  consumers;
+- a persisted, default-on web-player preference (opt-out) resolved through an
+  immutable per-host rollout token;
+- the component-scoped `EmbeddedMpvControlsAdapter`;
+- an `EmbeddedMpvPlayerComponent` host integration for the frame-copy engine;
+- a preference-guarded `HtmlVideoPlayerComponent` integration backed by
+  `WebVideoControlsAdapter` and a player-local engine bridge;
+- a preference-guarded `VjsPlayerComponent` integration backed by a
+  component-scoped `WebVideoControlsAdapter` and Video.js bridge;
+- a preference-guarded `ArtPlayerComponent` integration backed by a
+  component-scoped `WebVideoControlsAdapter`, neutral web-video source bridge,
+  and player-local source/video sessions; and
+- focused unit/component tests.
+
+When Embedded MPV reports `engine: 'frame-copy'`, the component mounts
+`app-player-controls` over the DOM canvas and routes state and commands through
+`EmbeddedMpvControlsAdapter`. When it reports the native-view engine, the
+component keeps the existing compositor-safe controls dock. Exactly one of
+those control systems is active at a time.
+
+When `WEB_PLAYER_SHARED_CONTROLS` is enabled, the built-in HTML5 player mounts
+the same presentation component over its real player shell and disables the
+native video controls. Its neutral source bridge supplies HLS/Shaka/native tracks,
+corrected MPEG-TS VOD duration, and authoritative live/VOD metadata to the
+generic web adapter. When the host token resolves to false, the native controls
+and legacy series navigation remain unchanged and the adapter is not attached.
+
+Video.js consumes the same token and shared presentation atomically. Its bridge
+binds the adapter to the current Video.js Tech `<video>` and rebinds after
+`playerreset`, while focused collaborators expose Video.js audio/text tracks
+and manage raw MPEG-TS playback. When the host token resolves to false, Video.js
+keeps its existing skin and legacy series navigation.
+
+ArtPlayer is the fourth consumer. Its source session owns HLS, MPEG-TS, native
+source selection, and delayed `customType` callbacks, while the neutral
+web-video source bridge exposes HLS/Shaka/native tracks, caption preference, and
+MPEG-TS VOD duration to the adapter. Its video session owns native media and
+ArtPlayer event listeners. Shared mode uses authoritative live/VOD metadata,
+reapplies the app volume directly to the media element after ArtPlayer restores
+its own stored volume, disables vendor chrome/hotkeys, and places a transparent
+event-capture layer over ArtPlayer so shared controls exclusively own surface
+clicks and double-clicks. Playback diagnostics gate shared interaction and exit
+only the shared controls' resolved fullscreen owner (the host-supplied
+`fullscreenTarget`, else the ArtPlayer shell). Source replacement and teardown
+remove exact listeners and engines, and destroyed sessions ignore stale delayed
+`customType` callbacks. When the host token resolves to false, the existing
+ArtPlayer skin, source behavior, and legacy series navigation remain unchanged.
+
+With shared controls enabled, HTML5, Video.js, and ArtPlayer expose standard
+element picture-in-picture through the adapter's attached `<video>`. Shared
+ArtPlayer keeps its vendor `pip` option disabled so the shared button is the
+only PiP button. Preference-off native/vendor controls keep their own UI;
+exact-owner PiP teardown also applies in that mode.
+Embedded MPV advertises no PiP capability and its command is a no-op.
+
+`Settings.webPlayerSharedControls` is default-ON: an absent stored value means
+the user never chose and gets the shared controls; only an explicit boolean
+`false` (the Settings > Playback checkbox) opts back into the legacy vendor
+chrome. Every normalization site (`SettingsStore` load/update/read and the
+settings form) coerces with `!== false` for exactly this reason — a stored
+settings object from before the default flip has no key at all, and `=== true`
+would silently strand those users on the old default. `WebPlayerViewComponent`
+snapshots the preference into `WEB_PLAYER_SHARED_CONTROLS` when a new player
+host is created, so HTML5, Video.js, and ArtPlayer switch atomically without an
+application restart. The parent `/workspace` route awaits the initial
+`SettingsStore` load, including for cold-start direct links to workspace
+children, before any player host can take this snapshot. Existing sessions
+never change controls mode in place.
+
+The shared-controls architecture remains engine-selective: frame-copy can use
+normal DOM layering, while the native platform view cannot. The integration
+also includes a recording coordinator that correlates asynchronous snapshots
+with the active playback/session owner, serializes toggles, and cancels pending
+ownership when the session, playback, engine, or component changes.
+
+## Diagnostics And Recovery Ownership Boundary
+
+`PlayerController` remains a sibling of playback diagnostics and recovery
+recommendations. It owns engine-neutral playback state, capabilities, and
+commands for the shared controls; it does not classify errors, call
+`recommendPlaybackRecovery()`, rank actions, track recovery attempts, choose a
+temporary player, or own content-session policy.
+
+Those pure contracts and policies live in `@iptvnator/playback/util` (Nx
+project `playback-util`). `WebPlayerViewComponent` owns their in-memory,
+session-local application. No diagnostic or recommendation state or command is
+added to `PlayerController`.
+
+The only controls-layer participation is interaction gating. While the sibling
+diagnostic panel is visible, a web-player host disables shared surface and
+keyboard ownership and exits only the resolved fullscreen owner's DOM
+fullscreen (the host-supplied `fullscreenTarget`, else its own shell) so the
+recovery actions remain reachable. Clearing the diagnostic restores those paths; it
+does not make the controls contract an owner of the recovery lifecycle.
+
+## Why this exists
+
+Historically each playback engine owned both media integration and controls UI.
+That made behavior drift likely and made a controls redesign depend on each
+engine's implementation details.
+
+The shared contract separates:
+
+- **presentation** — what the controls render and which interactions they own;
+- **state and capabilities** — the engine-neutral snapshot the UI reads; and
+- **commands** — the small imperative surface an engine adapter implements.
+
+Rendering and compositing remain engine responsibilities. In particular, the
+contract does not make a native video surface behave like DOM content.
+
+## Landed architecture
+
+```text
+┌──────────────────────────────────────────────────────────────────────┐
+│ app-player-controls                                                  │
+│ Standalone shared presentation component                            │
+│ Menus · feedback · auto-hide · DOM fullscreen · shortcuts · scrub UI│
+└───────────────────────────────┬──────────────────────────────────────┘
+                                │ input.required<PlayerController>()
+                                ▼
+┌──────────────────────────────────────────────────────────────────────┐
+│ PlayerController                                                     │
+│ capabilities: Signal<PlayerControlsCapabilities>                    │
+│ state:        Signal<PlayerControlsState>                           │
+│ commands:     PlayerControlsCommands                                │
+└───────────────────────────────┬──────────────────────────────────────┘
+                                │
+                   adapters implement this boundary
+                                │
+             ┌──────────────────┴──────────────────┐
+             ▼                                     ▼
+┌──────────────────────────────┐     ┌──────────────────────────────┐
+│ WebVideoControlsAdapter      │     │ EmbeddedMpvControlsAdapter   │
+│ Generic, component-scoped    │     │ Component-scoped             │
+└──────────────┬───────────────┘     └──────────────┬───────────────┘
+               │                                    │
+               ▼                                    ▼
+┌──────────────────────────────┐     ┌──────────────────────────────┐
+│ Per-host preference snapshot │     │ EmbeddedMpvPlayerComponent   │
+│ HTML5 + Video.js + ArtPlayer │     │ frame-copy: shared controls  │
+│ true: shared controls        │     │ native-view: legacy dock     │
+│ false: existing controls     │     └──────────────────────────────┘
+└──────────────────────────────┘
+```
+
+The embedded host selects controls from the reported engine before rendering
+them. It never mounts the shared overlay and legacy dock together.
+The HTML5, Video.js, and ArtPlayer hosts likewise select their existing or
+shared controls before rendering and never attach the web adapter while the
+preference-off path is active.
+
+## The contract
+
+The contract is defined in
+`libs/ui/playback/src/lib/player-controls/player-controls.model.ts`.
+
+```ts
+interface PlayerController {
+    readonly capabilities: Signal<PlayerControlsCapabilities>;
+    readonly state: Signal<PlayerControlsState>;
+    readonly commands: PlayerControlsCommands;
+    /** Optional; see "Stream info popover". */
+    readonly streamStats?: PlayerStreamStatsSource;
+}
+```
+
+### Capabilities
+
+`PlayerControlsCapabilities` contains booleans for `seek`, `volume`,
+`audioTracks`, `subtitles`, `externalSubtitles`, `subtitleDelay`,
+`subtitleStyle`, `qualityLevels`, `playbackSpeed`, `aspectRatio`,
+`recording`, `pictureInPicture`, `fullscreen`, `seriesNavigation`, and
+`streamStats`.
+
+The default is all-false. An adapter enables only features that its engine and
+current runtime support. Capability flags primarily control whether optional UI
+is rendered; state such as `canSeek`, `canPreviousEpisode`, and
+`canNextEpisode` guards the corresponding action at runtime.
+
+### State
+
+`PlayerControlsState` is one reactive engine-neutral snapshot:
+
+- playback status, loading/error message, and stalled state;
+- current position, optional duration, live/VOD classification, and seekability;
+- volume;
+- pre-labelled audio/subtitle tracks and subtitle-enabled state;
+- pre-labelled quality levels and the ABR/auto flag;
+- playback speed and aspect-ratio selections/presets;
+- recording state;
+- picture-in-picture active state and runtime availability; and
+- previous/next episode availability.
+
+Adapters translate engine types into this model. The controls component must not
+import Video.js, hls.js, ArtPlayer, libmpv, Electron IPC, or native-view types.
+Recording state may expose a `transitionKey` that identifies its current
+playback/session owner. When that key changes, shared feedback adopts the new
+active baseline without flashing a start or saved transition from the previous
+owner.
+
+### Commands
+
+`PlayerControlsCommands` is an imperative, fire-and-forget surface:
+
+- `togglePlay`
+- `seekTo` / `seekBy` — `seekBy` is a relative command; Embedded MPV forwards
+  the delta to mpv itself instead of adding it to the snapshot position (see
+  `embedded-mpv-native.md`, "Resume And Track Handling")
+- `setVolume`
+- `setAudioTrack` / `setSubtitleTrack`
+- `addExternalSubtitleFile` / `setSubtitleDelay` / `setSubtitleStyle`
+- `setQualityLevel` (`AUTO_QUALITY_LEVEL_ID` = `-1` re-enables auto)
+- `setPlaybackSpeed`
+- `setAspectRatio`
+- `toggleRecording`
+- `togglePictureInPicture`
+
+Episode navigation is deliberately exposed as component outputs
+(`previousEpisodeRequested` and `nextEpisodeRequested`) because the owning
+playlist/portal feature decides which item to play.
+
+Fullscreen is also outside the engine command contract. The landed component
+uses `ControlsFullscreen`, which operates on one DOM element through
+`requestFullscreen()` / `document.exitFullscreen()`: the optional
+`fullscreenTarget` input when the host supplies one, else the `playerSurface`.
+There is no fullscreen delegate or native-fullscreen IPC path.
+`ControlsFullscreen.sync()` reconciles state when that element attaches or
+changes, including when it is already fullscreen. The Embedded MPV host's
+existing `fullscreenchange` listener still triggers bounds sync so frame-copy
+render size follows the fullscreen DOM surface.
+
+The owner matters because `WebPlayerViewComponent` remounts the engine
+component for every playback application (`@for ... track application.token`:
+next episode, channel zap, alternative source, retry) and the Fullscreen API
+exits the moment its element leaves the document. A shell-owned fullscreen
+therefore ended with every switch. `WebPlayerViewComponent` now passes its own
+host element (`fullscreenSurface`) as `fullscreenTarget` to HTML5, Video.js,
+ArtPlayer, and Embedded MPV; that element spans all applications of one mount,
+so a fullscreen entered on episode 1 is still active when episode 2's engine
+mounts, and the fresh controls adopt it through `sync()` on attach. The
+`playerSurface` (pointer/click/cursor ownership) stays the engine shell. The
+vendor-chrome opt-out keeps engine-owned fullscreen and still loses it on a
+switch — see "Known differences".
+
+One dependency this uncovered: `WebPlayerViewComponent.channel` and
+`vjsOptions` are signals. In Electron the source is handed to the engine inside
+the stream-header IPC promise, after the pass that mounted the application,
+and the view sits under OnPush hosts (`PortalInlinePlayerComponent`); as plain
+fields they were only rendered when something else dirtied the subtree — which
+used to be the stage resize caused by the fullscreen exit on every switch. A
+remounted engine inside a still-active fullscreen has no such trigger.
+
+## Shared default controls
+
+`PlayerControlsComponent` is a standalone presentation component. The
+frame-copy Embedded MPV host mounts it over its DOM canvas, and the guarded
+HTML5, Video.js, and ArtPlayer hosts mount it over
+`.html-video-player-shell`, `.vjs-player-shell`, and `.art-player-shell`,
+respectively.
+
+It owns only transient presentation behavior:
+
+- `ControlsMenuState` — single-open popovers;
+- `ControlsFeedback` — temporary action feedback;
+- `ControlsVisibility` — reveal and auto-hide state;
+- `ControlsFullscreen` — DOM fullscreen;
+- `ControlsVolume` — persisted/optimistic volume state reconciled from
+  controller state;
+- `ControlsShortcuts` — document keyboard routing;
+- `ControlsSurface` — pointer/click/double-click surface interactions;
+- `ControlsTimeline` — scrub state and timeline projections;
+- `ControlsTimelineLabel` — where the timeline label points: the time under
+  a hovering pointer, else the slider value while the keyboard or a drag
+  moves it, plus the pure `clampTimelineLabelLeft` placement;
+- `app-player-timeline` — presentation of the timeline row (current time,
+  segment track, knob, label, remaining time / LIVE, recording
+  status); scrub `input`/`change` events go back to the controls component,
+  which owns reveal and seeking;
+- `ControlsLayout` — the compact/wide dock mode from the host's width;
+- `ControlsSettings` — the settings panel's groups, on/modified state and
+  open/close transitions (`controls-settings-groups.ts` holds the pure
+  group-availability rule);
+- `app-player-settings-panel` — the panel / bottom sheet presentation,
+  whose radio groups use `settings-radio-group.directive.ts`;
+- `ControlsUpNext` and `app-player-up-next-card` — the "Up next" card's
+  gate and presentation; and
+- `controls-view-model.ts` — derived display state.
+
+### The dock
+
+The controls render as a **dock** (`.player-controls__bar`) with no surface
+of its own: a timeline row above a three-column control row, sitting
+directly on the video over the bottom scrim. The palette is a fixed set of
+`--pc-*` custom properties on `:host` — accent blue `#4f8eff` for the
+primary action and progress, cyan `#5cd6ff` for "something is on", violet
+`#b599ff` for "a value was changed", the `#e7ecf3` / `#9aa3b2` /
+`#6b7384` text ramp, and two reds: `--pc-live` `#d32f2f` fills the LIVE
+badge (white label 5.0:1), and `--pc-danger` `#ff5252` colours the active
+record glyph and the recording status (6.2:1 on the glass over a black
+frame). The seek bar's unplayed track is the opaque `--pc-timeline-track`
+`#313437` and its segment separators are `--pc-timeline-separator` white,
+so their contrast does not depend on the frame (see Timeline segments).
+They are literal on purpose: the overlay is
+theme-independent (see the UI guidelines' player theme boundary), and the
+app's `--app-selection-color` is a different blue that would fight the video.
+Watch progress reads `--pc-progress`, the accent blue declared by the
+`progress-token` mixin of `_player-palette.scss`; the Up Next rail and the
+fullscreen episode panel include the same mixin, so one episode's bar has
+one colour in every player surface (UI guidelines, "Watch progress colour").
+
+- **Timeline row**: current time (`--pc-font-mono`, tabular) · drawn track
+  (`.player-controls__timeline-track` with one segment and an accent fill,
+  a white knob ringed in translucent blue) · remaining time as `−7:03`
+  (`formatRemainingTime`; the LIVE badge replaces it on live streams and
+  `--:--` stands in while no duration is known) · the recording status.
+  The badge text is the translated `LIVE_BADGE`, and both it and the
+  `--:--` placeholder (`UNKNOWN_TIME_TEXT`) are `role="img"` elements named
+  `LIVE_STREAM` / `DURATION_UNKNOWN`: a name on a role-less span is never
+  announced, and the dashes are not words.
+  The `<input type="range">` stays as the interaction and accessibility
+  layer, invisible and full-size over the drawn track: dragging, arrow
+  keys, `aria-valuetext` and the focus ring (drawn on the track through
+  `:has(:focus-visible)`) all belong to it, so scrubbing semantics are
+  unchanged. Hovering the bar with a mouse shows a white marker and a
+  `1:40` label above the pointer. Keyboard focus on the slider
+  (`:focus-visible`, or any seek key) and a drag preview — the only way
+  touch, which never hovers, gets it — show the same label at the slider
+  value instead, without the marker (`ControlsTimelineLabel`; a hovering
+  pointer wins). A non-seekable timeline never labels.
+- **Control row**: `minmax(0,1fr) auto minmax(0,1fr)`. Left: the volume
+  button, with the slider **inline** (72px) in the wide mode and behind
+  the hover/tap popover in the compact mode — inline, the button is a
+  plain mute toggle for every pointer type (`buttonClick(event,
+  { inlineSlider: true })`). Center: previous episode · −10s · **play** ·
+  +10s · next episode. Right: the value chips, the `tune` button,
+  recording, picture-in-picture and fullscreen, end-aligned.
+- **Play button** (`.player-controls__play`, `data-test-id
+  ="player-controls-play"`): a 52px filled accent circle with a white glyph,
+  not a Material icon button. Fills under a white glyph (play, active
+  `tune`) use `--pc-accent-blue-strong` `#3474e8` (4.4:1) rather than the
+  `#4f8eff` accent (3.2:1), and hover darkens to `#2a66d6` (5.3:1) without
+  scaling — `player-theme.e2e.ts` rasterizes the hovered and focused
+  states, and on a 1x Windows display the antialiased or resampled glyph
+  measured below 3:1 against the lighter fills.
+- **Icon buttons** are 40px with a 12px radius (32px / 9px compact) through
+  Material's `--mat-icon-button-*` tokens; their hover is a flat
+  `rgba(255,255,255,.1)` layer. Keyboard focus draws a 2px `--pc-text`
+  outline (`:focus-visible`), and Material's focus state layer is switched
+  off: its colour comes from the app theme, and the light theme's dark layer
+  left no visible focus on video. The settings panel's icon buttons use the
+  same ring, inset by 2px because the panel body clips at its edge.
+
+### Timeline segments
+
+The track is drawn as a row of segments, each with its own accent fill, so
+a film's chapters or a catch-up recording's programmes read directly off
+the bar. Each segment is placed absolutely at its time position (`left` =
+start percent, `width` = share minus the 2px gap every segment but the
+last keeps), so a drawn boundary sits exactly where the linear seek input
+and the label change segment; a segment shorter than the gap
+collapses instead of pushing its neighbours. The optional `timelineSegments` input
+(`PlayerTimelineSegment { startSeconds, endSeconds, title }`) supplies
+them; `normalizeTimelineSegments` (`controls-timeline-segments.ts`) clamps
+to the duration, orders, drops empty and reversed entries, cuts overlaps at
+the previous end and fills every gap with an untitled segment so the row
+always covers `[0, duration]`. Without segments — live playback, VOD and
+series — the row is one untitled segment, which is the plain bar.
+`ControlsTimeline` owns the normalized list and the per-segment fill for the
+current scrub or playback value; the label becomes `Chapter 2 · 12:40`
+over a titled segment.
+
+Boundaries hold 3:1 over any frame. Segments only round the bar's two
+ends, and every gap (2px, `TIMELINE_SEGMENT_GAP_PX`) is filled by a
+separator (`separatorLeft`, never left of the track's start, where a
+boundary in the bar's first pixels would put it) in
+`--pc-timeline-separator` white: 12.5:1 on
+the opaque `--pc-timeline-track`, 3.2:1 on the `--pc-progress` fill, which
+keeps 4.0:1 on the track. The former translucent track with see-through
+gaps measured 1.3–1.6:1 at its boundaries, and its fill fell to 1.1:1 over
+a bright frame (`player-controls.palette.spec.ts` pins the ratios).
+
+The names reach every user, whichever source drew the segments. The
+slider's `aria-valuetext` is the translated `TIMELINE_SEGMENT_POSITION`
+(`{{title}} · {{time}}`) whenever the scrub or playback value — the
+keyboard's target included — lies in a titled segment
+(`ControlsTimeline.segmentTitle`), and the plain time otherwise. The visible
+label (`aria-hidden`; it mirrors the valuetext) is two parts: the title
+ellipsizes at `min(320px, 60cqw)` and the time never truncates. The
+stylesheet centres it on its anchor; once laid out,
+`PlayerTimelineComponent` moves it by its measured width
+(`clampTimelineLabelLeft`, an `afterRenderEffect`) so it stays 8px inside
+the player (`.player-controls-host`) — past the bar's ends when needed, as
+the bar is narrower than the player. A `ResizeObserver` on the bar and the
+player re-places it when only the size changes (a paused player whose
+slider the keyboard holds, in a narrowed window). `xtream-catchup-timeline-label.e2e.ts`
+tabs to the bar with a 120-character programme title at 1280 and 800px, in
+both themes and in de and ru.
+
+**Chapter producer.** Embedded MPV reports the file's own chapters: the
+addons and the frame-copy helper observe mpv `chapter-list` and publish it
+as `EmbeddedMpvSession.chapters` (`{ timeSeconds, title? }`, validated in
+main by `normalizeEmbeddedMpvChapters`). `buildChapterTimelineSegments`
+(`chapter-timeline-segments.ts`) runs each chapter from its start to the
+next one's, the last to the duration, orders them and drops repeated or
+out-of-range starts; an untitled chapter becomes an untitled segment, and
+no chapters or no finite duration yields `null`.
+`EmbeddedMpvPlayerComponent.controlsTimelineSegments`
+(`embeddedMpvTimelineSegments`) passes the host's segments when it
+supplies any and the chapter segments otherwise, so catch-up programmes
+always win; `sameTimelineSegments` keeps a re-polled, unchanged list from
+counting as a change. The Linux native-view `mpv --wid` backend reads no
+chapters, and the web engines report none (streamed HLS/DASH carries no
+chapter track), so their VOD and series stay one plain bar.
+
+**Catch-up producer.** Archive playback of a live channel passes the EPG
+programmes overlapping its archive window.
+`buildCatchupTimelineSegments(programmes, activeProgramme, windowEnd?)`
+(`catchup-timeline-segments.ts`) clips every programme to the window and
+makes it relative to the window start, which is the activated programme's
+start. Xtream timeshift URLs request exactly `[start, stop]` of that
+programme, so the window ends at its stop. M3U catch-up URLs run from `utc`
+to `lutc`, the moment the URL was resolved, so M3U hosts pass
+`getM3uCatchupWindowEndSeconds(url)` (`@iptvnator/shared/m3u-utils`) and every
+programme up to then is drawn. Programme and window times follow the EPG view
+rule (unix timestamp, else the ISO string), so the display offset cancels.
+The activated programme always owns its own span, with its own title: a
+list from another date may lack it, and an overlapping or revised guide
+entry must not relabel the archive being played, so other programmes only
+fill the window after it. Live playback returns `null`. Stalker has no
+archive playback, so it has no producer.
+
+Plumbing mirrors `mediaTitle`: each live host derives
+`catchupTimelineSegments` → `WebPlayerViewComponent.timelineSegments` → the
+four engine hosts → `app-player-controls`. The hosts are the Xtream live
+layout (`controlledEpgPrograms` + `activeCatchupProgram`), the unified live
+tab for Favorites and Recent (`createUnifiedLiveEpgView`, both Xtream and
+M3U), and the M3U playlist player (`epgPrograms` + `activeEpgProgram` while
+`activePlaybackUrl` is set). `PortalInlinePlayerComponent` hosts no catch-up
+and passes nothing. Like the Up next card, the segments reach Embedded MPV
+under the frame-copy engine only, the one that mounts `app-player-controls`;
+the native-view legacy dock keeps its plain slider.
+
+### Up next card
+
+Near the end of a series episode the dock shows an **"Up next" card**
+(`app-player-up-next-card`, `data-test-id="player-controls-up-next"`) in the
+bottom-right corner above the controls: the next episode's still (or its
+`S01E03` label as a tile), a 3px `--pc-progress` line when it was partly
+watched, "Up next · in 7 min" and the title. The host supplies the item
+through the optional `upNext` input (`PlayerUpNextItem { label, title,
+thumbnailUrl, progressPercent }`); `ControlsUpNext` decides when it shows —
+`seriesNavigation` capability, a finite duration, not live, not `ended`
+(with autoplay off nothing is scheduled, so no countdown), controls shown,
+settings panel closed, not dismissed — and when. The lead adapts to the
+episode: `upNextThresholdSeconds` is 4% of the duration clamped to
+40 s … 3 min (about 50 s for a 22-minute episode, 2.4 min for an hour). When
+`timelineSegments` carry a closing-credits chapter in the last third
+(`creditsStartSeconds`: "Credits", "Outro", "Ending", an anime `ED`, and a
+few localized names), the card appears when it starts instead, at most
+5 min before the end. Embedded MPV under the frame-copy engine supplies
+file chapters (see the chapter producer above); every other engine, and a
+file without a credits chapter, uses the adaptive lead. The countdown shows whole minutes, and seconds
+in the last minute. A
+still that fails to load falls back to the label tile. A
+click emits `nextEpisodeRequested` directly — not through the
+transport's `canNextEpisode` guard, which is season-local — so the card
+also works at a season's last episode. `PortalInlinePlayerComponent`
+routes such a request through the Up Next rail selection
+(`upNextEpisodeSelected`) whenever `seriesNavigation.canNext` is false, which
+plays the next season's first episode; either path keeps fullscreen exactly
+like the transport button.
+The card is a glass surface that stays visible when the controls auto-hide
+(`showControls` is the host's input, not the idle state); the compact dock
+uses a smaller variant without the trailing icon. After
+`UP_NEXT_COLLAPSE_DELAY_MS` (10 s, paused while hovered) the card asks to
+collapse and `ControlsUpNext.collapse()` turns it into a one-line pill
+(label and countdown) for the rest of the episode. A corner close button
+(`player-controls-up-next-close`) or Escape on the focused card calls
+`dismiss()`, which hides it until the item it points to changes; Escape is
+stopped at the card so it does not reach the player's own Escape handling.
+The `playerUpNextCard` setting (default on) turns the card off: the
+producer below then passes `null`.
+
+Plumbing mirrors `mediaTitle`: `PortalInlinePlayerComponent.playerUpNext`
+derives the item after the playing one from its `upNextEpisodes` input
+(episodes only, and only while `playerUpNextCard` is not `false`) → `WebPlayerViewComponent.upNext` → the four engine hosts →
+`app-player-controls`. Movie and live hosts pass nothing.
+
+### Settings panel
+
+Every track, quality, speed and aspect choice lives behind one **`tune`**
+button (`data-test-id="player-controls-settings-button"`) in a single
+surface, `app-player-settings-panel` (`player-settings-panel.component.*`),
+instead of five popovers. `ControlsMenuState` knows three menus — `volume`,
+`settings`, `stats` — and `settingsFocus`, the group the panel was opened
+for. `ControlsSettings` derives, from capabilities and state, which groups
+exist (`getSettingsGroupAvailability`: audio needs more than one track,
+subtitles a track or `externalSubtitles`, quality more than one level,
+speed and aspect their capabilities), whether anything is on or changed,
+and owns open/toggle/close; the `tune` button and the panel render only
+while at least one group exists, and the availability reconciliation closes
+the panel the moment the last group disappears.
+
+- **Roomy wide dock** (≥ 960px): two **value chips** precede `tune` — subtitles
+  (`closed_caption` + the selected track's label, or "Off") and speed
+  (`speed` + `1.25×`). A chip's accessible name and tooltip carry its
+  value (`SUBTITLES_TOOLTIP` "Subtitles: English", `SPEED_TOOLTIP`
+  "Speed: 1.25×"); `tune` has `aria-haspopup="dialog"` and
+  `aria-expanded`. Audio and aspect ratio have no chip: they are
+  panel-only. A chip click opens the panel **focused on its group**
+  (`settingsFocus`; the group scrolls into view and wears a brief ring);
+  right-click or long-press on the subtitle chip toggles subtitles without
+  opening anything (`ControlsSettings.toggleSubtitles`: the first embedded
+  track on, `-1` off; with no track to turn on it opens the group so the
+  file loader is reachable). While the panel is open the dock, title and
+  corner shift left by the panel's width (`--panel-open` modifiers,
+  `right: 370px`), the chips and the picture-in-picture / recording buttons
+  fold away, `tune` fills in the accent color, and fullscreen stays.
+- **Compact dock, and wide docks below 960px**: no chips; `tune` carries **state dots** (5px, cyan when
+  subtitles are on or a non-default audio track is selected, violet when
+  speed, aspect or manual quality differ from their default) and the panel
+  opens as a **bottom sheet** (`--sheet` modifier: grip, two-column rows,
+  24px segmented items) that replaces the dock while open. Picture-in-
+  picture and recording stay in the compact dock — the mock shows only
+  `tune` + fullscreen there, but those two are engine features a viewer
+  needs without opening anything.
+- **Inside**: every choice is a `radio` in a `radiogroup`
+  (`SettingsRadioGroupDirective` / `SettingsRadioDirective`). List groups
+  (audio, subtitles, quality) are rows with a check mark and a cyan
+  selection; segmented groups (speed, aspect, subtitle size) have a violet
+  selection, and a selected default (`1×`, the first aspect preset) stays
+  neutral. Each group is one Tab stop — the checked option as the engine
+  reports it, else the first — and arrows, Home and End move focus with a
+  CDK `FocusKeyManager` (wrapping; the horizontal arrows follow `direction`)
+  and check the option they reach, as a native radio group does: the
+  directive clicks it, so the template's handler applies the choice, even
+  onto an option the engine still reports as checked: returning to it must
+  cancel a switch that is still pending. Focus
+  changes also write the roving `tabindex` immediately, because a quick
+  Shift+Tab, Tab can arrive before change detection updates the bindings. The dialog is named by its `h2` title (`aria-labelledby`), each
+  radio group by its `h3` group heading or `h4` subheading, and the delay
+  buttons form a labelled `group`. Headings read `--pc-text-secondary` on
+  `--pc-glass-bg-dense` (`rgba(12,16,23,.86)`), 4.5:1 or more even over a
+  white frame. They wrap with `overflow-wrap: anywhere` and `hyphens: auto`,
+  so one long word (German "Wiedergabegeschwindigkeit") breaks inside the
+  sheet's 84px heading column. Hyphenation needs a `lang` on `<html>`.
+  With subtitles on but no track marked selected yet (the engine can report
+  the switch before the track list), the subtitle chip reads "On"
+  (`SUBTITLES_ON`), never "Off".
+  Every focused option shows the `--pc-text` ring; a selected swatch has a
+  white border with a dark inner gap, and focus adds an outer ring. The
+  subtitle group carries the load-file action (a plain button outside the
+  radio group) and the delay / size / color sections that the popover used
+  to hold (same `player-controls-load-subtitle`,
+  `player-controls-subtitle-delay`, `player-controls-subtitle-style` test
+  ids). The panel is a `role="dialog"` with `tabindex="-1"`: opened from
+  the keyboard (the opener is `:focus-visible`) it takes focus, a pointer
+  open leaves focus alone (a focused control would capture Space from the
+  shortcuts), and closing with focus inside returns it to `tune`. While
+  the compact sheet replaces the dock, the dock is `inert`, so hidden
+  controls leave the tab order. A choice applies immediately and **keeps the panel open** —
+  `ControlsMenuSelection` no longer closes anything — so alternatives can be
+  compared against the running video; Escape, the close button, the `tune`
+  button, a click on the video surface or an outside pointerdown close it.
+- **Colors** follow the color-as-state rule of the dock: cyan means "on",
+  violet means "changed", and neutral rows/items read as the default.
+
+### Stream info popover
+
+An `info` button in the **top-right corner** of the overlay opens a popover with
+live technical data about the stream: resolution with its derived aspect ratio,
+measured and declared frame rates, aggregate stream bitrate, video codec/bitrate,
+audio codec/bitrate, audio channel
+layout, audio sample rate, container, buffered-ahead seconds, and dropped
+frames. Rows whose value is unknown are omitted; a popover with no rows at all
+shows a short "no data yet" line.
+
+The button renders only when `capabilities.streamStats` is true, which an
+adapter sets from what its engine can actually report — engines that report
+nothing never show the affordance.
+
+Stats are **pulled, not pushed**:
+
+```ts
+interface PlayerStreamStatsSource {
+    sample(): PlayerStreamStats | null;
+    reset?(): void; // reset rolling measurements when opening the panel
+}
+```
+
+`PlayerControlsState` deliberately does not carry them. Bitrate, buffer and
+frame counters move every second, and folding them into the state signal would
+re-run every derived control signal on every tick even while nobody is looking.
+`ControlsStreamStats` owns a 1s sampling loop that runs **only while the popover
+is open** (an effect keyed on `menus.statsOpen()`, so every close path — toggle,
+Escape, capability loss, teardown — stops it), and it drops its snapshot on
+close so a reopen never shows the previous stream's numbers. On open it also
+calls the source's optional `reset()` before sampling, so a closed interval
+(including time paused) cannot contaminate the next frame-rate measurement.
+
+Formatting lives in `stream-stats-format.utils.ts` as pure functions:
+`buildStreamStatsRows()` returns `{ labelKey, value }` pairs and the template
+only translates and prints them. Aspect ratios snap to a named ratio (16:9,
+2.35:1, …) within 1%, fall back to a greatest-common-divisor reduction while
+both terms stay small, and to a decimal ratio otherwise.
+
+Per engine:
+
+- **Web engines** (`WebVideoStreamStatsSampler`): resolution, buffered-ahead,
+  dropped/total frames and the _measured_ frame rate (presented-frame delta
+  between two samples, so it reflects what the machine actually renders) come
+  from the `<video>` element, so they work on every source kind. The engine adds
+  bitrate, codecs, channel layout, sample rate and container through the
+  optional `getEngineStats` hook — `WebVideoSourceStats` reads the active HLS
+  level plus its audio rendition or the active Shaka variant, and
+  `VjsQualityLevels.getActiveLevelStats()` reads the VHS `selectedIndex`
+  rendition. Presented frames are `totalVideoFrames - droppedVideoFrames`; the
+  untouched total remains the denominator for the drop percentage. FPS uses a
+  monotonic wall clock, reports zero on a stall, and is unknown before the
+  second sample or while paused/initially loading. Once frames have arrived,
+  readiness falling to `HAVE_METADATA` during starvation retains the measurement
+  window so the stall still reports zero. The manifest rate is a separate
+  `nominalFps` row and never fills in for measured FPS. Aggregate HLS/VHS and
+  Shaka rendition bandwidth goes into `streamBitrateBps`; video/audio rates
+  remain unknown unless separately reported. HLS fragment `realBitrate` is not
+  used because alternate audio may be absent from that measurement; Shaka's
+  playback-rate-scaled `getStats().streamBandwidth` is not a source bitrate.
+  A native `<video src>` source contributes nothing extra.
+- **Embedded MPV**: the numbers ride along on the session snapshot
+  (`EmbeddedMpvSession.stats`), so `sample()` is a pure read of the current
+  snapshot. A new file clears the old dimensions, and unavailable MPV properties
+  clear their previous values; zero dimensions are unknown. This reaches the
+  user under the **frame-copy engine only** — that
+  is the one engine that mounts `app-player-controls`; the native-view dock has
+  no info affordance, though its backends plumb the properties for parity. See
+  [embedded-mpv-native.md](./embedded-mpv-native.md#stream-stats-properties).
+
+### Scrims
+
+`.player-controls__top-scrim` is a single pointer-transparent gradient at the
+top of the player (`max(28%, 112px)` tall), and
+`.player-controls__bottom-scrim` its mirror behind the dock (55% tall, from
+`rgba(4,7,11,.92)` at the edge through `.55` to transparent). Both read as
+one system. The top one renders whenever there is top chrome to back — the
+fullscreen media title or the corner buttons — the bottom one with the dock;
+both fade with the controls without sliding (a moving scrim edge is visible
+against video in a way a moving control is not). The dock itself has no
+background: the bottom scrim is the only thing between the controls and the
+picture.
+
+One element, not a background per consumer: the title and the corner overlap,
+and two gradients would darken the overlap twice. The title therefore carries
+no background of its own, and a windowed player with no title still gets a
+scrim for its corner buttons — which is the only reason a white-on-video icon
+is readable over bright footage. `stream-info.e2e.ts` guards that with the
+same ≥3:1 contrast-on-white assertion the theme suite uses for the bottom bar.
+
+### Fullscreen media title
+
+The component accepts an optional `mediaTitle` input
+(`PlayerMediaTitle { primary, secondary? }`) with display-ready strings — the
+movie title, channel name, or series name, plus an optional second line such
+as the `S01E03` episode label. The overlay renders at the top of the player
+only in fullscreen while the controls are revealed, follows the same
+auto-hide transition as the bottom bar, and is pointer-transparent. Its
+backdrop comes from the shared top scrim above. Outside
+fullscreen the surrounding page chrome already names the content, so the
+overlay stays hidden.
+
+Hosts supply the value: `WebPlayerViewComponent` derives a single-line title
+from the resolved playback (skipping raw stream-URL fallbacks) unless its own
+`mediaTitle` input was set, and `PortalInlinePlayerComponent` builds the
+two-line series form from its `seriesTitle` input plus the episode metadata
+label. The Xtream and Stalker series detail views pass the series name via
+`seriesTitle`; movie and live hosts need no extra wiring because
+`playback.title` already names the content.
+
+### Fullscreen channel panel
+
+`FullscreenChannelPanelComponent` (`libs/ui/playback/src/lib/fullscreen-channel-panel/`)
+is rendered by `WebPlayerViewComponent` as a sibling of the engine and staged
+on the view's `fullscreenSurface` — the same host element every engine
+receives as `fullscreenTarget` — so it sits inside the fullscreen element and
+survives the engine remount a channel switch causes.
+It is a host-agnostic side panel — a channel list for live hosts, an episode
+list for series playback (see "Fullscreen episode panel" below) — and keeps
+its `FULLSCREEN_CHANNEL_PANEL` name for history. It injects the token
+optionally: a host provides `FullscreenChannelPanelHost` from its component
+`providers` — `panelTemplate`, optional `panelTitle`, optional
+`panelSearchEnabled` (default true; false drops the header's search field and
+shows the title as a text row in its place, keeping the header height) and
+optional `panelKind` (`'channels'` | `'episodes'`, only the accessible name
+of the list and the close button's label; every pointer and keyboard rule
+is identical for both) — and the panel stamps that template into its body
+with a `FullscreenChannelPanelContext` of
+`{ searchTerm: Signal<string>, open: Signal<boolean>, close }`. `open` lets a
+body that stays mounted between openings react to the panel coming up (the
+episode list centres its playing row on it). Without a provider — a movie in
+a VOD detail page — nothing renders. The
+host resolves the user preference itself: `Settings.fullscreenChannelPanel`
+(default on, Settings → Playback, offered for the web players while the
+shared controls are on and for Embedded MPV — the legacy vendor chrome
+fullscreens the engine's own element, outside which the panel cannot render,
+so the toggle is hidden there) makes the host return `null`, which removes
+every affordance. The M3U host also returns `null` while its VOD detail hosts
+the player (`showMovieDetail`): a movie is not something to zap away from,
+and the nested `WebPlayerViewComponent` would otherwise inherit the
+component-level provider.
+
+Providers today: `VideoPlayerComponent` (M3U; `app-m3u-fullscreen-channel-list`
+adds a local icon-only all/groups/favorites/recent switcher — one segmented
+row, labels in tooltip and `aria-label` — over a second
+`ChannelListContainerComponent` instance in `compact` mode, which drops the
+container's per-view title/sort/collapse headers (`showHeader` on the
+all-channels and groups views; the persisted sort still applies) so nothing
+stacks between the search row and the first channel, and which also pins the
+groups view's rail to a fixed 148px — no resize handle, and the sidebar's
+persisted `m3u-groups-nav-width` (up to 320px) is neither read nor written,
+since inside a 400px panel it would leave the channel pane unusable — and with
+`resetActiveChannelOnDestroy` false, because the container's destroy hook
+otherwise clears the active channel and stops playback; radio stations and
+recognized movies are filtered out of the list it is handed — radio renders
+through `app-audio-player` and a movie, with TMDB enrichment and
+`m3uVodDetails` on, through the VOD detail shell, so selecting either destroys
+the `app-web-player-view` that owns fullscreen and drops the user out of it;
+one private `opensMovieDetail` predicate backs both `showMovieDetail` and the
+filter, and every panel view resolves against that one list, favorites and
+recent included. With external MPV/VLC configured, the panel offers only
+DASH rows: DASH forces the inline Shaka player, but selecting a non-DASH
+channel would replace the fullscreen owner with the external-player UI.
+While the live `app-web-player-view` owns fullscreen — itself under shared
+controls, or through the nested surface a legacy player fullscreens under the
+vendor-chrome opt-out (`.video-js`, ArtPlayer's container, the `<video>`), so
+the check accepts any fullscreen element inside that host — numeric
+selection and PageUp/PageDown (including remote commands) apply that same
+eligibility predicate. Numbers retain their original playlist positions and an ineligible
+number is ignored; adjacent selection skips ineligible rows. Windowed playback
+keeps the complete catalog. Already-handled events and menu/dialog overlay targets keep their keys,
+even when a short menu has no scroll overflow), `LiveStreamLayoutComponent` (Xtream; the sidebar's
+rows via `channelsOverride` so the second list instance never re-applies the
+route category, and with `fullscreenPanelCopy` so only the sidebar's pane
+carries the `live-channels` id that the category list's keyboard hand-off
+targets — the Stalker template applies the same rule to its panel copy; each
+`PortalChannelsListComponent` instance owns the map
+behind its heart icons, so toggles are relayed between instances through
+`XtreamFavoriteMarksService`, or a heart flipped in the panel would stay stale
+in the sidebar), `StalkerLiveStreamLayoutComponent` (its list markup is one
+`ng-template` stamped into both the sidebar and the panel with its own search
+term — a blank panel field shows the category untouched by the sidebar's
+term, `panelIdleChannels`, so the panel never shows an unexplained subset or
+an empty state under an empty search box, and that copy grows against the
+category (`panelIdleHasMore` / `loadMoreForPanel`) or the windowed full cache
+when playback starts from All Items with no selected category, never against the
+sidebar's filtered `hasMoreItems`, which a narrowing sidebar search turns
+false while the panel still has rows to reveal; every copy carries the
+`#scrollContainer` that drives infinite scroll,
+and the panel's own search results go through `PanelSearchWindow`, memoized
+per term and cut to the same 100-row window the sidebar uses — grown by the
+panel copy's scroll — because in full-list mode a broad term matches most of
+a multi-thousand-channel portal and the list has no virtual scroll; on a paged
+portal the panel copy also keeps requesting pages while its matches do not
+fill it — an empty or short result cannot scroll, and the term may match
+channels on pages never fetched. Both ITV fields search the selected category,
+and only All Items searches the portal. The store's ITV pages are unfiltered
+by either field; a short sidebar search also continues uncached category pages.
+A page landing resets the in-flight flag whether or not the sidebar shows any
+of it; a cached category never pages, since its entire category is searchable; closing the panel pauses window growth and automatic page
+requests while preserving the mounted list, and an observer of the aside's
+`inert` attribute resumes filling on reopen and disconnects with the list;
+inline video keeps the selected channel paired with its retained playback
+until the current resolver succeeds, so panel highlight, EPG and recording
+metadata remain on the playing channel during a pending or failed replacement),
+and `UnifiedLiveTabComponent` (global favorites/recent; its `activateItem`
+keeps the previous detail — and with it the mounted player that owns
+fullscreen — until the next selection has resolved, because unmounting the
+fullscreen element for the resolution round-trip would end fullscreen on
+every zap from the panel; only `activeUid`, the row highlight, moves ahead,
+while `activeItem` stays paired with that detail so `playbackSessionKey` and
+the recording/archive metadata derived from it keep describing the stream the
+player is still showing, and both swap together once the new detail is in.
+Because of that split, "the row is on screen" means highlight AND resolved
+item: `activateItem`'s fast path (a double-click's second click launching
+the external player, an auto-open reporting itself handled) requires both,
+or it would launch the retained stream in place of the one still resolving;
+a second activation of the row still resolving instead folds its
+start-playback/auto-open intent into that request (`pendingActivation`), so
+the detail launches when it lands without a second round-trip.
+If replacement resolution fails while a video is retained, its player,
+catch-up override and session remain intact and the row highlight returns to
+that item).
+
+Behavior: every affordance exists only while the stage is fullscreen and the
+view's `enabled` input holds — `WebPlayerViewComponent` withholds the panel
+while the rendered engine is native-view Embedded MPV, which paints a platform
+view above the page where no DOM layer can show (frame-copy and the web
+players qualify; the gate fails closed until the MPV component reports its
+engine on first entry; a confirmed frame-copy capability survives an unknown
+probe during an MPV application remount, preserving the open panel and its
+search/scroll state. A confirmed native/unsupported result revokes it, and
+switching to a web engine clears the remembered MPV capability). Nothing is
+drawn over the video while the panel is closed and the pointer rests. Mouse
+movement over the stage (the fullscreen element) reveals a slim, pointer-
+transparent hint tab on the left edge — a CSS chevron, no icon glyph or text
+— that fades `CHANNEL_PANEL_HINT_IDLE_MS` (2.5 s) after the last move, so it
+comes and goes with the controls chrome; it lights up (`--armed`) while the
+pointer rests in the hot zone, and it is not rendered while the panel is
+open. Touch movement never reveals it. The hint answered the first field
+report: the zone was an invisible strip with nothing telling the user where
+the list lived. An invisible 40px hot zone (48px on coarse pointers) on the
+left edge opens the panel after a 160ms mouse dwell; a sweep across the edge
+is ignored, and a click or tap on the zone opens at once without the dwell —
+only a primary press that began inside the zone and is released there
+(`pointerdown` records the pointer, `pointerup` must match it; a drag
+released over the edge, a right or middle button, or a pen barrel button
+never opens). The synthetic `pointerenter` that follows an explicit close
+neither opens nor arms the hint: the zone re-arms on the next real
+`pointermove`. The zone remains mounted above the
+scrim and below the panel while open, preserving the pointer target until
+the opening animation covers it. A delayed fullscreen paint therefore cannot
+turn a stationary edge hover into a synthetic mouse-leave that closes the
+panel. The open card is inset from the edge, so the zone's left strip stays
+exposed beside it: hovering there still counts as inside (a hover-opened
+panel leaves the pointer resting in that strip), but a completed primary
+press there closes the panel as the scrim would. The zone stops above the controls bar (`bottom: max(25%, 140px)`) so
+the leftmost transport button never loses a click or tap to it. The `C` key
+opens it too and focuses the search field — or, for a host without one, the
+panel itself (`tabindex="-1"`), so the next Tab reaches its first control
+(hover does not steal focus).
+Touch has neither hover nor a `C` key, so the tap path above is its way in:
+the handler is bound to `pointerup`, not `pointerdown`, so the hot zone is
+still the tap's click target and the click that follows dies on it instead
+of reaching the video. It closes when the mouse leaves the panel for
+`CHANNEL_PANEL_CLOSE_GRACE_MS` (1 s) — but only once the pointer has engaged
+with the panel: a hover-opened panel counts as engaged from the start, while
+a `C`-opened one ignores the mouse roaming over the video until it has
+visited the list, so the shortcut never leaves the user typing into a closing
+search field (`FullscreenChannelPanelState.show(opener)`) — on the close
+button (tooltip names Escape), on Escape, on the host's `close`, or through
+a transparent scrim over the video that swallows the click so the player's
+click-to-pause never sees it. Clicks inside the panel never close it: the
+panel sits above the scrim, so no in-panel hit can reach it. The Escape that closes the panel is consumed (`preventDefault`):
+Electron leaves HTML fullscreen on an unhandled Escape, and the close
+shortcut must only slide the panel away; a closed panel leaves Escape alone,
+so the key still exits fullscreen then. A CDK overlay the list opens (sort menu, row context menu) renders in
+the fullscreen overlay container outside the `<aside>`, so it counts as part
+of the panel: while open, hover intent is tracked through a document-level
+`pointerover` (inside the aside, hot zone or the overlay container cancels a pending
+close, anywhere else schedules one), the aside's own `pointerleave` ignores a
+move into the overlay container, and Escape is left to an overlay with a
+backdrop. The header is a single row: the search field, whose placeholder
+carries the host's `panelTitle` ("Search in <playlist or category>") so the
+title costs no row of its own, and the close button; the host list starts
+directly below. The list stays mounted between openings of one fullscreen
+session (scroll position and search survive) and is unmounted when fullscreen
+ends. The panel carries the `dark-theme` context class, so app and Material
+tokens inside it resolve to the dark palette whatever the app theme is — and
+because the app's global `.dark-theme { background: … !important }` rule
+(`apps/web/src/styles.scss`) claims the background of every element wearing
+that class, the panel's glass fill is declared on the compound
+`.fullscreen-channel-panel.dark-theme` selector with `!important`; without
+that the panel painted no background at all. The panel wears the same surface
+as the controls' settings panel — a card inset 16px from the player's top,
+bottom and left edges (8px in a player narrower than 560px), 20px corners,
+the `--pc-glass-bg` fill, hairline `--pc-glass-border`, the same blur and
+shadow, and a 32px square close button — with the values written literally,
+because the panel is a sibling of the controls host, outside the scope that
+declares the `--pc-*` palette. Its episode list marks the playing row with the
+settings panel's selected-option cyan tint.
+Keyboard: `C` is ignored while any editable element has focus and while the
+player sits inside an `inert` region; the search field is an ordinary input,
+so the controls' Space/K/F/M shortcuts stay out of it. That is also why `C` is
+an open shortcut, not a close one: opening with `C` focuses the search field,
+where the next `C` is a typed character, so the close shortcut the button
+advertises is Escape, which closes from the field too (unless a modal overlay
+owns it).
+
+CDK overlays render inside the fullscreen element because the app registers
+`FullscreenOverlayContainer` as the `OverlayContainer` (`app.config.ts`);
+without it every tooltip, sort menu and context menu opened while fullscreen —
+the panel's view-switcher tooltips and row context menus included — would sit
+invisibly under the top layer.
+
+#### Fullscreen episode panel (series)
+
+Series playback gets the same panel as an **episode list**. The provider is
+`PortalInlinePlayerComponent` (`libs/ui/playback/src/lib/portal-inline-player/`),
+the component both series hosts (Xtream `SerialDetailsComponent`, Stalker
+`StalkerSeriesViewComponent`) render around `app-web-player-view` and that
+already feeds the Up Next rail — so it is the nearest provider for the nested
+view, which also shields that view from a page-level channel-list provider
+(the M3U player's) while its VOD detail hosts the player. The host object
+itself is built by `createEpisodePanelHost()`
+(`portal-inline-player-episode-panel.host.ts`) from the component's inputs
+and exposed as `episodePanel`, so the player's own responsibilities stay
+readable. It declares `panelKind: 'episodes'` and `panelSearchEnabled:
+false`: season tabs are the navigation, and the header shows the series
+title (`seriesTitle`, else the playback title) where the search field would
+be.
+
+- Data: the hosts pass their season→episodes map (`seriesEpisodes`, the same
+  `Record<seasonKey, XtreamSerieEpisode[]>` the season container gets, so the
+  TMDB overlay's stills and overviews ride in `info`), the per-episode
+  playback-position map (`episodePlaybackPositions`) and, for Stalker lazy
+  VOD series, per-season load states (`seasonLoadStates`: `loading` while
+  a request is on the wire, `unloaded` while the portal has not answered —
+  after a failed request too; `vodSeasonLoadStates` on the host, computed
+  by `getVodSeasonLoadStates()` in `@iptvnator/portal/stalker/data-access`).
+  `buildFullscreenEpisodePanelSeasons()`
+  (`libs/ui/playback/src/lib/fullscreen-episode-panel/fullscreen-episode-panel.util.ts`)
+  turns them into `FullscreenEpisodePanelSeason[]` — numeric keys ascending,
+  named keys after, each row a `FullscreenEpisodePanelItem` that extends the
+  Up Next entry with `seasonKey`, `episodeNumber`, `overview`, a "45 min"
+  `durationLabel` (numeric `duration_secs`, else the portals' text forms) and
+  the shared ≥90 % `watched` rule; the playing row is the one whose id equals
+  `contentInfo.contentXtreamId`.
+- Body: `app-fullscreen-episode-panel` stamps `SeasonTabsComponent` (the
+  detail page's tabs: pills up to six seasons, a dropdown beyond, watched
+  check marks, the "Back to playing episode" chip) over the selected season's
+  rows: a 16:9 still or, without one, a large numeral tile so the no-TMDB
+  case still looks designed; the `S01E03` label, runtime, watched check or
+  "Now playing" marker; the title (label as fallback); a 3-line clamped
+  overview when there is one; a `--pc-progress` bar on the thumbnail. Rows are
+  buttons inside `<li>`s of a `<ul>`, so their button role survives for
+  assistive technology. A loading season shows a spinner row, a loaded empty
+  one the season-empty copy, and an unanswered one a "could not be loaded"
+  row with a Retry button that re-emits the season selection — the tabs
+  never re-emit an already selected key, so a failed lazy load would
+  otherwise be stuck.
+- Selection: the tab follows the playing episode's season (`linkedSignal`)
+  and resets to it whenever playback moves into another season; a tab the
+  user picks holds until then. Opening the panel (context `open`) centres
+  the playing row inside the list's own scroll box — `scrollTop` math, never
+  `scrollIntoView`, so the stage and page are not scrolled with it — and the
+  effect depends on primitives only (open flag, shown season key, playing
+  season key and episode id), so the season objects a progress tick rebuilds
+  never yank a list the user is scrolling.
+- Actions: an episode click emits the item through the inline player's
+  `upNextEpisodeSelected` — the Up Next rail's output, so the host plays it
+  through its inline episode flow and the engine remount keeps fullscreen
+  exactly as a "next episode" does — and then calls the context's `close`;
+  a click on the playing row is inert. A season tab click emits
+  `episodePanelSeasonSelected` (as does the retry row), wired by both hosts
+  to the same `onSeasonSelected` their season container uses, so Xtream's
+  TMDB season enrichment and Stalker's lazy VOD season load run for the
+  panel's season too.
+- Gates: `Settings.fullscreenChannelPanel` (one setting for channels and
+  episodes; its label reads "Channel and episode list in fullscreen"),
+  `contentInfo.contentType === 'episode'` and non-live playback (a movie
+  never gets the panel), and at least one season. Native-view Embedded MPV is
+  withheld by the view's `enabled` input as for channels; external MPV/VLC
+  never mount the inline player, so they are excluded by construction.
+
+### Keyboard ownership
+
+Unmodified Space/K, F, arrow keys, and M are playback shortcuts. Playback keys
+with Meta/Cmd, Control, or Alt are ignored and are not prevented, so app and OS
+accelerators retain ownership. Escape remains available to close controls
+popovers even when a modifier is held or playback shortcuts are unavailable.
+Buttons, form controls, links, ARIA menu controls, and content-editable targets
+are also ignored anywhere in the event's composed path.
+
+A player whose host sits inside an `inert` region ignores every shortcut,
+including Escape: `inert` strips pointer and Tab access but document-level
+listeners still fire, so the optional `hostElement` handler on
+`ControlsShortcutHandlers` lets the shortcuts opt out while a modal surface
+above the player (e.g. the workspace's phone context drawer) owns the
+keyboard. `EmbeddedMpvShortcutHandlers` (the native-view legacy dock) and
+the radio audio player's document-level volume/mute keys apply the same
+rule.
+
+Action-specific keys are prevented only when the active controller can handle
+them: seek requires both capability and current seekability, volume/mute
+requires volume capability, and fullscreen requires an available DOM
+fullscreen path. Unsupported keys retain their browser or application default.
+
+When multiple shared-controls instances are mounted, the first attached
+instance owns shortcuts initially. Pointer, focus, or control interaction
+activates that instance through the normal reveal path. If the active instance
+becomes unavailable, playback shortcuts fall back to the most recently attached
+available instance; detaching the active instance also transfers ownership.
+Escape remains a global dismissal action and closes popovers and the settings
+panel on every mounted
+controls instance.
+
+Auto-hide pauses while the pointer is over the controls bar or keyboard focus
+is anywhere inside it. Focus entering a hidden bar reveals it; moving focus
+between controls does not restart hiding, and leaving the bar resumes the normal
+hide delay. Only keyboard-originated focus pins the bar: Chromium also moves
+focus to a clicked `<button>`, and that focus is a side effect of the click,
+so `ControlsSurface.wasPointerInteraction` attributes a `focusin` to the press
+when a `pointerdown` was recorded within the last second whose target lies
+inside the newly focused element. A press moves focus at most once and does so
+synchronously, so the record is discarded on the first bar focus event it is
+asked about, matching or not, and on any key press; nothing a later Tab or
+Shift+Tab focuses can be attributed to a stale press, not even the control
+the press hit while it was already focused and hence produced no focus event.
+Such focus reveals like any pointer activity and the bar hides on the normal
+delay while the button stays the active element; a Tab shortly after a click
+on the video still counts as keyboard navigation because the press did not
+land inside the focused control. A key press that bubbles out of a control
+inside the bar (Space or Enter on the still-focused button, arrows on a
+slider) hands ownership back to the keyboard and pins the bar exactly as Tab
+focus does, because operating a focused control produces no focus event. A
+pointer press anywhere in the bar also releases an existing keyboard pin: the
+press may produce no focus event at all (clicking the control that already has
+focus) or only a transfer inside the bar, which `focusout` ignores by design,
+so the pin cannot be cleared from focus events alone. Without
+this distinction the fullscreen button kept the controls on screen until a
+click on the viewport took focus away — and that click also paused playback.
+
+The focus a pointer click leaves on a control is released once the click
+completes (`onBarClick` → `ControlsSurface.releasePointerFocus`). A focused
+control captures the keyboard: Space and Enter activate it again, and
+`ControlsShortcuts` yields to any interactive element in the key's path, so
+after a click on the fullscreen button Space left fullscreen instead of
+pausing and the seek, volume, and mute keys did nothing.
+`ControlsSurface.wasPointerClick` attributes the click by its `pointerType`
+(non-empty for a pointer; empty for Enter/Space activation and
+`element.click()`), and a legacy `MouseEvent` click by a recent press inside
+the clicked element, answered once per press and discarded on any key press.
+Keyboard activation therefore keeps focus where Tab put it. Only buttons and
+range sliders are released; text entry would keep its focus, and the bar
+holds none. Chromium keeps its sequential focus navigation starting point at
+the blurred control, so a later Tab continues from it exactly as if it were
+still focused; the clicked button's tooltip hides with the focus. The release
+dispatches a `focusout` while the pointer still rests on the control, so the
+volume anchor's `focusout` handler skips its popover close for it
+(`wasPointerFocusRelease`), while focus leaving by keyboard still closes the
+popover. A press that never completes into a click (released off the
+control) is the one case that still leaves pointer-originated focus behind,
+which is why the key-press re-pin above remains.
+In fullscreen playback, hiding the controls also hides the pointer
+over both the controls host and the supplied player surface; revealing controls
+or destroying the component restores the surface's previous inline cursor.
+
+Open popovers are reconciled against the current capability and state snapshot.
+If controls are hidden, a capability is removed, or the corresponding track
+list becomes unavailable, the stale popover closes instead of pinning the
+controls visible or consuming the next surface click.
+
+Setting `showControls` to false also detaches playback-surface pointer, click,
+and double-click handling. A hidden shared-controls instance therefore cannot
+reveal, pause, or fullscreen the player underneath another UI layer.
+
+The frame-copy Embedded MPV host also disables shared playback shortcuts while
+a modal/backdrop overlay is active, so transport, seek, volume, and fullscreen
+actions cannot leak through it. Escape keeps the shared component's generic
+popover-dismissal behavior.
+
+The HTML5, Video.js, and ArtPlayer hosts apply the same ownership rule while a
+playback diagnostic is visible: `WebPlayerViewComponent` passes
+`interactionEnabled = visiblePlaybackDiagnostic() === null`, and all three
+components bind that value to `showControls` and
+`shortcutsEnabled`. If the shared controls' fullscreen owner (the supplied
+`fullscreenTarget`, else the player shell) is in DOM fullscreen, the host
+exits fullscreen before hiding the controls so the diagnostic banner and its
+recovery actions remain visible; fullscreen owned by another element is left
+untouched. Retrying playback or clearing the diagnostic
+restores both interaction paths.
+
+Frame-copy recording transitions use the adapter's playback/session identity as
+their `transitionKey`. Session disposal, retry, channel changes, and engine
+handoff therefore clear stale recording ownership without showing a false
+`RECORDING_SAVED` confirmation.
+
+### Vendor-chrome (preference-off) keyboard shortcuts
+
+With `webPlayerSharedControls` off, `app-player-controls` never renders, so no
+`ControlsShortcuts` instance existed and the playback keys advertised in the
+in-app help silently did nothing. The vendor-chrome HTML5, Video.js, and
+ArtPlayer hosts therefore attach `LegacyPlayerShortcuts`
+(`legacy-player-shortcuts.ts`) — a thin wrapper over the same
+`ControlsShortcuts` arbitration and ignore rules — and forward the commands
+straight to the engine:
+
+- **HTML5** (`html-video-legacy-shortcuts.ts`) acts on the native video
+  element. Play goes through the component's session so playback diagnostics
+  stay owned there, and F fullscreens the video element itself, matching what
+  the native controls' own fullscreen button does.
+- **Video.js** (`vjs-legacy-shortcuts.ts`) goes through the player API so the
+  vendor control bar stays in sync; F uses the player's
+  `requestFullscreen`/`exitFullscreen`. The legacy configuration still never
+  enables `userActions.hotkeys`. The chrome also releases the focus a pointer
+  interaction leaves on a control (`vjs-pointer-focus-release.ts`, the vendor
+  counterpart of `ControlsSurface.releasePointerFocus`, sharing
+  `pointer-focus-release.ts`'s `blurFocusedControl`): Chromium focuses a
+  clicked control-bar `<button>` or slider, and a focused Video.js component
+  captures the keyboard entirely — `Component.handleKeyDown` stops the
+  propagation of every key and `ClickableComponent` turns Space and Enter into
+  a click — so after a click on the fullscreen button Space left fullscreen
+  instead of pausing and the document-level shortcuts never saw a key. The
+  release is driven mainly by the focus landing, not the click: choosing a
+  menu item moves focus to the menu button a tick after the click
+  (`MenuItem.handleTapClick`) and that selection click never bubbles to the
+  shell, so a click handler alone would be both too early and unreached. A
+  `focusin` on an eligible control (a `<button>`, `role="button"` clickable, or
+  slider; never a `role="menuitem*"`) is released when it is attributable to a
+  recent `pointerdown` inside the shell not yet ended by a document `keydown`,
+  so keyboard `Tab` focus is preserved. A `click` runs the same release,
+  because clicking a control that was already focused (Tab, then a mouse click
+  on it) moves no focus and fires no `focusin`; a keyboard-activation click
+  carries no `pointerdown`, so attribution keeps that focus. The release is
+  scoped to the `.vjs-control-bar`, the persistent chrome that hands keys back
+  to the document; the player's other focusable surfaces manage their own
+  focus and keep it — in particular the caption-settings dialog
+  (`.vjs-text-track-settings`, a modal sibling of the control bar under
+  `.video-js`) traps focus for its Escape/Tab handling, so its Reset button is
+  left alone. Menu buttons live in the control bar and are not exempt: a
+  Video.js popup is navigated through its focused item, not its button, so
+  releasing the button never disturbs an open menu — opening focuses the item,
+  and the button focus a pointer moves through (the transient press on open,
+  item selection, and toggling an open menu shut) is released, which is what
+  lets Space work again after a menu is dismissed by clicking its button a
+  second time. ArtPlayer needs no
+  counterpart (its controls are non-focusable divs), nor do the native HTML5
+  controls (a click focuses the `<video>`, which the shortcuts do not treat as
+  interactive).
+- **ArtPlayer** (`art-player-legacy-shortcuts.ts`) uses the vendor setters its
+  own hotkeys used (`toggle`, `forward`/`backward`, `volume`, `muted`,
+  `fullscreen`), so ArtPlayer's notices and UI stay in sync. The legacy chrome
+  now passes `hotkey: false` — ArtPlayer's focus-scoped hotkeys ignore
+  `defaultPrevented` and would double-handle every key — and the wiring
+  restores the one behavior lost with it: Escape exits `fullscreenWeb`.
+
+Shared legacy rules: seek is gated on authoritative `isLive` plus a finite,
+positive duration (ArtPlayer gates on `art.duration`, the same value its seek
+setter clamps against, so an unknown duration never jumps to zero); volume
+steps by ±5% and syncs muted state the way `applyVideoVolume` does (raising
+out of mute unmutes, reaching zero mutes); M mirrors `ControlsVolume`'s mute
+memory through `LegacyMuteMemory` — muting remembers the audible volume, and
+unmuting while the volume sits at zero restores it (same 0.5 fallback), so M
+can never leave the player silently "unmuted"; `isAvailable` is the host's
+`interactionEnabled`, so a visible playback diagnostic disables the keys; and
+Escape defaults to a no-op without consuming the key, because the vendor
+chrome owns its own overlays. Instances attach in the component's legacy
+branch and detach on destroy; the arbitration registry is shared with
+shared-controls instances, so exactly one owner handles each key.
+
+### Timeline scrubbing
+
+Timeline input is previewed locally while the user drags. The slider value,
+played progress, accessible value text, and current-time label all render the
+preview. The component sends exactly one `seekTo` command on the committed
+`change` event, then clears the preview and returns to controller-reported
+state. Non-finite values are ignored and finite values are clamped to the
+available `[0, duration]` range.
+
+The scrub slider and seek shortcuts require both the `seek` capability and
+seekable runtime state. When seek is unsupported, the slider is omitted while
+live and recording status remain visible. Volume shortcuts likewise require the
+`volume` capability.
+
+### Touch interaction semantics
+
+`ControlsSurface` classifies every interaction by pointer type. Click events
+carry `pointerType` in current engines; focus events and legacy MouseEvent
+clicks are attributed to a touch when a touch `pointerdown` was recorded within
+the last second (`wasTouchInteraction`). Three behaviors diverge from mouse:
+
+- **Viewport taps toggle the overlay, never playback.** A tap while the
+  controls are hidden only reveals them; a tap while they are visible hides
+  them (through the same `canHide` policy that guards auto-hide, so a paused
+  player or open menu stays visible). The mouse click-to-pause with its 250ms
+  double-click deferral is mouse-only — the first tap on a hidden overlay must
+  never pause the video. The synthetic `pointerenter`/`pointermove` a tap
+  fires is ignored for reveal, or the tap's own click could never observe the
+  hidden state.
+- **The volume popover opens on tap, not hover.** With a mouse, hovering the
+  volume button opens the slider popover and clicking toggles mute. On touch
+  the hover-open path is suppressed and the first tap on the volume button
+  opens the popover instead of muting; a tap while it is open toggles mute as
+  the button's label says. Touch-attributed `focusout` does not schedule the
+  popover close (outside taps and other menu buttons dismiss it), and neither
+  does the `focusout` of a pointer focus release.
+- **Coarse-pointer scrub sizing.** Under `@media (pointer: coarse)` the
+  timeline bar and the volume slider grow their hit strip to 28px and the
+  volume thumb to 16px; the drawn tracks are unchanged.
+
+### Compact and wide layout
+
+The controls host is a size query container (`player-controls`), and the
+dock has two modes split at **720px of container width**: `compact` at
+719px and below — phone-sized PWA viewports, but also small inline players
+inside wide desktop windows — and `wide` above. The split lives in two
+places that must agree: the `@container player-controls (max-width: 719px)`
+block in the stylesheet sizes the compact dock (14px gutters, 32px buttons,
+36px play circle, 5px track), and `ControlsLayout`
+(`COMPACT_LAYOUT_MAX_WIDTH`, a `ResizeObserver` on the host) drives the
+template branches CSS cannot express — the inline volume slider versus
+its popover. Without `ResizeObserver` (unit tests) the mode stays `wide`.
+
+A second threshold, `ROOMY_LAYOUT_MIN_WIDTH` (960px, `ControlsLayout.roomy`),
+gates the wide dock's extras: the subtitle/speed chips and the settings
+panel beside the video. Between 720px and 960px the dock stays wide (full
+button sizes, inline volume) but folds the chips into `tune` with state
+dots and opens settings as the bottom sheet, because the widest action row
+(volume, series transport, two chips, tune/record/PiP/fullscreen) and the
+dock beside a 370px panel do not fit there. The control row's side columns
+are `minmax(min-content, 1fr)`, so if the actions still need more than half
+of what the transport leaves, the transport slides off-centre instead of
+the actions overlapping it or leaving the player.
+Episode navigation stays in the compact transport: the series hosts rely on
+those buttons, and the inline series player is often narrower than 720px.
+
+The actions cluster's width is content-dependent (audio, subtitles, quality,
+speed, aspect, recording, PiP, and fullscreen are all conditional), so in
+the compact layout the cluster is end-aligned, capped at the row width, and
+wraps when the row cannot hold it. Its popover anchors become static at this
+breakpoint so capability panels position against the unclipped actions
+cluster and remain accessible above every wrapped row.
+
+When a volume-capable controller first attaches, an existing `localStorage`
+volume preference is applied before the first controller snapshot can reconcile
+the optimistic value. With no saved preference, the controller snapshot remains
+authoritative. If the same controller loses and later regains the volume
+capability, initialization runs again for the new capability epoch. The volume
+slider intentionally remains continuous: each volume `input` applies the
+optimistic volume immediately.
+
+## Web adapter and web-engine bridges
+
+`WebVideoControlsAdapter` can translate an `HTMLVideoElement` into the shared
+contract. It uses DOM/media events and accepts optional engine-specific track
+accessors through `WebVideoControlsOptions`, so the adapter itself stays usable
+in the PWA and does not import a concrete web engine.
+
+### Caption preference in both modes
+
+The `Settings.showCaptions` preference is **not** part of the rollout gate. It
+is engine state, not controls UI, so HTML5, Video.js, and ArtPlayer apply it
+whether or not their host snapshot enables `WEB_PLAYER_SHARED_CONTROLS`. Shared
+controls route it through their controls bridge; the preference-off paths use
+the same helpers without an adapter — `WebVideoSourceTracks` for HTML5 and
+ArtPlayer, `VjsLegacyTracks` for Video.js. Both apply the preference when a
+source binds and re-apply it as the engine adds or switches text tracks, which
+a one-shot check at playback start could not do (#1155).
+
+The two modes differ in **how long** the preference stays enforced, because
+they differ in who owns the caption UI:
+
+- **Shared controls: authoritative.** The preference holds for the whole
+  session; user intent arrives through `setSubtitleTrack`, which records an
+  explicit override (including `-1` for off) that wins until the source changes.
+- **Vendor chrome: source-default.** The engine still renders its own caption
+  menu, so the preference only seeds each new source and is released once the
+  media element reports `playing`. Enforcing it for the whole session would
+  make that menu inert.
+
+The mode is selected by passing a `playbackStarted` probe to the track helpers;
+shared controls omit it. All three helpers take it — HLS, native text tracks,
+and Shaka. For DASH the seed happens inside `ShakaVideoSession.start()` once the
+manifest is loaded, so the helper only has to stop re-suppressing afterwards. `WebVideoSourceTracks` owns the probe for HTML5 and
+ArtPlayer (a `playing` listener on the media element, reset on every
+`setSource`); `VjsLegacyTracks` owns it for Video.js (the player's own `playing`
+event, reset on every `clear`). In source-default mode the HLS helper also
+_deselects_ the track (`subtitleTrack = -1`) instead of hiding it: hls.js
+applies `subtitleDisplay` to whatever the vendor menu picks, so suppressing
+display would silently override the user, and a `-1` assignment additionally
+clears hls.js' own default-track selection so it cannot reselect one later.
+
+`WebPlayerViewComponent` reads the preference from `SettingsStore` rather than
+from a host input, so every host — the M3U player, Xtream and Stalker live
+layouts, and the portal detail inline player — gets it without wiring.
+
+### Standard element picture-in-picture
+
+Picture-in-picture is part of the default-on shared web-controls
+rollout. It is available through standard element PiP for HTML5, Video.js, and
+ArtPlayer only when their host snapshot enables `WEB_PLAYER_SHARED_CONTROLS`.
+The preference-off HTML5 native controls, Video.js skin, and ArtPlayer vendor
+controls keep their own PiP actions. Shared ArtPlayer explicitly keeps vendor
+`pip: false`, leaving the shared action as the single PiP owner.
+
+The contract exposes:
+
+- capability `pictureInPicture`;
+- state `pictureInPictureActive` and `canPictureInPicture`; and
+- command `togglePictureInPicture()`.
+
+The shared button renders only when the capability is present, immediately
+before fullscreen. It uses the active state for pressed, icon, and enter/exit
+semantics. When inactive, entry requires
+`readyState >= HTMLMediaElement.HAVE_METADATA`; when active, exact-owner exit
+remains available regardless of entry readiness or request support, provided
+the exit API exists. Any pending PiP operation disables the action.
+
+`WebVideoControlsAdapter` delegates standard PiP API access and operation
+lifecycle to `WebVideoPictureInPictureController`, which reads the adapter's
+current binding and the attached `HTMLVideoElement`'s `ownerDocument`. Browser
+`enterpictureinpicture`/`leavepictureinpicture` events and the document's exact
+`pictureInPictureElement` remain authoritative; command completion never
+optimistically changes the active state.
+
+The controller invokes `requestPictureInPicture()` or `exitPictureInPicture()`
+synchronously from `togglePictureInPicture()` so browser user activation is
+preserved, then contains asynchronous settlement. Only one enter/exit operation
+may be pending. A binding generation plus exact video identity prevents a stale
+completion from clearing or changing the new binding. Replacement or teardown
+exits PiP only when the old video is the document's exact owner; a stale
+successful entry receives the same exact-owner cleanup and never exits an
+unrelated PiP element.
+
+Video.js Tech reset and ArtPlayer video rebuild paths detach the old binding,
+perform exact-owner cleanup, and bind the replacement video. HTML5 source
+changes on a retained video target, along with ordinary same-element
+source/media events, preserve active PiP.
+
+Teardown safety is independent of the controls preference. Legacy HTML5 and
+ArtPlayer hosts release their video before destruction; Video.js also releases
+its previous Tech video when a reset replaces it. The shared
+`web-video-picture-in-picture-lifecycle.ts` helper checks the video's exact
+`ownerDocument.pictureInPictureElement` before exiting, contains API failures,
+and leaves a one-shot listener on the retired video for an in-flight
+native/vendor entry that completes after teardown. The listener captures only
+the retired video, with no timer or document listener; a WeakSet makes repeated
+release idempotent without retaining video elements. Legacy Safari/WebKit
+presentation-mode PiP is returned to `inline` on that exact video. Its
+`webkitpresentationmodechanged` listener ignores fullscreen/inline changes and
+is consumed only by the first late PiP entry. Shared controls retain
+their existing generation-guarded pending-operation cleanup. Neither path
+transfers PiP to a replacement video or closes another video's PiP.
+
+Standard element PiP displays the browser/OS video surface, not Angular shared
+control chrome. Subtitle rendering in that surface is browser-dependent.
+
+At the application boundary, `AutomaticPictureInPictureService` registers the
+official Media Session `enterpictureinpicture` action when the browser exposes
+it. A system request enters standard element PiP on the most recently started
+video that is still playing; a foreign PiP owner is never replaced. Multiple
+service owners are stacked so detaching an older owner cannot clear a newer
+handler, and teardown removes the exact handler and per-video listeners. The
+app does not call `requestPictureInPicture()` from `visibilitychange`, because
+that event carries no activation. Browsers, including iOS/WebKit versions that
+do not offer this Media Session action or the standard element API, keep normal
+inline playback and the existing manual controls when available.
+
+AirPlay, Cast, Document Picture-in-Picture, a PiP keyboard shortcut, and an
+Embedded MPV popup or native mini-window are out of scope.
+
+### Quality (bitrate/level) selection
+
+Quality selection is part of the shared controls and therefore rides the same
+default-on `WEB_PLAYER_SHARED_CONTROLS` rollout. The contract exposes:
+
+- capability `qualityLevels`;
+- state `qualityLevels` (pre-labelled options such as "1080p") and
+  `qualityAutoEnabled`; and
+- command `setQualityLevel(id)`, where `AUTO_QUALITY_LEVEL_ID` (`-1`)
+  re-enables the engine's adaptive (ABR) selection.
+
+The capability derives from the manifest, not the content type: it is
+advertised only when the current source exposes **more than one** video
+rendition, so single-bitrate Xtream VOD files and raw MPEG-TS streams never
+show the menu, while multi-variant live HLS does. The menu renders next to the
+audio/subtitle menus with an Auto entry first; Auto is the default, a level
+reports `selected` only while a manual choice is active, and the choice is
+per-session — nothing is persisted to Settings.
+
+Labels come from one shared helper (`quality-level-labels.ts` in
+`web-video-support/`): frame height first ("1080p"), a 16:9 projection when
+only the width is known, the bitrate when no dimension is known, and a bitrate
+suffix only when two levels would otherwise collide on the same label.
+
+Engine mechanics:
+
+- **hls.js** (HTML5 and ArtPlayer via the neutral source bridge): levels are
+  `hls.levels` with list-index ids; a manual switch assigns `hls.nextLevel`
+  (switches at the next fragment instead of flushing the buffer), `-1` restores
+  auto, and the selected level is read from the public `manualLevel`. The HLS
+  refresh-event list additionally observes `MANIFEST_PARSED`,
+  `LEVELS_UPDATED`, and `LEVEL_SWITCHED`.
+- **Shaka (DASH)**: options are variant tracks pinned to the active variant's
+  exact audio stream — variants are audio+video combinations, and picking a
+  quality must not switch the audio track. The filter matches the active
+  variant's `audioId` when Shaka reports one (two same-language audio tracks
+  such as main vs. commentary share a language but never an id) and falls back
+  to the language only when no id is available — sorted by resolution then
+  bandwidth. Manual
+  selection disables ABR via `configure({abr: {enabled: false}})` before
+  `selectVariantTrack(track, true)`; the auto sentinel re-enables ABR. Manual
+  state is keyed to the exact player instance, so a session restart (which
+  creates a fresh player with ABR on) can never render a stale manual
+  selection.
+- **Video.js**: `VjsQualityLevels` projects the videojs-contrib-quality-levels
+  list (registered by the component's plugin import). VHS has no manual-level
+  setter, so a manual selection enables exactly one level and auto re-enables
+  all. Manual intent is tracked explicitly by the picked level object — VHS
+  also flips `enabled` off for renditions it temporarily excludes after
+  delivery errors, so counting enabled levels would misreport a manual
+  selection. A picked level that leaves the list, a source change, and
+  `clear()` all revert to auto. A missing or throwing plugin degrades to no
+  capability.
+- **Embedded MPV and external players**: `qualityLevels` stays false —
+  single-program transport streams have no rendition list to offer and no HLS
+  level API is surfaced there. `EmbeddedMpvControlsAdapter.setQualityLevel` is
+  a no-op.
+
+Native media events refresh the adapter automatically. An engine host must call
+the public `refresh()` hook after engine-specific getters change
+without a corresponding media event, including track lists, corrected duration,
+or live/VOD classification. Source, readiness, progress, seeking, and playback
+events that can invalidate the snapshot are observed directly.
+
+Audio and subtitle capabilities are advertised only when the injected getter
+returns a selectable list and the corresponding setter exists. Track setters
+may complete synchronously or asynchronously; the adapter refreshes after
+successful completion and contains synchronous throws or rejected promises
+while an engine is changing source.
+
+An injected non-`NaN` duration is authoritative, including positive infinity;
+`NaN` falls back to the video element. Without an explicit `isLive` accessor,
+only positive infinity implies live playback, so unknown duration is not
+temporarily mislabeled as live. An attached element with no resource maps to
+`idle`, paused preload/warm-up remains playable, and only actively playing media
+with insufficient data maps to `loading`.
+
+`WebVideoSourceControlsBridge` is the neutral source bridge shared by the HTML5
+and ArtPlayer integrations. The HTML5-local bridge/helper filenames remain
+compatibility aliases. The bridge attaches the adapter to the host video element
+and delegates HLS and native-text-track behavior to focused collaborators. HLS
+track IDs remain the list indices accepted by hls.js. Native caption/subtitle
+IDs remain stable for the lifetime of a source through a `WeakMap`, even when
+the browser removes or reorders tracks. Source replacement removes track
+listeners before the old HLS instance is destroyed, resets per-source subtitle
+state, and leaves exactly one engine source bound.
+
+Live/VOD classification comes from `WebPlayerViewComponent.resolvedIsLive`:
+explicit `ResolvedPortalPlayback.isLive` wins, otherwise content metadata means
+VOD and its absence means live. The same computed value configures Video.js,
+the HTML5 and ArtPlayer bridges, ArtPlayer itself, and mpegts.js; media duration
+is never used to infer the classification. Changing authoritative metadata
+restarts an active source when its engine must be recreated with a different
+live/VOD mode.
+
+Raw MPEG-TS VOD can expose `video.duration === Infinity`. For that source only,
+the neutral bridge used by HTML5 and ArtPlayer uses the first finite positive
+value from `video.duration`, the last valid seekable end, or the last valid
+buffered end. Without a known duration it keeps the source classified as VOD
+while seeking remains unavailable.
+
+`VjsPlayerControlsBridge` attaches the component-scoped adapter to the current
+Video.js Tech `<video>`. Video.js can replace that element during `reset()`, so
+the component reacquires it after `playerreset`, rebinds native media events,
+and attaches the bridge to the replacement before activating the new source.
+Audio and subtitle helpers assign source-lifetime IDs through `WeakMap`s, so
+track reordering or list refreshes do not change the IDs exposed to shared
+controls.
+
+Video.js subtitle selection preserves an explicit shared-controls override,
+including the `-1` off selection. Without an override, disabling the global
+caption preference suppresses the currently showing track and restores that
+same track when the preference returns, if it still belongs to the active
+source. Source changes reset both stable-ID maps and per-source subtitle state.
+The bridge reads duration through `player.duration()` because Video.js may
+correct or project a value that differs from the current Tech element.
+
+For reset-driven source changes, raw MPEG-TS activation is deferred until
+`playerreset`. Video.js can otherwise defer `reset()` behind a pending
+`play()`, so a dedicated coordinator pauses first and calls `reset()` only
+after `player.paused()` is true. Multiple reset-required changes coalesce, and
+every `playerreset` rebinds the current Tech before applying only the latest
+desired source. The coordinator snapshots actual Video.js volume, suppresses
+the reset-generated volume=1 event, restores the snapshot, and tracks whether a
+pre-ready reset already applied the source. An authoritative live/VOD metadata
+change restarts active raw MPEG-TS with the corrected mode. For MPEG-TS VOD,
+the session projects the last finite seekable or buffered end through
+`player.duration()`.
+
+`web-video-controls.host.ts` still contains small generic
+attachment/projection helpers. Video.js uses its dedicated bridge directly.
+HTML5 and ArtPlayer share the neutral source bridge and HLS/native-track
+collaborators under `web-video-support/`.
+
+The rollout symbols and setting are:
+
+| Symbol / setting                     |          Default | Current effect                                                           |
+| ------------------------------------ | ---------------: | ------------------------------------------------------------------------ |
+| `Settings.webPlayerSharedControls`   |           `true` | Persisted preference; the checkbox is the opt-out back to vendor chrome. |
+| `WEB_PLAYER_SHARED_CONTROLS_ENABLED` |           `true` | Default-on fallback for direct component use and focused tests.          |
+| `WEB_PLAYER_SHARED_CONTROLS`         | session snapshot | Component-scoped immutable value consumed by the three web engines.      |
+
+With the token enabled, Video.js also disables native controls, Video.js
+single-click and double-click actions, Video.js hotkeys, and spatial navigation.
+This leaves surface clicks, double-click fullscreen, and playback shortcuts
+owned exclusively by `app-player-controls`. With the token disabled, existing
+Video.js options, plugins, skin, audio-track menu, and series navigation remain
+unchanged.
+
+With the token enabled, ArtPlayer disables optional vendor chrome, hotkeys, and
+gestures. A transparent capture layer above ArtPlayer's video surface blocks
+its always-installed click and double-click handlers while still bubbling
+events to the shared controls surface. The shared path reapplies the app volume
+directly to `player.video` after ArtPlayer restores `artplayer_settings.volume`,
+so vendor storage cannot override the app-wide preference. With the token
+disabled, the existing ArtPlayer options, HLS audio settings, skin, source
+semantics, stored volume behavior, and series navigation remain unchanged.
+
+### Known differences vs. vendor chrome (deliberate, opt-out retains them)
+
+Flipping the default to shared controls drops a handful of vendor-chrome
+features by design. They stay available through the Settings > Playback
+opt-out and are candidates for later shared-controls work, not silent
+regressions:
+
+- **Video.js spatial navigation** (arrow-key/remote focus traversal of the
+  Video.js control bar, wired in `vjs-player-setup.ts` /
+  `vjs-player.types.ts`) is disabled in shared mode and has no shared-controls
+  equivalent. Keyboard playback shortcuts (space, arrows, F, M) are owned by
+  `ControlsShortcuts` instead; the shared bar is Tab-traversable.
+- **ArtPlayer extras** not reproduced by the shared bar: screenshot capture,
+  AirPlay, web fullscreen (`fullscreenWeb`, fill-the-page without OS
+  fullscreen), the mini progress line shown while controls are hidden, and
+  ArtPlayer's own mobile gesture/lock/auto-orientation handling (shared
+  controls bring their own touch semantics above).
+- **Vendor caption menus** behave as before in the opt-out path; shared mode
+  is authoritative for the session as documented under "Caption preference in
+  both modes".
+- **Fullscreen across a source switch.** Vendor chrome puts its own engine
+  element into fullscreen (`.video-js`, ArtPlayer's container, the native
+  `<video>`), and that element is remounted for the next episode, channel, or
+  alternative source, so the browser exits fullscreen on every switch. Shared
+  controls fullscreen the host-owned `fullscreenTarget` instead and keep
+  fullscreen across switches; re-requesting fullscreen for a remounted vendor
+  engine is not possible for the autoplay hand-off, which has no user
+  activation.
+
+## Advanced subtitle support
+
+The subtitles group of the settings panel carries three capability-gated
+extensions beyond track selection (#1408): loading an external subtitle
+file, adjusting the subtitle timing offset, and styling subtitle text (size
++ color). Each is honest per engine — an engine that cannot support a control
+simply never advertises the capability, and the UI is not rendered.
+
+Contract surface:
+
+- capabilities `externalSubtitles`, `subtitleDelay`, `subtitleStyle`;
+- state `subtitleDelaySeconds` (positive = subtitles appear later) and
+  `subtitleStyle` (`PlayerSubtitleStyle { sizePercent, color }`); and
+- commands `addExternalSubtitleFile()` (fire-and-forget; the adapter owns its
+  environment's picker), `setSubtitleDelay(seconds)`, and
+  `setSubtitleStyle(style)`.
+
+The subtitles group stays reachable with an empty track list whenever
+`externalSubtitles` is set — loading a file is what creates the first track.
+Delay and style rows keep the panel open like every other choice, because
+these settings are tuned iteratively against the running video
+(`ControlsSubtitleSettings` owns those interactions); the file dialog the
+load action opens sits on top of the still-open panel.
+
+Persistence: the style (size/color) is a cross-engine preference stored under
+the `subtitleStyle` localStorage key (`subtitle-style.ts`), the same mechanism
+as the shared `volume` key, and is normalized/clamped on every read and write.
+The delay and any loaded file are deliberately per-session/per-source — they
+correct one specific stream.
+
+The canonical `PlayerSubtitleStyle` shape and the clamp/normalize rules
+(delay limit, size bounds, color validation) live in
+`@iptvnator/shared/interfaces` (`subtitle-style.util.ts`). The renderer
+applies them to user input and the Electron main process re-applies the exact
+same implementation to untrusted IPC payloads — deliberate defense-in-depth
+with a single source of truth, so widening a limit on one side cannot
+silently re-clamp on the other.
+
+Per-engine implementations:
+
+- **HTML5 + ArtPlayer (shared-controls mode, neutral source bridge).** The
+  picker is a renderer-side DOM file input (`.srt`/`.vtt` only; works in the
+  PWA and Electron alike, and no filesystem path ever enters the app). File
+  bytes are decoded encoding-aware (`decodeExternalSubtitleBytes`: UTF-16
+  BOMs, strict UTF-8, then `chooseLegacySingleByteDecode`, which picks
+  between Windows-1251 and Windows-1252 by the plausibility of the 1251
+  candidate's decoded words — pure-Cyrillic words vote for 1251, words
+  mixing Cyrillic with ASCII letters vote against (misread Latin text like
+  "était" decodes to the mixed-script "йtait" that real subtitles never
+  contain), and Cyrillic must also carry a meaningful share of all letters
+  so an isolated accented CP1252 word ("À table" → "А table") cannot flip
+  the file), because `Blob.text()`'s silent UTF-8 substitution turns common
+  legacy-encoded SRT files into mojibake. `WebVideoExternalSubtitles` parses
+  the file (`external-subtitle-cues.util.ts`) and renders it through a native
+  `TextTrack` on the video element, so it works under every source kind. The
+  native track enumeration excludes externally owned tracks — ownership is
+  tracked for every track the session EVER created, because `addTextTrack`
+  tracks cannot leave the element and per-source ownership would let stale or
+  attach-failed tracks reappear as ghost engine tracks. `WebVideoSourceTracks`
+  merges external tracks into the subtitle listing with IDs from 100000 up,
+  routing selection so exactly one owner (engine or external) is active;
+  external selection deselects the engine BEFORE setting track modes, since
+  hls.js reacts to `subtitleTrack = -1` by disabling every subtitle-kind
+  `TextTrack` on the element. A pick captures the source generation and is
+  discarded if the stream changed while the dialog was open (mirroring the
+  Embedded MPV runner's session recheck). The delay capability is
+  runtime-gated on an external track being the SELECTED one — only owned cues
+  can be re-timed exactly, and with an engine track active the row would be
+  enabled yet visually inert. Negatively shifted cues keep their real
+  (possibly negative) times, which are valid and simply never active;
+  clamping them to t≈0 would stack every pre-roll cue at playback start.
+  Style applies through a scoped `::cue` rule (`WebVideoSubtitleStyle`),
+  which covers embedded, hls.js-managed, and external native cues. ASS
+  rendering would need libass and is out of scope for the web engines.
+- **Embedded MPV frame-copy.** The helper protocol gained `sub-add`,
+  `sub-delay`, `sub-scale`, and `sub-color` commands. The picker is a
+  main-process open dialog (`.srt/.ass/.ssa/.vtt/.sub` — mpv renders ASS
+  natively), and the renderer only ever forwards the returned path over the
+  dedicated IPC (`EMBEDDED_MPV_ADD_SUBTITLE` etc.); delay applies to every
+  subtitle track. mpv does not report these values back through the session
+  snapshot, so `EmbeddedMpvSubtitleSettings` keeps the authoritative
+  renderer-side values: the delay resets per session, and a non-default
+  persisted style is re-applied to each new session. `sub-color` affects
+  mpv's text-subtitle rendering; ASS files keep their embedded styling.
+  Runtime coverage: the packaged Linux frame-copy smoke
+  (`apps/electron-backend-e2e/src/embedded-mpv-frame-copy-packaged.e2e.ts`)
+  drives `addEmbeddedMpvSubtitle` with a fixture file against the real
+  packaged helper and asserts the track appears in the session snapshot,
+  plus round-trips the delay/style IPC. The native file dialog itself
+  (`selectEmbeddedMpvSubtitleFile`) cannot be automated and is verified
+  manually.
+- **Not wired (capabilities stay false):** Video.js shared mode (its emulated
+  text-track display needs a separate remote-track + CSS integration — a
+  follow-up), the vendor-chrome (preference-off) web players by design, the
+  Embedded MPV native-view legacy dock, the Linux out-of-process native path
+  (which exports no subtitle commands), and external MPV/VLC, which own their
+  own UI.
+
+## Embedded MPV rendering constraints
+
+The shared contract does not replace either Embedded MPV renderer. The host
+uses the renderer's reported engine to choose the compatible controls UI.
+
+The web-player preference does not affect Embedded MPV. Frame-copy always uses
+the shared DOM controls, while native-view keeps its compositor-safe legacy
+dock.
+
+`EmbeddedMpvControlsAdapter` reports `pictureInPicture: false`,
+`pictureInPictureActive: false`, and `canPictureInPicture: false`;
+`togglePictureInPicture()` is a no-op. Neither renderer opens an MPV
+popup/mini-window.
+
+### Frame-copy engine
+
+The experimental frame-copy engine uploads helper-produced frames to
+`<canvas data-embedded-mpv-frame>`. The canvas is ordinary DOM, so controls,
+dialogs, and other DOM layers can stack above it normally. This path is the
+first runtime consumer of `app-player-controls`, backed by a component-scoped
+`EmbeddedMpvControlsAdapter`.
+
+The shared controls receive the whole player root as their DOM surface. Turning
+`showControls` off detaches surface interaction and playback-shortcut
+ownership; Escape remains available for generic popover dismissal.
+Backdrop-bearing overlays disable playback shortcuts. Fullscreen uses the DOM
+Fullscreen API on the host-supplied `fullscreenTarget` (the
+`app-web-player-view` element, which survives the per-application remount),
+falling back to the player root; the component's own `isFullscreen`,
+`canFullscreen`, and toggle follow the same owner and re-read it on mount, so
+a player remounted inside an active fullscreen starts fullscreen. The Embedded
+MPV component continues bounds sync so the helper renders at the current
+viewport size.
+
+Recording snapshots arrive independently from command promise settlement. The
+adapter therefore treats snapshots as observations rather than acknowledgments
+by themselves: it accepts only fresh same-session transitions, permits only one
+pending toggle, waits for command settlement and the expected state, preserves
+addon error text, and cancels pending state/feedback when playback, session, or
+engine ownership changes. Command replies are reconciled by snapshot freshness:
+a same-session broadcast that arrived while IPC was pending wins over an older
+or same-timestamp reply, so a latched recording acknowledgement cannot be rolled
+back to the command's stale baseline.
+
+### Native-view engine
+
+The native MPV surface paints outside Chromium's DOM stacking model. It keeps
+the compositor-safe fixed controls dock below the viewport. Modal overlays hide
+the native surface with `HIDDEN_BOUNDS`; control menus render as horizontal
+panels inside the fixed-height dock strip, so they stay interactive without
+any bounds change.
+
+The transparent BrowserWindow / `NSWindowBelow` tunnel-and-backdrop approach is
+not the shipped architecture. The shared-controls integration does not add
+transparency changes, backdrop holes, native fullscreen IPC, native-view
+attachment APIs, or bounds-tick machinery.
+
+See [embedded-mpv-native.md](./embedded-mpv-native.md) for the authoritative
+renderer, bounds, and platform details.
+
+## Follow-up integrations
+
+The remaining design seams are:
+
+1. **Native-view UI** — retain the compositor-safe dock unless the native
+   engine's compositing architecture changes independently. A native-view
+   migration is not part of the frame-copy rollout.
+2. **Background playback** — introduce a persistent player/session host above
+   route-scoped views. The contract is lifecycle-agnostic; this integration
+   does not add that host or change current teardown behavior.
+
+## File map
+
+Landed in #1148:
+
+```text
+libs/ui/playback/src/lib/player-controls/
+├── player-controls.model.ts
+├── player-controls-defaults.ts
+├── player-controls.component.ts
+├── player-controls.component.html
+├── player-controls.component.scss
+├── _player-palette.scss
+├── player-palette.ts
+├── controls-feedback.ts
+├── controls-format.utils.ts
+├── controls-layout.ts
+├── controls-timeline-label.ts
+├── controls-timeline-segments.ts
+├── controls-settings.ts
+├── controls-settings-groups.ts
+├── controls-up-next.ts
+├── player-timeline.component.ts
+├── player-timeline.component.html
+├── player-timeline.component.scss
+├── player-up-next-card.component.ts
+├── player-up-next-card.component.html
+├── player-up-next-card.component.scss
+├── player-settings-panel.component.ts
+├── player-settings-panel.component.html
+├── player-settings-panel.component.scss
+├── settings-radio-group.directive.ts
+├── controls-fullscreen.ts
+├── controls-menu-selection.ts
+├── controls-menu-state.ts
+├── controls-shortcuts.ts
+├── controls-chrome-interactions.ts
+├── controls-stream-stats.ts
+├── player-stream-stats.model.ts
+├── positive-number.util.ts
+├── stream-stats-format.utils.ts
+├── web-video-stream-stats.ts
+├── legacy-player-shortcuts.ts
+├── controls-surface.ts
+├── controls-view-model.ts
+├── controls-visibility.ts
+├── controls-volume.ts
+├── web-player-controls.flag.ts
+├── web-video-controls.adapter.ts
+├── web-video-controls.host.ts
+├── web-video-controls.media-helpers.ts
+├── web-video-picture-in-picture.controller.ts
+└── index.ts
+```
+
+Focused specs live beside these files. The subtree is exported from
+`libs/ui/playback/src/index.ts`.
+
+The fullscreen channel panel rendered by `WebPlayerViewComponent` lives in:
+
+```text
+libs/ui/playback/src/lib/fullscreen-channel-panel/
+├── fullscreen-channel-panel.model.ts      # FULLSCREEN_CHANNEL_PANEL + host/context contracts
+├── fullscreen-channel-panel-state.ts      # open/mounted state, hover-intent timers
+├── fullscreen-channel-panel.component.ts
+├── fullscreen-channel-panel.component.html
+├── fullscreen-channel-panel.component.scss
+└── index.ts
+```
+
+The M3U body (`app-m3u-fullscreen-channel-list`) lives beside the M3U player
+in `libs/playlist/m3u/feature-player/src/lib/video-player/fullscreen-channel-list/`.
+
+The Embedded MPV integration lives in:
+
+```text
+libs/ui/playback/src/lib/embedded-mpv-player/
+├── embedded-mpv-controls.adapter.ts
+├── embedded-mpv-controls-recording.ts
+├── embedded-mpv-controls-recording-feedback.ts
+├── embedded-mpv-stream-stats.ts
+├── embedded-mpv-player.component.ts
+├── embedded-mpv-player.component.html
+└── embedded-mpv-session-controller.ts
+```
+
+The adapter and recording helpers are component-scoped through
+`EmbeddedMpvPlayerComponent`.
+
+The neutral web-video source support shared by HTML5 and ArtPlayer lives in:
+
+```text
+libs/ui/playback/src/lib/web-video-support/
+├── quality-level-labels.ts
+├── web-video-hls-controls.ts
+├── web-video-native-text-tracks.ts
+├── web-video-shaka-controls.ts
+├── web-video-source-stats.ts
+├── web-video-source-tracks.ts
+└── web-video-source-controls.bridge.ts
+```
+
+`WebVideoSourceTracks` owns source-local HLS/Shaka/native track projection,
+caption preference and explicit subtitle-off state, and exact track-list
+listener cleanup. It has no controls dependency, so the preference-off players
+use it directly. `WebVideoSourceControlsBridge` wraps it for shared controls
+and adds adapter attach/detach, adapter refresh, and MPEG-TS VOD duration
+correction.
+
+The guarded HTML5 integration lives in:
+
+```text
+libs/ui/playback/src/lib/html-video-player/
+├── html-video-element-session.ts
+├── html-video-player-controls.bridge.ts
+├── html-video-player-hls-controls.ts
+├── html-video-player-native-text-tracks.ts
+├── html-video-player.component.ts
+└── html-video-player.component.html
+```
+
+`HtmlVideoPlayerComponent` provides a component-scoped
+`WebVideoControlsAdapter`. Its bridge/helper filenames re-export the neutral
+web-video support so existing imports and focused specs remain stable.
+`HtmlVideoElementSession` separately owns native video-event attachment,
+persisted volume, and start-time/time/ended propagation. Captions are not its
+concern in either mode: the component binds `WebVideoSourceTracks` alongside
+its controls bridge and feeds both the same active source.
+
+The guarded Video.js integration lives in:
+
+```text
+libs/ui/playback/src/lib/vjs-player/
+├── vjs-audio-tracks.ts
+├── vjs-legacy-tracks.ts
+├── vjs-mpegts-session.ts
+├── vjs-quality-levels.ts
+├── vjs-player-controls.bridge.ts
+├── vjs-player-reset-coordinator.ts
+├── vjs-player-setup.ts
+├── vjs-player.component.ts
+├── vjs-player.component.html
+├── vjs-text-tracks.ts
+└── vjs-video-element-session.ts
+```
+
+`VjsPlayerComponent` provides a component-scoped `WebVideoControlsAdapter`.
+Its bridge and track helpers own current-Tech attachment, source-lifetime track
+identity, caption preference/override projection, and exact listener cleanup.
+`VjsMpegTsSession` owns raw MPEG-TS attachment and VOD duration correction,
+`VjsPlayerResetCoordinator` owns pause/coalesced-reset ordering and volume
+preservation, while `VjsVideoElementSession` owns native Tech-element
+playback/ended events.
+
+The guarded ArtPlayer integration lives in:
+
+```text
+libs/ui/playback/src/lib/art-player/
+├── art-player-audio-tracks.ts
+├── art-player-setup.ts
+├── art-player-source-session.ts
+├── art-player-video-session.ts
+├── art-player.component.ts
+├── art-player.component.html
+└── art-player.component.scss
+```
+
+`ArtPlayerComponent` provides a component-scoped `WebVideoControlsAdapter`.
+`ArtPlayerSourceSession` owns HLS/DASH(Shaka)/MPEG-TS/native engines, the neutral source
+bridge, exact engine/listener cleanup, and a destroyed-session guard for
+ArtPlayer's delayed `customType` dispatch. `ArtPlayerVideoSession` owns native
+media errors, readiness, volume persistence, ended/time updates, and exact
+event cleanup. The setup helper preserves the legacy option set when the host
+token resolves to false and disables vendor interaction owners when it resolves
+to true; the component's transparent capture layer blocks ArtPlayer's core
+surface handlers.
+
+Focused specs cover each web engine's preference-off compatibility path,
+shared-controls rendering and diagnostic interaction gating, source/element
+replacement, track-list lifecycle and stable IDs, caption preference and
+explicit-off behavior, MPEG-TS live/VOD handling and duration projection,
+volume preservation/authority, stale ArtPlayer `customType` callbacks, and
+collaborator teardown. Persistent/background player ownership has not landed.
+
+## Radio and display sleep
+
+### Radio audio player
+
+M3U `radio="true"` entries use `AudioPlayerComponent` under
+`libs/ui/playback/src/lib/audio-player/`. The player always renders inline and
+uses HTML5 `<audio>` regardless of the configured video player. Radio bypasses
+`shouldShowInlinePlayer`'s external-player gate and hides the EPG ribbon and panel
+toggle. The station artwork, blurred logo background and glass controls form the
+radio layout; title/group scrolling is CSS-only. It supports play/pause, mute,
+and volume, including the volume keys in 5% steps. Volume shares the video
+players' `volume` localStorage key. The template, SCSS and TypeScript component
+live together; routing/integration stays in the M3U player template.
+
+### Display sleep during playback
+
+`PlaybackKeepAwakeService` in the web app watches `<video>` using document-level
+capture listeners because media events do not bubble. Release listeners also
+attach to the tracked element: Chromium's pause after DOM removal never reaches
+the document. A playing video holds a display-sleep lock only while the document
+is visible or that video is in picture-in-picture, which survives minimization.
+In Electron this relies on the main window keeping Chromium background
+throttling on: with `backgroundThrottling: false` a minimized window keeps
+reporting `visible`, so the gate would never release the display.
+
+Electron uses main-process `powerSaveBlocker` through
+`window.electron.setPlaybackKeepAwake`. The renderer vote clears on reload,
+main-frame non-same-document navigation, crash (`render-process-gone`) or
+destruction; Angular navigation does not itself clear it. The PWA uses Screen
+Wake Lock. Browser auto-release clears its sentinel; the next media, visibility
+or PiP synchronization can request another lock. If state changes during a
+pending request, rejection triggers one queued re-evaluation rather than losing
+that update. Radio `<audio>` deliberately never blocks display sleep.
+Embedded MPV owns a separate blocker in `EmbeddedMpvNativeService`, and external
+MPV/VLC inhibit their own screensaver.

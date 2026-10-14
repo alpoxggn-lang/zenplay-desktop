@@ -1,0 +1,72 @@
+# Every Dependabot PR triggers the full pipeline (~15 jobs), so version
+# updates are batched weekly. Nx minor+patch updates use a dedicated group so
+# official packages move together; Nx majors are manual coordinated migrations.
+# Native packaging, parser, and version-locked playback dependencies stay in
+# standalone PRs; other minor+patch updates are grouped per ecosystem. Security
+# updates are separate and are not limited by this schedule; CI enforces complete
+# Nx lockstep.
+version: 2
+updates:
+    - package-ecosystem: npm
+      directory: /
+      schedule:
+          interval: weekly
+          day: monday
+          time: '06:00'
+      open-pull-requests-limit: 5
+      ignore:
+          - dependency-name: nx
+            update-types:
+                - version-update:semver-major
+          - dependency-name: '@nx/*'
+            update-types:
+                - version-update:semver-major
+      groups:
+          nx-version-updates:
+              applies-to: version-updates
+              patterns:
+                  - nx
+                  - '@nx/*'
+              update-types:
+                  - minor
+                  - patch
+          nx-security-updates:
+              applies-to: security-updates
+              patterns:
+                  - nx
+                  - '@nx/*'
+          npm-minor-patch:
+              applies-to: version-updates
+              exclude-patterns:
+                  - better-sqlite3
+                  - electron
+                  - electron-builder
+                  - epg-parser
+                  - mpegts.js
+                  - nx
+                  - '@nx/*'
+                  - shaka-player
+              update-types:
+                  - minor
+                  - patch
+
+    - package-ecosystem: github-actions
+      directory: /
+      schedule:
+          interval: weekly
+          day: monday
+          time: '06:00'
+      groups:
+          actions-minor-patch:
+              patterns:
+                  - '*'
+              update-types:
+                  - minor
+                  - patch
+
+    - package-ecosystem: docker
+      directory: /docker
+      schedule:
+          interval: weekly
+          day: monday
+          time: '06:00'

@@ -1,0 +1,340 @@
+#!/usr/bin/env node
+
+import {
+    existsSync,
+    mkdirSync,
+    readFileSync,
+    readdirSync,
+    statSync,
+    writeFileSync,
+} from 'node:fs';
+import path from 'node:path';
+import process from 'node:process';
+
+import {
+    describeShardReports,
+    findPlaywrightJsonReports,
+    loadPlaywrightReports,
+    verifyShardReports,
+} from './e2e-shard-reports.mjs';
+
+const workspaceRoot = process.cwd();
+const args = process.argv.slice(2);
+const projectArg = valueFor('--project');
+const inputArg = valueFor('--input');
+const policy = JSON.parse(
+    readFileSync(path.join(workspaceRoot, 'tools/coverage/coverage-policy.json'), 'utf8')
+);
+const outputDirArg = valueFor('--output-dir');
+const outputDir = path.resolve(
+    workspaceRoot,
+    outputDirArg ?? policy.reporting.e2eSummaryDir
+);
+const outputDirLabel = outputDirArg ?? policy.reporting.e2eSummaryDir;
+
+function valueFor(flag) {
+    const prefixed = args.find((arg) => arg.startsWith(`${flag}=`));
+    if (prefixed) {
+        return prefixed.slice(flag.length + 1);
+    }
+    const index = args.indexOf(flag);
+    return index >= 0 ? args[index + 1] : undefined;
+}
+
+function listFiles(directory, predicate) {
+    if (!existsSync(directory)) {
+        return [];
+    }
+    const files = [];
+    for (const entry of readdirSync(directory)) {
+        const fullPath = path.join(directory, entry);
+        const stats = statSync(fullPath);
+        if (stats.isDirectory()) {
+            files.push(...listFiles(fullPath, predicate));
+        } else if (predicate(fullPath)) {
+            files.push(fullPath);
+        }
+    }
+    return files;
+}
+
+function normalizeTag(tag) {
+    const normalized = tag.startsWith('@') ? tag : `@${tag}`;
+    return normalized.toLowerCase();
+}
+
+function tagsFromTitle(title) {
+    return Array.from(
+        new Set((title.match(/@[a-z0-9-]+/gi) ?? []).map(normalizeTag).sort())
+    );
+}
+
+function fail(message) {
+    console.error(`e2e-semantic-summary: ${message}`);
+    if (process.env.GITHUB_STEP_SUMMARY) {
+        writeFileSync(
+            process.env.GITHUB_STEP_SUMMARY,
+            `\n> **E2E semantic summary not written:** ${message}\n`,
+            { flag: 'a' }
+        );
+    }
+    process.exit(1);
+}
+
+const FAILURE_STATUSES = new Set(['failed', 'timedOut']);
+// A spec runs once per Playwright project (browser). Flaky outranks skipped so
+// a retried test in one browser is not hidden by a skip in another.
+const STATUS_PRECEDENCE = ['failed', 'flaky', 'skipped'];
+
+// Playwright retries a failing test and records every attempt. Only a final
+// pass turns earlier failures into flaky, which Playwright itself does not
+// count as unexpected; any other ending after a failure stays failed.
+function attemptsStatus(results) {
+    const statuses = results.map((result) => result.status);
+    const finalStatus = statuses.at(-1);
+    if (finalStatus === undefined) {
+        return 'unknown';
+    }
+    const anyFailure = statuses.some((status) => FAILURE_STATUSES.has(status));
+    if (finalStatus === 'passed') {
+        return anyFailure ? 'flaky' : 'passed';
+    }
+    return anyFailure ? 'failed' : finalStatus;
+}
+
+function specStatus(spec) {
+    const statuses = (spec.tests ?? []).map((test) => attemptsStatus(test.results ?? []));
+    return (
+        STATUS_PRECEDENCE.find((status) => statuses.includes(status)) ?? statuses[0] ?? 'unknown'
+    );
+}
+
+function collectFromPlaywrightJson(report, projectName) {
+    const tests = [];
+
+    function walkSuite(suite, inheritedFile) {
+        const file = suite.file ?? inheritedFile;
+        for (const spec of suite.specs ?? []) {
+            const title = [...(spec.titlePath ?? []), spec.title].filter(Boolean).join(' ');
+            const tags = new Set([
+                ...(spec.tags ?? []).map(normalizeTag),
+                ...tagsFromTitle(title),
+            ]);
+            const status = specStatus(spec);
+
+            tests.push({
+                project: projectName,
+                file,
+                title,
+                status,
+                tags: Array.from(tags).sort(),
+            });
+        }
+
+        for (const child of suite.suites ?? []) {
+            walkSuite(child, file);
+        }
+    }
+
+    for (const suite of report.suites ?? []) {
+        walkSuite(suite, suite.file);
+    }
+
+    return tests;
+}
+
+function collectFromSource(projectName) {
+    const root =
+        projectName === 'electron-backend-e2e'
+            ? 'apps/electron-backend-e2e/src'
+            : 'apps/web-e2e/src';
+    const files = listFiles(path.join(workspaceRoot, root), (file) => file.endsWith('.e2e.ts'));
+    const tests = [];
+
+    for (const file of files) {
+        const relativeFile = path.relative(workspaceRoot, file);
+        const contents = readFileSync(file, 'utf8');
+        const regex = /\btest(?:\.describe)?\s*\(\s*(['"`])([\s\S]*?)\1/g;
+        for (const match of contents.matchAll(regex)) {
+            const title = match[2].replace(/\s+/g, ' ').trim();
+            const tags = tagsFromTitle(title);
+            if (tags.length > 0) {
+                tests.push({
+                    project: projectName,
+                    file: relativeFile,
+                    title,
+                    status: 'not-run',
+                    tags,
+                });
+            }
+        }
+    }
+
+    return tests;
+}
+
+function defaultInputFor(projectName) {
+    return path.join(workspaceRoot, 'dist/test-results', projectName, 'results.json');
+}
+
+/**
+ * `--output-dir` overrides the policy's summary directory so several runs
+ * (one per OS in CI) can be summarized side by side in one job.
+ *
+ * `--input` may name one Playwright JSON report or a directory that holds the
+ * `results.json` of every shard (as downloaded from the per-shard CI
+ * artifacts). An explicit input that does not exist, a directory without any
+ * report, or an incomplete or duplicated shard set aborts instead of writing
+ * a partial summary. Only the implicit default falls back to scanning the
+ * spec sources.
+ */
+function resolveReportPaths(projectName) {
+    const inputPath = inputArg
+        ? path.resolve(workspaceRoot, inputArg)
+        : defaultInputFor(projectName);
+
+    if (!existsSync(inputPath)) {
+        if (inputArg) {
+            fail(`Playwright JSON report input does not exist: ${inputPath}`);
+        }
+        return [];
+    }
+    if (!statSync(inputPath).isDirectory()) {
+        return [inputPath];
+    }
+    const found = findPlaywrightJsonReports(inputPath);
+    if (found.length === 0) {
+        fail(`no Playwright JSON reports (results.json) found under ${inputPath}`);
+    }
+    return found;
+}
+
+function collectTests(projectName) {
+    const reportPaths = resolveReportPaths(projectName);
+    if (reportPaths.length === 0) {
+        return { tests: collectFromSource(projectName), reports: [] };
+    }
+
+    const reports = loadPlaywrightReports(reportPaths);
+    const verification = verifyShardReports(reports);
+    if (!verification.ok) {
+        fail(
+            `${projectName} reports do not form one complete run: ${verification.problems.join('; ')}`
+        );
+    }
+
+    return {
+        tests: reports.flatMap((entry) =>
+            collectFromPlaywrightJson(entry.report, projectName)
+        ),
+        reports,
+    };
+}
+
+function statusCounts(tests) {
+    return tests.reduce((counts, test) => {
+        counts[test.status] = (counts[test.status] ?? 0) + 1;
+        return counts;
+    }, {});
+}
+
+function tagCounts(tests) {
+    const counts = {};
+    for (const test of tests) {
+        for (const tag of test.tags) {
+            counts[tag] = (counts[tag] ?? 0) + 1;
+        }
+    }
+    return counts;
+}
+
+function journeyMatches(journey, tests) {
+    return tests.filter(
+        (test) =>
+            journey.projects.includes(test.project) &&
+            journey.matchAnyTags.some((tag) => test.tags.includes(tag))
+    );
+}
+
+function markdownFor(projectName, tests, reportsLabel) {
+    const counts = statusCounts(tests);
+    const countsText = Object.entries(counts)
+        .map(([status, count]) => `${status}: ${count}`)
+        .join(', ');
+    const tagRows = Object.entries(tagCounts(tests))
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([tag, count]) => `| ${tag} | ${count} |`)
+        .join('\n');
+    const journeys = policy.e2eSemanticCoverage.criticalJourneys
+        .filter((journey) => !projectName || journey.projects.includes(projectName))
+        .map((journey) => {
+            const matches = journeyMatches(journey, tests);
+            const failed = matches.some((test) => test.status === 'failed');
+            const status = matches.length === 0 ? 'missing' : failed ? 'failing' : 'covered';
+            return `| ${journey.name} | ${journey.matchAnyTags.join(', ')} | ${matches.length} | ${status} |`;
+        })
+        .join('\n');
+
+    return `# E2E Semantic Coverage${projectName ? `: ${projectName}` : ''}
+
+Source: ${tests.some((test) => test.status === 'not-run') ? 'spec source scan' : 'Playwright JSON report'}
+
+Reports: ${reportsLabel}
+
+Total tracked tests: ${tests.length}
+
+Statuses: ${countsText || 'none'}
+
+## Tags
+
+| Tag | Tests |
+| --- | ---: |
+${tagRows || '| _none_ | 0 |'}
+
+## Critical Journeys
+
+| Journey | Matching tags | Tests | Status |
+| --- | --- | ---: | --- |
+${journeys || '| _none_ | _n/a_ | 0 | missing |'}
+`;
+}
+
+const projects = projectArg ? [projectArg] : ['web-e2e', 'electron-backend-e2e'];
+const collected = projects.map((projectName) => ({
+    projectName,
+    ...collectTests(projectName),
+}));
+const allTests = collected.flatMap((entry) => entry.tests);
+const reportsLabel = collected
+    .map((entry) =>
+        projectArg
+            ? describeShardReports(entry.reports)
+            : `${entry.projectName}: ${describeShardReports(entry.reports)}`
+    )
+    .join('; ');
+
+mkdirSync(outputDir, { recursive: true });
+
+if (projectArg) {
+    const content = markdownFor(projectArg, allTests, reportsLabel);
+    writeFileSync(path.join(outputDir, `${projectArg}-semantic-summary.md`), content);
+    writeFileSync(
+        path.join(outputDir, `${projectArg}-semantic-summary.json`),
+        `${JSON.stringify(allTests, null, 4)}\n`
+    );
+    if (process.env.GITHUB_STEP_SUMMARY) {
+        writeFileSync(process.env.GITHUB_STEP_SUMMARY, `\n${content}\n`, { flag: 'a' });
+    }
+    console.log(`Wrote ${outputDirLabel}/${projectArg}-semantic-summary.md`);
+} else {
+    const content = markdownFor(undefined, allTests, reportsLabel);
+    writeFileSync(path.join(outputDir, 'semantic-summary.md'), content);
+    writeFileSync(
+        path.join(outputDir, 'semantic-summary.json'),
+        `${JSON.stringify(allTests, null, 4)}\n`
+    );
+    if (process.env.GITHUB_STEP_SUMMARY) {
+        writeFileSync(process.env.GITHUB_STEP_SUMMARY, `\n${content}\n`, { flag: 'a' });
+    }
+    console.log(`Wrote ${outputDirLabel}/semantic-summary.md`);
+}

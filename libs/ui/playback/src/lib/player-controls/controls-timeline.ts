@@ -1,0 +1,86 @@
+import { Signal, computed, signal } from '@angular/core';
+import {
+    findTimelineSegment,
+    normalizeTimelineSegments,
+    segmentFillPercent,
+    type TimelineSegmentView,
+} from './controls-timeline-segments';
+import type {
+    PlayerControlsState,
+    PlayerTimelineSegment,
+} from './player-controls.model';
+
+/**
+ * Owns the scrub state and timeline projections for the controls bar: the
+ * current slider value (scrub position while dragging, playback position
+ * otherwise), the bounded duration, and the progress percentage.
+ */
+export class ControlsTimeline {
+    readonly scrubPosition = signal<number | null>(null);
+
+    constructor(
+        private readonly state: Signal<PlayerControlsState>,
+        private readonly hostSegments: Signal<
+            readonly PlayerTimelineSegment[] | null
+        > = signal(null)
+    ) {}
+
+    readonly duration = computed(() => {
+        const duration = this.state().durationSeconds;
+        return typeof duration === 'number' && Number.isFinite(duration)
+            ? Math.max(0, duration)
+            : 0;
+    });
+
+    readonly value = computed(
+        () =>
+            this.normalize(
+                this.scrubPosition() ?? this.state().positionSeconds
+            ) ?? 0
+    );
+
+    readonly progress = computed(() => {
+        const duration = this.duration();
+        return this.state().canSeek && duration > 0
+            ? (this.value() / duration) * 100
+            : 0;
+    });
+
+    /** The drawn track: host segments over the duration, else one segment. */
+    readonly segments = computed<TimelineSegmentView[]>(() =>
+        normalizeTimelineSegments(this.hostSegments(), this.duration())
+    );
+
+    /**
+     * Title of the segment holding the current (scrub or playback) value —
+     * the programme or chapter the slider names in its `aria-valuetext`.
+     */
+    readonly segmentTitle = computed(
+        () => findTimelineSegment(this.segments(), this.value())?.title ?? null
+    );
+
+    /** Played share of one segment for the current (scrub or playback) value. */
+    fillPercent(segment: TimelineSegmentView): number {
+        if (!this.state().canSeek) {
+            return 0;
+        }
+        return segmentFillPercent(segment, this.value());
+    }
+
+    readEventValue(event: Event): number | null {
+        return this.normalize(Number((event.target as HTMLInputElement).value));
+    }
+
+    private normalize(value: number): number | null {
+        if (!Number.isFinite(value)) {
+            return null;
+        }
+
+        const duration = this.state().durationSeconds;
+        const upperBound =
+            typeof duration === 'number' && Number.isFinite(duration)
+                ? Math.max(0, duration)
+                : Number.POSITIVE_INFINITY;
+        return Math.min(Math.max(0, value), upperBound);
+    }
+}

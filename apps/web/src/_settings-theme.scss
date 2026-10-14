@@ -1,0 +1,120 @@
+@use '@angular/material' as mat;
+
+$settings-select-density: mat.define-theme(
+    (
+        density: (
+            scale: -5,
+        ),
+    )
+);
+
+// Settings surfaces: rows in titled cards on the page background. Light
+// keeps white cards with hairline borders; dark uses the widget surface with
+// a faint light border, per the UI guidelines' theme split.
+.settings-container {
+    // Compact switch, nearer the 22px toggle of the concept than Material's
+    // default 32px track; the 40px state layer keeps the touch target.
+    @include mat.slide-toggle-overrides(
+        (
+            track-width: 40px,
+            track-height: 24px,
+            selected-handle-size: 18px,
+            unselected-handle-size: 14px,
+            pressed-handle-size: 20px,
+            with-icon-handle-size: 18px,
+        )
+    );
+
+    // Compact select without a floating label (the row title names it).
+    .settings-select.mat-mdc-form-field {
+        @include mat.form-field-density($settings-select-density);
+    }
+
+    // Save is the page's one solid call to action: the app CTA pair (light
+    // on dark, dark on light), not the theme primary. Set through the button
+    // tokens, which a plain background rule cannot beat.
+    .settings-save-button {
+        @include mat.button-overrides(
+            (
+                filled-container-color: var(--app-cta-bg),
+                filled-label-text-color: var(--app-cta-fg),
+                filled-state-layer-color: var(--app-cta-fg),
+                filled-container-shape: 8px,
+            )
+        );
+    }
+
+    --settings-safe-bottom: env(safe-area-inset-bottom, 0px);
+    --settings-card-bg: var(--app-widget-bg, #ffffff);
+    --settings-card-border: rgba(0, 0, 0, 0.08);
+    --settings-item-border: rgba(0, 0, 0, 0.07);
+    --settings-control-bg: #ffffff;
+    --settings-control-border: rgba(0, 0, 0, 0.14);
+    --settings-control-hover-border: rgba(0, 0, 0, 0.26);
+    --settings-chip-bg: rgba(0, 0, 0, 0.07);
+    --settings-chip-fg: var(--app-body-color);
+    --settings-callout-info-bg: color-mix(
+        in srgb,
+        var(--app-selection-color) 6%,
+        var(--settings-card-bg)
+    );
+    --settings-callout-info-border: color-mix(
+        in srgb,
+        var(--app-selection-color) 24%,
+        transparent
+    );
+    --settings-callout-warn-bg: color-mix(in srgb, #d97706 9%, transparent);
+    --settings-callout-warn-border: color-mix(in srgb, #d97706 32%, transparent);
+    --settings-callout-warn-icon: #8a5300;
+    --settings-item-danger-border: color-mix(
+        in srgb,
+        var(--mat-sys-error) 22%,
+        transparent
+    );
+    --settings-action-bar-bg: #ffffff;
+    --settings-action-bar-border: rgba(0, 0, 0, 0.1);
+    --settings-action-bar-shadow: 0 16px 40px rgba(15, 23, 42, 0.18);
+    --settings-restart-bar-bg: color-mix(
+        in srgb,
+        var(--app-selection-color) 8%,
+        var(--app-content-bg)
+    );
+    --settings-muted: color-mix(
+        in srgb,
+        var(--mat-sys-on-surface) 64%,
+        transparent
+    );
+}
+
+:where(.dark-theme, [data-theme='dark'], .mat-app-background.dark)
+    .settings-container {
+    --settings-card-bg: var(--app-widget-bg, #1e2330);
+    --settings-card-border: rgba(255, 255, 255, 0.07);
+    --settings-item-border: rgba(255, 255, 255, 0.06);
+    --settings-control-bg: color-mix(in srgb, var(--app-widget-bg) 90%, white 6%);
+    --settings-control-border: rgba(255, 255, 255, 0.12);
+    --settings-control-hover-border: rgba(255, 255, 255, 0.22);
+    --settings-chip-bg: rgba(255, 255, 255, 0.1);
+    --settings-chip-fg: var(--app-heading-color);
+    --settings-callout-warn-bg: color-mix(in srgb, #fbbf24 10%, transparent);
+    --settings-callout-warn-border: color-mix(in srgb, #fbbf24 30%, transparent);
+    --settings-callout-warn-icon: #fbbf24;
+    --settings-item-danger-border: color-mix(
+        in srgb,
+        var(--mat-sys-error) 30%,
+        transparent
+    );
+    --settings-action-bar-bg: var(--app-card-hover-bg, #252b3a);
+    --settings-action-bar-border: rgba(255, 255, 255, 0.1);
+    --settings-action-bar-shadow: 0 16px 40px rgba(0, 0, 0, 0.55);
+    --settings-restart-bar-bg: color-mix(
+        in srgb,
+        var(--app-selection-color) 12%,
+        var(--app-content-bg)
+    );
+    --settings-muted: color-mix(
+        in srgb,
+        var(--mat-sys-on-surface) 68%,
+        transparent
+    );
+}

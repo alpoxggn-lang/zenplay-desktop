@@ -1,0 +1,281 @@
+import {
+    ChangeDetectionStrategy,
+    Component,
+    computed,
+    ElementRef,
+    input,
+    output,
+    signal,
+    viewChild,
+} from '@angular/core';
+import { MatIconButton } from '@angular/material/button';
+import { MatIcon } from '@angular/material/icon';
+import { MatTooltip } from '@angular/material/tooltip';
+import { RouterLink } from '@angular/router';
+import { TranslatePipe } from '@ngx-translate/core';
+import { PlaylistSwitcherComponent } from '@iptvnator/playlist/shared/ui';
+import {
+    WorkspaceBackTarget,
+    WorkspaceHeaderAction,
+} from '@iptvnator/portal/shared/util';
+import { PlaylistMeta } from '@iptvnator/shared/interfaces';
+import { WorkspaceHeaderSidebarToggle } from '../../services/helpers/workspace-shell-constants';
+import { LayoutSlideDirective } from '../../layout-slide.directive';
+
+@Component({
+    selector: 'app-workspace-shell-header',
+    imports: [
+        LayoutSlideDirective,
+        MatIcon,
+        MatIconButton,
+        MatTooltip,
+        PlaylistSwitcherComponent,
+        RouterLink,
+        TranslatePipe,
+    ],
+    templateUrl: './workspace-shell-header.component.html',
+    styleUrl: './workspace-shell-header.component.scss',
+    changeDetection: ChangeDetectionStrategy.OnPush,
+})
+export class WorkspaceShellHeaderComponent {
+    private readonly searchInput =
+        viewChild<ElementRef<HTMLInputElement>>('searchInput');
+    private readonly mobileSearchInput =
+        viewChild<ElementRef<HTMLInputElement>>('mobileSearchInput');
+    // read: ElementRef because mat-icon-button is a component, so a bare
+    // template-ref query would resolve to the MatIconButton instance.
+    private readonly contextDrawerToggle = viewChild('contextDrawerToggle', {
+        read: ElementRef<HTMLButtonElement>,
+    });
+
+    readonly isMac =
+        typeof navigator !== 'undefined' &&
+        /Mac|iPhone|iPad|iPod/i.test(navigator.platform);
+    readonly commandShortcutLabel = this.isMac ? '⌘K' : 'Ctrl+K';
+    readonly mobileSearchOpen = signal(false);
+
+    /** The page's Back or the history fallback; null when there is neither. */
+    readonly backTarget = input<WorkspaceBackTarget | null>(null);
+    readonly playlistTitle = input('');
+    readonly playlistSubtitle = input('');
+    readonly canOpenPlaylistInfo = input(false);
+    readonly canOpenAccountInfo = input(false);
+    readonly searchQuery = input('');
+    readonly canUseSearch = input(false);
+    readonly searchPlaceholder = input('');
+    readonly searchScopeLabel = input('');
+    readonly searchStatusLabel = input('');
+    readonly headerShortcut = input<WorkspaceHeaderAction | null>(null);
+    readonly headerSidebarToggle = input<WorkspaceHeaderSidebarToggle | null>(
+        null
+    );
+    readonly canRefreshPlaylist = input(false);
+    readonly isRefreshingPlaylist = input(false);
+    readonly isElectron = input(false);
+    readonly supportsDownloads = input(false);
+    readonly hasNoPlaylists = input(false);
+    readonly isDownloadsView = input(false);
+    readonly activeDownloadsCount = input(0);
+    readonly hasActiveDownloads = computed(
+        () => this.activeDownloadsCount() > 0
+    );
+    /**
+     * When true the playlist switcher + the "+ Add source" / refresh /
+     * shortcut buttons are hidden — those controls scope to a
+     * playlist, but Settings is a global page, so leaving them visible
+     * implies (falsely) that switching the playlist changes which
+     * settings you're editing. Driven from the shell facade's existing
+     * isSettingsRoute computed.
+     */
+    readonly isSettingsRoute = input(false);
+    /**
+     * Parental lock indicator: `off` hides the button, `locked` offers the
+     * PIN prompt, `unlocked` offers "Lock now".
+     */
+    readonly parentalLockState = input<'off' | 'locked' | 'unlocked'>('off');
+    /**
+     * Phone-width (≤640px) drawer toggle for the context panel. The button
+     * itself is hidden by CSS above the phone breakpoint, so these inputs
+     * only matter on small viewports: `showContextDrawerToggle` reflects
+     * whether the current route has panel content to show, and
+     * `isContextDrawerOpen` feeds aria-expanded.
+     */
+    readonly showContextDrawerToggle = input(false);
+    readonly isContextDrawerOpen = input(false);
+    /**
+     * Variant-aware labels: the drawer holds categories on portal routes,
+     * type filters on sources/collection routes, and section navigation on
+     * the settings route — a fixed "Categories & filters" label would
+     * misdescribe two of the three.
+     */
+    readonly contextDrawerToggleAriaKey = input(
+        'WORKSPACE.SHELL.CONTEXT_DRAWER_CATEGORIES_TOGGLE'
+    );
+    readonly contextDrawerTooltipKey = input(
+        'WORKSPACE.SHELL.CONTEXT_DRAWER_CATEGORIES_TOOLTIP'
+    );
+
+    private readonly backPhoneSlot = computed(() => {
+        const back = this.backTarget();
+        return back ? (back.phoneDrawerToggle ?? 'replace') : null;
+    });
+    /** The drawer toggle renders unless Back takes its phone slot. */
+    readonly showDrawerToggle = computed(
+        () =>
+            this.showContextDrawerToggle() && this.backPhoneSlot() !== 'replace'
+    );
+    /** At phone width, Back hides behind a shown drawer toggle. */
+    readonly backYieldsToDrawerToggle = computed(
+        () => this.showDrawerToggle() && this.backPhoneSlot() === 'yield'
+    );
+    /**
+     * The leading navigation: when Back or the drawer toggle appears or
+     * leaves, the controls after it slide instead of jumping.
+     */
+    readonly leadingNavigationKey = computed(
+        () =>
+            `${this.backTarget() !== null}|${this.showDrawerToggle()}|${this.backYieldsToDrawerToggle()}`
+    );
+    /** Everything else that moves the controls; recorded, not slid. */
+    readonly controlsLayoutKey = computed(
+        () =>
+            `${this.isSettingsRoute()}|${this.hasNoPlaylists()}|${this.isElectron()}|${this.supportsDownloads()}|${this.parentalLockState()}|${this.headerSidebarToggle() !== null}|${this.headerShortcut() !== null}`
+    );
+
+    readonly backRequested = output<void>();
+    readonly searchChanged = output<string>();
+    readonly searchSubmitted = output<string>();
+    readonly commandPaletteRequested = output<void>();
+    readonly shortcutsRequested = output<void>();
+    readonly addPlaylistRequested = output<void>();
+    readonly headerShortcutRequested = output<void>();
+    readonly headerSidebarToggleRequested = output<void>();
+    readonly parentalLockToggleRequested = output<void>();
+    readonly refreshPlaylistRequested = output<void>();
+    readonly downloadsRequested = output<void>();
+    readonly playlistInfoRequested = output<void>();
+    readonly accountInfoRequested = output<void>();
+    readonly contextDrawerToggleRequested = output<void>();
+    readonly accountInfoForPlaylistRequested = output<PlaylistMeta>();
+
+    focusSearchInput(options: { select?: boolean } = {}): void {
+        const inputElement = this.searchInput()?.nativeElement;
+        if (!inputElement || inputElement.disabled) {
+            return;
+        }
+
+        inputElement.focus();
+        if (options.select) {
+            inputElement.select();
+        }
+    }
+
+    openMobileSearch(): void {
+        if (!this.canUseSearch()) {
+            return;
+        }
+        this.mobileSearchOpen.set(true);
+        queueMicrotask(() => this.mobileSearchInput()?.nativeElement.focus());
+    }
+
+    closeMobileSearch(): void {
+        this.mobileSearchOpen.set(false);
+    }
+
+    containsSearchInput(target: EventTarget | null): boolean {
+        const inputElement = this.searchInput()?.nativeElement;
+        return !!inputElement && target === inputElement;
+    }
+
+    onSearchInput(event: Event): void {
+        const target = event.target as HTMLInputElement | null;
+        this.searchChanged.emit(target?.value ?? '');
+    }
+
+    onSearchEnter(event: Event): void {
+        const target = event.target as HTMLInputElement | null;
+        this.searchSubmitted.emit(target?.value ?? this.searchQuery());
+    }
+
+    /**
+     * The tooltip advertises Escape for Back. The page only handles it with
+     * focus inside the page, so the button keeps that promise itself.
+     */
+    onBackEscape(event: Event): void {
+        const keyboard = event as KeyboardEvent;
+        if (
+            !this.backTarget()?.escapeShortcut() ||
+            keyboard.defaultPrevented ||
+            keyboard.repeat ||
+            keyboard.altKey ||
+            keyboard.ctrlKey ||
+            keyboard.metaKey ||
+            keyboard.shiftKey
+        ) {
+            return;
+        }
+        keyboard.preventDefault();
+        this.backRequested.emit();
+    }
+
+    onPlaylistInfoRequested(): void {
+        this.playlistInfoRequested.emit();
+    }
+
+    onAccountInfoRequested(): void {
+        this.accountInfoRequested.emit();
+    }
+
+    onAccountInfoForPlaylistRequested(playlist: PlaylistMeta): void {
+        this.accountInfoForPlaylistRequested.emit(playlist);
+    }
+
+    onAddPlaylistRequested(): void {
+        this.addPlaylistRequested.emit();
+    }
+
+    onCommandPaletteRequested(): void {
+        this.commandPaletteRequested.emit();
+    }
+
+    onShortcutsRequested(): void {
+        this.shortcutsRequested.emit();
+    }
+
+    onHeaderShortcutRequested(): void {
+        this.headerShortcutRequested.emit();
+    }
+
+    onHeaderSidebarToggleRequested(): void {
+        this.headerSidebarToggleRequested.emit();
+    }
+
+    onRefreshPlaylistRequested(): void {
+        this.refreshPlaylistRequested.emit();
+    }
+
+    onDownloadsRequested(): void {
+        this.downloadsRequested.emit();
+    }
+
+    onContextDrawerToggleRequested(): void {
+        this.contextDrawerToggleRequested.emit();
+    }
+
+    /**
+     * Returns focus to the drawer toggle after the drawer closes. Reports
+     * whether the toggle actually received focus — after a navigation to a
+     * route without a context panel the toggle is gone (and above the phone
+     * breakpoint it is display: none, where focus() silently does nothing),
+     * and the caller then needs a fallback target.
+     */
+    focusContextDrawerToggle(): boolean {
+        const toggle = this.contextDrawerToggle()?.nativeElement;
+        if (!toggle) {
+            return false;
+        }
+
+        toggle.focus();
+        return document.activeElement === toggle;
+    }
+}

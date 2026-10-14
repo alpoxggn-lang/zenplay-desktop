@@ -1,0 +1,338 @@
+import { EventEmitter } from '@angular/core';
+import { ComponentFixture, TestBed, waitForAsync } from '@angular/core/testing';
+import { MatSnackBar } from '@angular/material/snack-bar';
+import { Router } from '@angular/router';
+import { Actions } from '@ngrx/effects';
+import { MockStore, provideMockStore } from '@ngrx/store/testing';
+import {
+    DefaultLangChangeEvent,
+    LangChangeEvent,
+    TranslateService,
+} from '@ngx-translate/core';
+import {
+    EpgRuntimeBridgeService,
+    EpgService,
+} from '@iptvnator/epg/data-access';
+import {
+    WorkspaceShellContextDrawerService,
+    WORKSPACE_SHELL_ACTIONS,
+} from '@iptvnator/workspace/shell/util';
+import { MockProvider } from 'ng-mocks';
+import { of, Subject } from 'rxjs';
+import {
+    DataService,
+    EpgSourceSettingsService,
+    ParentalLockService,
+    SettingsStore,
+    RuntimeCapabilitiesService,
+} from '@iptvnator/services';
+import { ParentalLockEnforcementService } from './services/parental-lock-enforcement.service';
+import {
+    Language,
+    Settings,
+    StartupBehavior,
+    STORE_KEY,
+    StreamFormat,
+    Theme,
+    VideoPlayer,
+} from '@iptvnator/shared/interfaces';
+import { PlaylistActions } from '@iptvnator/m3u-state';
+import { AppComponent } from './app.component';
+import { AppDateLocaleService } from './app-date-locales';
+import { ElectronServiceStub } from './services/electron.service.stub';
+import { SettingsService } from './services/settings.service';
+import { ZenPlayContentRefreshService } from './services/zenplay-content-refresh.service';
+
+/** Writable double for the bridge's read-only capability getters. */
+type EpgBridgeStub = {
+    -readonly [K in keyof EpgRuntimeBridgeService]?: EpgRuntimeBridgeService[K];
+};
+
+jest.spyOn(global.console, 'error').mockImplementation(() => {
+    // suppress console.error output during tests
+});
+
+class MockSettingsService {
+    getValueFromLocalStorage = jest.fn().mockReturnValue(of(undefined));
+    changeTheme = jest.fn();
+}
+
+const DEFAULT_SETTINGS: Settings = {
+    player: VideoPlayer.VideoJs,
+    epgUrl: [],
+    streamFormat: StreamFormat.AutoStreamFormat,
+    openStreamOnDoubleClick: false,
+    language: Language.ENGLISH,
+    showCaptions: false,
+    showDashboard: true,
+    startupBehavior: StartupBehavior.FirstView,
+    showExternalPlaybackBar: true,
+    theme: Theme.SystemTheme,
+    mpvPlayerPath: '',
+    mpvPlayerArguments: '',
+    mpvReuseInstance: false,
+    vlcPlayerPath: '',
+    vlcPlayerArguments: '',
+    vlcReuseInstance: false,
+    remoteControl: false,
+    remoteControlPort: 8765,
+    downloadFolder: '',
+    recordingFolder: '',
+};
+
+describe('AppComponent', () => {
+    let component: AppComponent;
+    let fixture: ComponentFixture<AppComponent>;
+    let epgService: EpgService;
+    let router: Router;
+    let settingsService: MockSettingsService;
+    let snackBar: MatSnackBar;
+    let store: MockStore;
+    let translateService: TranslateService;
+    let runtimeCapabilities: Partial<RuntimeCapabilitiesService>;
+    let epgBridge: EpgBridgeStub;
+    let actionsSubject: Subject<unknown>;
+    let contentRefresh: { startAutomaticRefresh: jest.Mock };
+
+    beforeEach(waitForAsync(() => {
+        runtimeCapabilities = {
+            isElectron: true,
+            isPwa: false,
+        };
+        actionsSubject = new Subject();
+        contentRefresh = { startAutomaticRefresh: jest.fn() };
+        epgBridge = {
+            checkFreshness: jest.fn().mockResolvedValue({
+                freshUrls: [],
+                staleUrls: [],
+            }),
+            supportsImport: true,
+            supportsSourceFreshness: true,
+        };
+
+        TestBed.configureTestingModule({
+            imports: [AppComponent],
+            providers: [
+                provideMockStore(),
+                // The parental lock boots from AppComponent; its collaborators
+                // (Xtream/Stalker stores, SQLite bridge) are out of scope here.
+                MockProvider(ParentalLockService, {
+                    initialize: jest.fn().mockResolvedValue(undefined),
+                }),
+                MockProvider(ParentalLockEnforcementService, {
+                    start: jest.fn(),
+                }),
+                {
+                    provide: Actions,
+                    useFactory: () => new Actions(actionsSubject),
+                },
+                {
+                    provide: DataService,
+                    useClass: ElectronServiceStub,
+                },
+                {
+                    provide: SettingsService,
+                    useClass: MockSettingsService,
+                },
+                {
+                    provide: RuntimeCapabilitiesService,
+                    useValue: runtimeCapabilities as RuntimeCapabilitiesService,
+                },
+                MockProvider(EpgService, {
+                    fetchEpg: jest.fn(),
+                }),
+                {
+                    provide: EpgRuntimeBridgeService,
+                    useValue: epgBridge,
+                },
+                MockProvider(Router, {
+                    navigateByUrl: jest.fn(),
+                }),
+                {
+                    // Root-provided in production; stubbed because the spec's
+                    // Router mock has no `events` stream for the real service.
+                    provide: WorkspaceShellContextDrawerService,
+                    useValue: { isOpen: () => false },
+                },
+                MockProvider(MatSnackBar, {
+                    open: jest.fn(),
+                }),
+                MockProvider(TranslateService, {
+                    instant: jest.fn((key: string) => key),
+                    setDefaultLang: jest.fn(),
+                    getDefaultLang: jest.fn(() => 'en'),
+                    use: jest.fn(),
+                    onLangChange: new EventEmitter<LangChangeEvent>(),
+                    onDefaultLangChange:
+                        new EventEmitter<DefaultLangChangeEvent>(),
+                }),
+                // The real service imports locale chunks; the language switch
+                // is gated on it, so it must resolve deterministically here.
+                MockProvider(AppDateLocaleService, {
+                    use: jest.fn().mockResolvedValue(undefined),
+                }),
+                {
+                    provide: ZenPlayContentRefreshService,
+                    useValue: contentRefresh,
+                },
+                {
+                    provide: WORKSPACE_SHELL_ACTIONS,
+                    useValue: {
+                        openAddPlaylistDialog: jest.fn(),
+                        openGlobalRecent: jest.fn(),
+                        openGlobalSearch: jest.fn(),
+                        openAccountInfo: jest.fn(),
+                        openStalkerAccountInfo: jest.fn(),
+                    },
+                },
+            ],
+        })
+            .overrideComponent(AppComponent, {
+                set: {
+                    template: '',
+                },
+            })
+            .compileComponents();
+    }));
+
+    beforeEach(() => {
+        fixture = TestBed.createComponent(AppComponent);
+        epgService = TestBed.inject(EpgService);
+        router = TestBed.inject(Router);
+        settingsService = TestBed.inject(
+            SettingsService
+        ) as unknown as MockSettingsService;
+        snackBar = TestBed.inject(MatSnackBar);
+        store = TestBed.inject(MockStore);
+        translateService = TestBed.inject(TranslateService);
+        component = fixture.componentInstance;
+    });
+
+    it('should create the component', () => {
+        expect(component).toBeTruthy();
+    });
+
+    it('should init component', () => {
+        const storeDispatchSpy = jest.spyOn(store, 'dispatch');
+        jest.spyOn(translateService, 'setDefaultLang');
+        jest.spyOn(component, 'initSettings');
+
+        component.ngOnInit();
+        expect(storeDispatchSpy).toHaveBeenCalledWith(
+            PlaylistActions.loadPlaylists()
+        );
+        expect(translateService.setDefaultLang).toHaveBeenCalledWith(
+            Language.SPANISH
+        );
+        expect(component.initSettings).toHaveBeenCalledTimes(1);
+    });
+
+    it('starts the managed PWA content refresh after playlists load', () => {
+        runtimeCapabilities.isPwa = true;
+
+        component.ngOnInit();
+        actionsSubject.next(
+            PlaylistActions.loadPlaylistsSuccess({ playlists: [] })
+        );
+
+        expect(contentRefresh.startAutomaticRefresh).toHaveBeenCalledTimes(1);
+    });
+
+    it('should navigate to the provided route', () => {
+        const route = '/add-playlists';
+        jest.spyOn(router, 'navigateByUrl');
+
+        component.navigateToRoute(route);
+
+        expect(router.navigateByUrl).toHaveBeenCalledWith(route);
+    });
+
+    it('should apply system theme when no settings are stored', () => {
+        jest.spyOn(settingsService, 'changeTheme');
+
+        component.initSettings();
+
+        expect(settingsService.getValueFromLocalStorage).toHaveBeenCalledWith(
+            STORE_KEY.Settings
+        );
+        expect(settingsService.changeTheme).toHaveBeenCalledWith(
+            Theme.SystemTheme
+        );
+    });
+
+    it('should apply saved settings and fetch stale epg data only', async () => {
+        const settings: Settings = {
+            ...DEFAULT_SETTINGS,
+            epgUrl: ['https://example.com/epg.xml'],
+            language: Language.SPANISH,
+            theme: Theme.DarkTheme,
+        };
+        epgBridge.checkFreshness = jest.fn().mockResolvedValue({
+            freshUrls: [],
+            staleUrls: settings.epgUrl,
+        });
+        settingsService.getValueFromLocalStorage.mockReturnValue(of(settings));
+        jest.spyOn(settingsService, 'changeTheme');
+        const dateLocales = TestBed.inject(AppDateLocaleService);
+
+        component.initSettings();
+        await fixture.whenStable();
+
+        expect(dateLocales.use).toHaveBeenCalledWith(Language.SPANISH);
+        expect(settingsService.changeTheme).toHaveBeenCalledWith(
+            Theme.DarkTheme
+        );
+        expect(epgBridge.checkFreshness).toHaveBeenCalledWith(
+            settings.epgUrl,
+            12
+        );
+        expect(epgService.fetchEpg).toHaveBeenCalledWith(settings.epgUrl);
+        expect(snackBar.open).not.toHaveBeenCalled();
+    });
+
+    it('does not reimport a deleted source from a late startup freshness response', async () => {
+        await TestBed.inject(SettingsStore).loadSettings();
+        let finishFreshness!: (value: {
+            freshUrls: string[];
+            staleUrls: string[];
+        }) => void;
+        epgBridge.checkFreshness = jest.fn(
+            () =>
+                new Promise((resolve) => {
+                    finishFreshness = resolve;
+                })
+        );
+        const pending = (
+            component as unknown as {
+                fetchStaleEpgData(urls: string[]): Promise<void>;
+            }
+        ).fetchStaleEpgData(['https://removed.example/guide.xml']);
+        await Promise.resolve();
+        const sources = TestBed.inject(EpgSourceSettingsService);
+        sources.revision.update((value) => value + 1);
+        sources.changed$.next();
+        finishFreshness({
+            freshUrls: [],
+            staleUrls: ['https://removed.example/guide.xml'],
+        });
+        await pending;
+        expect(epgService.fetchEpg).not.toHaveBeenCalledWith([
+            'https://removed.example/guide.xml',
+        ]);
+    });
+
+    it('does not fetch EPG settings when the EPG bridge cannot import EPG', async () => {
+        const settings: Settings = {
+            ...DEFAULT_SETTINGS,
+            epgUrl: ['https://example.com/epg.xml'],
+        };
+        epgBridge.supportsImport = false;
+        settingsService.getValueFromLocalStorage.mockReturnValue(of(settings));
+
+        component.initSettings();
+        await fixture.whenStable();
+
+        expect(epgBridge.checkFreshness).not.toHaveBeenCalled();
+        expect(epgService.fetchEpg).not.toHaveBeenCalled();
+    });
+});

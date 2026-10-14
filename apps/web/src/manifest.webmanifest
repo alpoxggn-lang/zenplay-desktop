@@ -1,0 +1,28 @@
+{
+    "name": "ZenPlay",
+    "description": "Disfruta TV en vivo, películas y series con ZenPlay.",
+    "short_name": "ZenPlay",
+    "lang": "es-MX",
+    "dir": "ltr",
+    "theme_color": "#070b1a",
+    "background_color": "#070b1a",
+    "display": "standalone",
+    "orientation": "any",
+    "scope": "./",
+    "start_url": "./",
+    "categories": ["entertainment", "video"],
+    "icons": [
+        {
+            "src": "assets/branding/zenplay-icon-192.png",
+            "sizes": "192x192",
+            "type": "image/png",
+            "purpose": "any"
+        },
+        {
+            "src": "assets/branding/zenplay-icon-512.png",
+            "sizes": "512x512",
+            "type": "image/png",
+            "purpose": "any"
+        }
+    ]
+}

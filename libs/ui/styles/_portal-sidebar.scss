@@ -1,0 +1,130 @@
+// ─── Shared sidebar + sidebar-header styles ───────────────────────────────────
+// Plain CSS rules (not a mixin) used for M3U/legacy sidebar layouts.
+//
+// Choose the relative @use path from each consuming stylesheet. Current portal
+// live layouts use the example below; other consumers may need a different
+// depth. No alias is needed because this partial exports no callable members.
+//   @use '../../../../../../ui/styles/portal-sidebar';
+
+@use 'focus-ring';
+
+.sidebar {
+    // Width is controlled by the resizable directive
+    // Default fallback if directive not applied
+    width: 400px;
+    min-width: 250px;
+    max-width: 600px;
+    border-right: 1px solid var(--app-separator);
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0; // Prevent sidebar from shrinking
+
+    .sidebar-header {
+        padding: 8px 12px;
+        background: var(--app-widget-header-bg, var(--mat-sys-surface-container-high));
+        border-bottom: 1px solid var(--app-separator);
+        app-region: drag;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-shrink: 0;
+
+        h2 {
+            margin: 0;
+            font-size: 0.94rem;
+            font-weight: 600;
+            letter-spacing: -0.01em;
+            color: var(--mat-sys-on-surface);
+            flex: 1;
+        }
+
+        button {
+            app-region: no-drag;
+        }
+
+        .manage-categories-btn {
+            margin-left: auto;
+        }
+
+        .category-heading {
+            display: flex;
+            align-items: baseline;
+            gap: 8px;
+            flex: 1;
+            min-width: 0;
+        }
+
+        .category-title {
+            margin: 0;
+            font-size: 0.94rem;
+            font-weight: 600;
+            letter-spacing: -0.01em;
+            color: var(--mat-sys-on-surface);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .category-count {
+            flex-shrink: 0;
+            font-size: 0.72rem;
+            font-weight: 500;
+            color: var(--mat-sys-on-surface-variant);
+            background: var(--mat-sys-surface-container);
+            padding: 2px 8px;
+            border-radius: 999px;
+        }
+
+        // Shown while the shell's categories rail is folded: the way back to
+        // the rail, in the same spot the rail's own chevron folded it from.
+        .sidebar-show-categories {
+            flex-shrink: 0;
+            margin-left: -6px;
+        }
+
+        // The category title as a dropdown trigger (categories rail folded).
+        // Same type as the static heading so folding the rail does not move
+        // the title; the caret is the only added ink.
+        .category-dropdown {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex: 1;
+            min-width: 0;
+            height: 32px;
+            padding: 0 4px 0 8px;
+            margin-left: -8px;
+            border: 1px solid transparent;
+            border-radius: 8px;
+            background: transparent;
+            color: inherit;
+            font: inherit;
+            cursor: pointer;
+            text-align: left;
+            app-region: no-drag;
+
+            .category-title {
+                flex: 0 1 auto;
+                min-width: 0;
+            }
+
+            &__caret {
+                flex-shrink: 0;
+                font-size: 18px;
+                width: 18px;
+                height: 18px;
+                color: var(--mat-sys-on-surface-variant);
+            }
+
+            &:hover,
+            &[aria-expanded='true'] {
+                background: var(--app-hover-overlay, rgba(255, 255, 255, 0.08));
+                border-color: var(--app-separator);
+            }
+
+            &:focus-visible {
+                @include focus-ring.focus-ring-declarations($offset: -2px);
+            }
+        }
+    }
+}

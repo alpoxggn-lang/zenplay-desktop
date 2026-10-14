@@ -1,0 +1,401 @@
+import { signal } from '@angular/core';
+import { ComponentFixture, TestBed } from '@angular/core/testing';
+import { By } from '@angular/platform-browser';
+import { ActivatedRoute } from '@angular/router';
+import { TranslateService } from '@ngx-translate/core';
+import { NEVER, of } from 'rxjs';
+import { Location } from '@angular/common';
+import { ContentHeroComponent } from '@iptvnator/ui/components';
+import {
+    PORTAL_EXTERNAL_PLAYBACK,
+    PORTAL_PLAYBACK_POSITIONS,
+    PORTAL_PLAYER,
+} from '@iptvnator/portal/shared/util';
+import { XtreamStore } from '@iptvnator/portal/xtream/data-access';
+import {
+    VideoPlayer,
+    XtreamCategory,
+    XtreamVodDetails,
+    XtreamVodStream,
+} from '@iptvnator/shared/interfaces';
+import { DownloadsService, SettingsStore } from '@iptvnator/services';
+import { MatSnackBar } from '@angular/material/snack-bar';
+import { VodDetailsRouteComponent } from './vod-details-route.component';
+
+describe('VodDetailsRouteComponent', () => {
+    let fixture: ComponentFixture<VodDetailsRouteComponent>;
+    let consoleDebugSpy: jest.SpyInstance | undefined;
+    let consoleWarnSpy: jest.SpyInstance | undefined;
+    const selectedItem = signal<XtreamVodDetails | null>(null);
+    const isLoadingDetails = signal(false);
+    const detailsError = signal<string | null>(null);
+    const isFavorite = signal(false);
+    const currentPlaylist = signal<{
+        id: string;
+        userAgent?: string;
+        referrer?: string;
+        origin?: string;
+    } | null>(null);
+    const vodStreams = signal<Partial<XtreamVodStream>[]>([]);
+    const vodCategories = signal<Partial<XtreamCategory>[]>([]);
+    const vodStreamsPlaylistId = signal<string | null>(null);
+    const vodCategoriesPlaylistId = signal<string | null>(null);
+    const fetchVodDetailsWithMetadata = jest.fn();
+    const cancelDetailsRequest = jest.fn();
+    const checkFavoriteStatus = jest.fn();
+    const setSelectedItem = jest.fn();
+    const toggleFavorite = jest.fn();
+    const constructVodStreamUrl = jest
+        .fn()
+        .mockReturnValue('http://example.com/movie/650020.mp4');
+    const addRecentItem = jest.fn();
+    const downloads = signal([]);
+    const getPlaybackPosition = jest.fn().mockResolvedValue(null);
+
+    beforeEach(async () => {
+        const consoleDebug = console.debug.bind(console);
+        const consoleWarn = console.warn.bind(console);
+        consoleDebugSpy = jest
+            .spyOn(console, 'debug')
+            .mockImplementation((...args: unknown[]) => {
+                if (
+                    args[0] === '[VodDetailsRoute]' ||
+                    args[0] === '[VodDetailsPlayback]'
+                ) {
+                    return;
+                }
+
+                consoleDebug(...args);
+            });
+        consoleWarnSpy = jest
+            .spyOn(console, 'warn')
+            .mockImplementation((...args: unknown[]) => {
+                if (
+                    args[0] === '[VodDetailsRoute]' &&
+                    args[1] === 'Deferring VOD details init: playlist not ready'
+                ) {
+                    return;
+                }
+
+                consoleWarn(...args);
+            });
+
+        selectedItem.set(null);
+        isLoadingDetails.set(false);
+        detailsError.set(null);
+        isFavorite.set(false);
+        currentPlaylist.set(null);
+        vodStreams.set([]);
+        vodCategories.set([]);
+        vodStreamsPlaylistId.set(null);
+        vodCategoriesPlaylistId.set(null);
+        fetchVodDetailsWithMetadata.mockClear();
+        cancelDetailsRequest.mockClear();
+        checkFavoriteStatus.mockClear();
+        setSelectedItem.mockClear();
+        toggleFavorite.mockClear();
+        constructVodStreamUrl.mockClear();
+        addRecentItem.mockClear();
+        getPlaybackPosition.mockClear();
+
+        await TestBed.configureTestingModule({
+            imports: [VodDetailsRouteComponent],
+            providers: [
+                {
+                    provide: ActivatedRoute,
+                    useValue: {
+                        params: of({
+                            vodId: '650020',
+                            categoryId: '235',
+                        }),
+                        snapshot: {
+                            params: {
+                                vodId: '650020',
+                                categoryId: '235',
+                            },
+                        },
+                    },
+                },
+                {
+                    provide: TranslateService,
+                    useValue: {
+                        instant: (key: string) => key,
+                        get: (key: string) => of(key),
+                        stream: (key: string) => of(key),
+                        onLangChange: NEVER,
+                        onTranslationChange: NEVER,
+                        onDefaultLangChange: NEVER,
+                        currentLang: 'en',
+                        defaultLang: 'en',
+                    },
+                },
+                {
+                    provide: XtreamStore,
+                    useValue: {
+                        selectedItem,
+                        isLoadingDetails,
+                        detailsError,
+                        isFavorite,
+                        currentPlaylist,
+                        vodStreams,
+                        vodCategories,
+                        vodStreamsPlaylistId,
+                        vodCategoriesPlaylistId,
+                        fetchVodDetailsWithMetadata,
+                        cancelDetailsRequest,
+                        checkFavoriteStatus,
+                        setSelectedItem,
+                        toggleFavorite,
+                        constructVodStreamUrl,
+                        addRecentItem,
+                    },
+                },
+                {
+                    provide: SettingsStore,
+                    useValue: {
+                        theme: signal('dark'),
+                        player: signal(VideoPlayer.Html5Player),
+                    },
+                },
+                {
+                    provide: DownloadsService,
+                    useValue: {
+                        isAvailable: signal(false),
+                        downloads,
+                        isDownloaded: jest.fn().mockReturnValue(false),
+                        isDownloading: jest.fn().mockReturnValue(false),
+                        startDownload: jest.fn(),
+                        getDownloadedFilePath: jest.fn(),
+                        playDownload: jest.fn(),
+                    },
+                },
+                {
+                    provide: PORTAL_EXTERNAL_PLAYBACK,
+                    useValue: {
+                        activeSession: signal(null),
+                        closeSession: jest.fn(),
+                    },
+                },
+                {
+                    provide: PORTAL_PLAYBACK_POSITIONS,
+                    useValue: {
+                        getPlaybackPosition,
+                        savePlaybackPosition: jest
+                            .fn()
+                            .mockResolvedValue(undefined),
+                    },
+                },
+                {
+                    provide: PORTAL_PLAYER,
+                    useValue: {
+                        isEmbeddedPlayer: jest.fn().mockReturnValue(false),
+                        openResolvedPlayback: jest.fn(),
+                    },
+                },
+                {
+                    provide: MatSnackBar,
+                    useValue: {
+                        open: jest.fn(),
+                    },
+                },
+                {
+                    provide: Location,
+                    useValue: {
+                        back: jest.fn(),
+                    },
+                },
+            ],
+        }).compileComponents();
+
+        fixture = TestBed.createComponent(VodDetailsRouteComponent);
+    });
+
+    afterEach(() => {
+        consoleDebugSpy?.mockRestore();
+        consoleWarnSpy?.mockRestore();
+    });
+
+    it('keeps the fallback visible and exposes actions when catalog playback fields are usable', () => {
+        selectedItem.set({
+            info: [],
+            stream_id: 650020,
+            name: 'Die Kühe sind Los! (2004) DE',
+            stream_icon: 'https://example.com/cows.jpg',
+            container_extension: 'mp4',
+        } as XtreamVodDetails & {
+            container_extension: string;
+            name: string;
+            stream_icon: string;
+            stream_id: number;
+        });
+        vodStreams.set([
+            {
+                name: 'Die Kühe sind Los! (2004) DE',
+                stream_id: 650020,
+                stream_icon: 'https://example.com/cows.jpg',
+                added: '1720000000',
+                category_id: '235',
+                container_extension: 'mp4',
+                rating: 6.1,
+                rating_imdb: '6.1',
+            },
+        ]);
+        vodCategories.set([
+            {
+                category_id: '235',
+                category_name: 'DE | DISNEY',
+            },
+        ]);
+
+        fixture.detectChanges();
+
+        const host = fixture.nativeElement as HTMLElement;
+        expect(host.textContent).toContain('Die Kühe sind Los! (2004) DE');
+        expect(
+            host.querySelector('[data-testid="xtream-vod-fallback"]')
+                ?.textContent
+        ).toContain('XTREAM.DETAIL_FALLBACK.NOTE');
+        expect(
+            host.querySelector('[data-testid="xtream-vod-fallback-status"]')
+                ?.textContent
+        ).toContain('XTREAM.DETAIL_FALLBACK.STATUS');
+        expect(host.querySelector('button.play-btn')).not.toBeNull();
+        expect(host.querySelector('[data-testid="vod-favorite-toggle"]')).not.toBeNull();
+        expect(host.querySelector('[data-testid="vod-download-start"]')).toBeNull();
+    });
+
+    it('keeps the fallback visible for a minimal info object', () => {
+        selectedItem.set({
+            info: {
+                name: 'Only a provider title',
+            },
+            stream_id: 650020,
+            name: 'Catalog title',
+            container_extension: 'mp4',
+        } as unknown as XtreamVodDetails);
+        vodStreams.set([
+            {
+                name: 'Catalog title',
+                stream_id: 650020,
+                container_extension: 'mp4',
+            },
+        ]);
+
+        fixture.detectChanges();
+
+        const host = fixture.nativeElement as HTMLElement;
+        expect(
+            host.querySelector('[data-testid="xtream-vod-fallback"]')
+        ).not.toBeNull();
+        expect(host.querySelector('button.play-btn')).not.toBeNull();
+    });
+
+    it('reveals fallback actions when async catalog recovery adds a source', () => {
+        selectedItem.set({
+            info: [],
+            stream_id: 650020,
+            container_extension: null,
+        } as unknown as XtreamVodDetails);
+
+        fixture.detectChanges();
+
+        const host = fixture.nativeElement as HTMLElement;
+        expect(host.querySelector('button.play-btn')).toBeNull();
+        expect(host.querySelector('[data-testid="vod-favorite-toggle"]')).toBeNull();
+
+        selectedItem.set({
+            info: [],
+            stream_id: 650020,
+            container_extension: 'mkv',
+        } as unknown as XtreamVodDetails);
+        fixture.detectChanges();
+
+        expect(host.querySelector('button.play-btn')).not.toBeNull();
+        expect(host.querySelector('[data-testid="vod-favorite-toggle"]')).not.toBeNull();
+    });
+
+    it('keeps the full Xtream detail view when usable metadata exists', () => {
+        selectedItem.set({
+            info: {
+                kinopoisk_url: '',
+                tmdb_id: 228203,
+                name: 'City of McFarland (2015)',
+                o_name: 'City of McFarland (2015)',
+                cover_big: 'https://example.com/poster-big.jpg',
+                movie_image: 'https://example.com/poster.jpg',
+                releasedate: '2015-02-20',
+                episode_run_time: 129,
+                youtube_trailer: '',
+                director: 'Niki Caro',
+                actors: 'Kevin Costner',
+                cast: 'Kevin Costner',
+                description: 'A populated description',
+                plot: 'A populated plot',
+                age: '',
+                mpaa_rating: '',
+                rating_count_kinopoisk: 0,
+                country: 'English',
+                genre: 'Drama',
+                backdrop_path: ['https://example.com/backdrop.jpg'],
+                duration_secs: 7744,
+                duration: '02:09:04',
+                video: ['H.264'],
+                audio: ['AAC'],
+                bitrate: 6251,
+                rating: 7.455,
+                rating_imdb: '7.455',
+                rating_kinopoisk: '7.455',
+            },
+            movie_data: {
+                stream_id: 650020,
+                name: 'City of McFarland (2015) DE',
+                added: '1750671180',
+                category_id: '235',
+                container_extension: 'mkv',
+                custom_sid: null,
+                direct_source: '',
+            },
+        });
+
+        fixture.detectChanges();
+
+        const host = fixture.nativeElement as HTMLElement;
+        expect(host.textContent).toContain('City of McFarland (2015)');
+        expect(
+            host.querySelector('[data-testid="xtream-vod-fallback"]')
+        ).toBeNull();
+        expect(host.querySelector('button.play-btn')).not.toBeNull();
+    });
+
+    it('renders usable metadata when backdrop_path is absent at runtime', () => {
+        selectedItem.set({
+            info: {
+                name: 'Metadata Without Backdrop',
+                description: 'A populated description',
+                movie_image: 'https://example.com/poster.jpg',
+            },
+            movie_data: {
+                stream_id: 650020,
+                name: 'Metadata Without Backdrop',
+                added: '1750671180',
+                category_id: '235',
+                container_extension: 'mkv',
+                custom_sid: null,
+                direct_source: '',
+            },
+        } as unknown as XtreamVodDetails);
+
+        expect(() => fixture.detectChanges()).not.toThrow();
+
+        const hero = fixture.debugElement.query(
+            By.directive(ContentHeroComponent)
+        ).componentInstance as ContentHeroComponent;
+        expect(hero.backdropUrl()).toBeUndefined();
+    });
+
+    it('invalidates an in-flight detail request on teardown', () => {
+        fixture.componentInstance.ngOnDestroy();
+
+        expect(cancelDetailsRequest).toHaveBeenCalledTimes(1);
+    });
+});

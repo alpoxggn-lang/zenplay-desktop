@@ -1,0 +1,190 @@
+.seasons-section {
+    width: 100%;
+}
+
+.empty-state-panel {
+    display: grid;
+    justify-items: center;
+    gap: 14px;
+    width: min(100%, 520px);
+    margin: 0 auto;
+    padding: 32px 28px;
+    // The theme's panel surface (white in light, raised slate in dark) and
+    // on-surface hairlines, so the panel shows in both themes; white tints
+    // vanished on the light content background.
+    border: 1px solid color-mix(in srgb, var(--app-on-surface) 8%, transparent);
+    border-radius: 16px;
+    background: var(--app-widget-bg);
+    box-shadow: var(--app-widget-shadow);
+    text-align: center;
+
+    &__icon {
+        display: grid;
+        place-items: center;
+        width: 64px;
+        height: 64px;
+        border-radius: 50%;
+        background: color-mix(in srgb, var(--app-on-surface) 5%, transparent);
+        border: 1px solid
+            color-mix(in srgb, var(--app-on-surface) 8%, transparent);
+        color: color-mix(in srgb, var(--app-on-surface) 52%, transparent);
+
+        mat-icon {
+            font-size: 30px;
+            width: 30px;
+            height: 30px;
+        }
+    }
+
+    &__title {
+        margin: 0;
+        color: var(--text-primary);
+        font-size: 1.125rem;
+        font-weight: 600;
+        letter-spacing: -0.02em;
+    }
+
+    &__message {
+        max-width: 40ch;
+        margin: 0;
+        color: var(--text-secondary);
+        font-size: 0.9375rem;
+        line-height: 1.6;
+    }
+
+    &--season {
+        border-color: color-mix(
+            in srgb,
+            var(--app-on-surface) 10%,
+            transparent
+        );
+    }
+}
+
+// Episodes header: the shared section header with the season picker after
+// the title and the view toggle at the far edge.
+.episodes-header {
+    &__tabs {
+        display: block;
+        min-width: 0;
+    }
+
+    // Segmented list/grid switch: a 2px-padded track with 30×26 segments;
+    // the checked one is a neutral raised segment with full-contrast ink.
+    .view-toggle mat-button-toggle-group {
+        gap: 2px;
+        height: auto;
+        padding: 2px;
+        overflow: visible;
+        border: 1px solid
+            color-mix(in srgb, var(--app-on-surface) 14%, transparent);
+        border-radius: 8px;
+        background: var(--app-widget-bg);
+
+        ::ng-deep {
+            .mat-button-toggle {
+                border: 0;
+                border-radius: 6px;
+                background: transparent;
+                color: var(--app-eyebrow-color);
+
+                .mat-button-toggle-button {
+                    width: 30px;
+                    height: 26px;
+                    padding: 0;
+                }
+
+                .mat-button-toggle-label-content {
+                    display: grid;
+                    place-items: center;
+                    padding: 0;
+                    line-height: 26px;
+                }
+
+                mat-icon {
+                    width: 16px;
+                    height: 16px;
+                    font-size: 16px;
+                    line-height: 16px;
+                    color: inherit;
+                }
+
+                &:hover:not(.mat-button-toggle-checked) {
+                    color: var(--app-heading-color);
+                }
+
+                &.mat-button-toggle-checked {
+                    background: color-mix(
+                        in srgb,
+                        var(--app-on-surface) 12%,
+                        transparent
+                    );
+                    color: var(--app-heading-color);
+                }
+            }
+
+            .mat-button-toggle + .mat-button-toggle {
+                border-left: 0;
+            }
+        }
+    }
+}
+
+// The selected season's own synopsis under the header, offset past the
+// 36px number column and its gap so it lines up with the episode numbers.
+// One that repeats the hero's series description is dropped by the
+// container, and without a synopsis nothing renders.
+.season-description {
+    display: block;
+    max-width: 72ch;
+    margin: 4px 0 24px;
+    padding-left: 52px;
+    font-size: 13px;
+    line-height: 1.55;
+    color: var(--text-secondary);
+}
+
+// ============================================================================
+// Episodes: list rows and grid cards (app-episode-item)
+// ============================================================================
+
+.episodes-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(236px, 1fr));
+    gap: 20px 16px;
+    width: 100%;
+}
+
+// Borderless rows separated by a hairline inset past the number column. The
+// hairline gives way around a hovered, focused or highlighted row, so the
+// row's fill never sits against a line.
+.episodes-list {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+
+    > app-episode-item + app-episode-item::before {
+        content: '';
+        position: absolute;
+        top: -2px;
+        right: 12px;
+        left: 56px;
+        height: 1px;
+        background: color-mix(in srgb, var(--app-on-surface) 7%, transparent);
+        pointer-events: none;
+    }
+
+    // Bare rows have no thumbnail: the hairline starts past the number.
+    &--bare > app-episode-item + app-episode-item::before {
+        left: 48px;
+    }
+
+    > app-episode-item:hover::before,
+    > app-episode-item:focus-within::before,
+    > app-episode-item.episode-item--current::before,
+    > app-episode-item:hover + app-episode-item::before,
+    > app-episode-item:focus-within + app-episode-item::before,
+    > app-episode-item.episode-item--current + app-episode-item::before {
+        opacity: 0;
+    }
+}

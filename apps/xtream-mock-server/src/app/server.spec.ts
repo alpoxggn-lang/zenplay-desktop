@@ -1,0 +1,682 @@
+import { statSync } from 'node:fs';
+import { connect } from 'node:net';
+import { join } from 'node:path';
+import express from 'express';
+import { resetAll } from './data-store.js';
+import {
+    DROPPING_EPISODE_CUT_RATIO,
+    DROPPING_EPISODE_REFUSE_MS,
+    resetDroppingEpisodes,
+} from './dropping-episode.js';
+import { LONG_PROGRAMME_TITLE } from './scenarios.js';
+import {
+    createXtreamMockApp,
+    parseXtreamMockServerEnvironment,
+} from './server.js';
+import {
+    type SlowSeriesDownloadOptions,
+    streamSlowSeriesDownload,
+} from './slow-series-download.js';
+import { startLoopbackServer } from './testing/http-server.fixture.js';
+
+jest.mock('@faker-js/faker', () => {
+    const fixedDate = new Date('2020-01-01T00:00:00.000Z');
+    const fixedText = 'Fixture value';
+    return {
+        faker: {
+            seed: jest.fn(),
+            company: {
+                catchPhrase: () => fixedText,
+                name: () => fixedText,
+            },
+            date: {
+                past: () => fixedDate,
+                recent: () => fixedDate,
+            },
+            location: { country: () => fixedText },
+            lorem: {
+                paragraph: () => fixedText,
+                sentence: () => fixedText,
+                words: () => fixedText,
+            },
+            music: {
+                genre: () => fixedText,
+                songName: () => fixedText,
+            },
+            number: {
+                int: ({ min = 0 }: { min?: number }) => min,
+            },
+            person: { fullName: () => fixedText },
+        },
+    };
+});
+
+jest.setTimeout(60_000);
+
+const DROPPING_EPISODE_URL = '/series/streamdrop/streamdrop/80000.mkv';
+const droppingFixtureSize = statSync(
+    join(process.cwd(), 'apps/xtream-mock-server/src/fixtures/episode.mkv')
+).size;
+const droppingCut = Math.floor(
+    droppingFixtureSize * DROPPING_EPISODE_CUT_RATIO
+);
+
+/** Bytes received before the body ended, and whether it ended cleanly. */
+async function readDroppingBody(
+    response: Response
+): Promise<{ bytes: number; complete: boolean }> {
+    const reader = response.body?.getReader();
+    let bytes = 0;
+    try {
+        for (;;) {
+            const chunk = await reader?.read();
+            if (!chunk || chunk.done) {
+                return { bytes, complete: true };
+            }
+            bytes += chunk.value.length;
+        }
+    } catch {
+        return { bytes, complete: false };
+    }
+}
+
+describe('Xtream mock server factory', () => {
+    afterEach(() => {
+        resetAll();
+        resetDroppingEpisodes();
+        jest.restoreAllMocks();
+    });
+
+    it('serves the synthetic manifest-success/segment-failure and TS alternatives locally', async () => {
+        const running = await startLoopbackServer(
+            createXtreamMockApp({ host: '127.0.0.1', port: 0 })
+        );
+        const base = `${running.origin}/live/live-fallback/live-fallback`;
+        try {
+            const manifest = await fetch(`${base}/10000.m3u8`);
+            expect(manifest.status).toBe(200);
+            expect(await manifest.text()).toContain('denied-segment.ts');
+            expect((await fetch(`${base}/denied-segment.ts`)).status).toBe(403);
+            expect((await fetch(`${base}/10001.m3u8`)).status).toBe(403);
+            expect((await fetch(`${base}/10002.ts`)).status).toBe(403);
+            const ts = await fetch(`${base}/10000.ts`, {
+                headers: { 'User-Agent': 'synthetic' },
+            });
+            expect(ts.headers.get('x-fixture-user-agent')).toBe('synthetic');
+            const bytes = new Uint8Array(await ts.arrayBuffer());
+            expect(bytes.length).toBeGreaterThan(188);
+            expect(bytes[0]).toBe(0x47);
+            expect(bytes[188]).toBe(0x47);
+        } finally {
+            await running.close();
+        }
+    });
+
+    it('serves the long-title EPG scenario beside the unchanged epg one', async () => {
+        const running = await startLoopbackServer(
+            createXtreamMockApp({ host: '127.0.0.1', port: 0 })
+        );
+        const titles = async (user: string) => {
+            const response = await fetch(
+                `${running.origin}/player_api.php?username=${user}&password=${user}&action=get_simple_data_table&stream_id=10000`
+            );
+            const body = (await response.json()) as {
+                epg_listings: { title: string }[];
+            };
+            return body.epg_listings.map((listing) =>
+                Buffer.from(listing.title, 'base64').toString('utf8')
+            );
+        };
+        try {
+            expect(LONG_PROGRAMME_TITLE).toHaveLength(120);
+            expect(await titles('epglong')).toEqual([
+                LONG_PROGRAMME_TITLE,
+                'Global Headlines',
+                'Market Wrap',
+                'Overnight Update',
+                'Late Edition',
+                'After Midnight',
+            ]);
+            expect((await titles('epg'))[0]).toBe('Earlier Bulletin');
+        } finally {
+            await running.close();
+        }
+    });
+
+    it('keeps performance controls absent unless explicitly enabled', async () => {
+        const running = await startLoopbackServer(
+            createXtreamMockApp({ host: '127.0.0.1', port: 0 })
+        );
+        try {
+            const response = await fetch(`${running.origin}/__control/state`);
+            expect(response.status).toBe(404);
+        } finally {
+            await running.close();
+        }
+    });
+
+    it('reports the configured port and preserves direct/PWA responses', async () => {
+        const running = await startLoopbackServer(
+            createXtreamMockApp({ host: '127.0.0.1', port: 0 })
+        );
+        try {
+            const health = await fetch(`${running.origin}/health`).then((r) =>
+                r.json()
+            );
+            const direct = await fetch(
+                `${running.origin}/player_api.php?username=performance&password=performance&action=get_live_categories`
+            );
+            const directBody = await direct.json();
+            const proxy = await fetch(
+                `${running.origin}/xtream?url=http%3A%2F%2Fignored.invalid&username=performance&password=performance&action=get_live_categories`
+            );
+            const proxyBody = await proxy.json();
+
+            expect(health).toEqual({
+                status: 'ok',
+                server: 'xtream-mock-server',
+                port: 0,
+            });
+            expect(direct.status).toBe(200);
+            expect(directBody).toHaveLength(60);
+            expect(proxy.status).toBe(200);
+            expect(proxyBody).toEqual({
+                payload: directBody,
+                action: 'get_live_categories',
+            });
+        } finally {
+            await running.close();
+        }
+    });
+
+    it('preserves the basic M3U fixture and ordinary stream redirects', async () => {
+        const running = await startLoopbackServer(
+            createXtreamMockApp({ host: '127.0.0.1', port: 0 })
+        );
+        try {
+            const playlist = await fetch(`${running.origin}/playlist.m3u`);
+            const stream = await fetch(
+                `${running.origin}/live/user1/pass1/10000.m3u8`,
+                { redirect: 'manual' }
+            );
+
+            expect(playlist.status).toBe(200);
+            expect(playlist.headers.get('content-type')).toContain(
+                'audio/x-mpegurl'
+            );
+            expect(await playlist.text()).toContain('#EXTM3U');
+            expect(stream.status).toBe(302);
+            expect(stream.headers.get('location')).toBe(
+                'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8'
+            );
+        } finally {
+            await running.close();
+        }
+    });
+
+    it('serves an XMLTV guide for the marketing live channels at /demo/guide.xml', async () => {
+        const running = await startLoopbackServer(
+            createXtreamMockApp({ host: '127.0.0.1', port: 0 })
+        );
+        try {
+            const response = await fetch(`${running.origin}/demo/guide.xml`);
+            const xml = await response.text();
+
+            expect(response.status).toBe(200);
+            expect(response.headers.get('content-type')).toContain('xml');
+            expect(xml).toContain('<tv ');
+            expect(xml).toContain('<display-name>Aurora News</display-name>');
+            expect(xml).toContain('channel="aurora-news.fictional"');
+            expect(xml).toContain(
+                `${running.origin}/assets/marketing/logo/aurora-news.svg`
+            );
+            expect(xml).not.toMatch(/https?:\/\/(?!127\.0\.0\.1|localhost)/);
+        } finally {
+            await running.close();
+        }
+    });
+
+    it('serves the marketing catalog twice so the second credential pair is an alternative source', async () => {
+        const running = await startLoopbackServer(
+            createXtreamMockApp({ host: '127.0.0.1', port: 0 })
+        );
+        try {
+            const titlesOf = async (username: string) => {
+                const response = await fetch(
+                    `${running.origin}/player_api.php?username=${username}&password=${username}&action=get_vod_streams`
+                );
+                const items = (await response.json()) as Array<{
+                    name: string;
+                    stream_id: number;
+                }>;
+                return items.map((item) => `${item.stream_id}:${item.name}`);
+            };
+
+            const primary = await titlesOf('marketing');
+            const secondary = await titlesOf('marketing2');
+
+            expect(primary.length).toBeGreaterThan(0);
+            expect(secondary).toEqual(primary);
+        } finally {
+            await running.close();
+        }
+    });
+
+    it('serves marketing movies and episodes from local bytes so download screenshots stay hermetic', async () => {
+        const running = await startLoopbackServer(
+            createXtreamMockApp({ host: '127.0.0.1', port: 0 })
+        );
+        try {
+            const movie = await fetch(
+                `${running.origin}/movie/marketing/marketing/62000.mp4`,
+                { redirect: 'manual' }
+            );
+            const episode = await fetch(
+                `${running.origin}/series/marketing/marketing/80000.mkv`,
+                { redirect: 'manual' }
+            );
+            const live = await fetch(
+                `${running.origin}/live/marketing/marketing/10001.m3u8`,
+                { redirect: 'manual' }
+            );
+            const ordinaryMovie = await fetch(
+                `${running.origin}/movie/user1/pass1/62000.mp4`,
+                { redirect: 'manual' }
+            );
+
+            for (const local of [movie, episode, live]) {
+                expect(local.status).toBe(200);
+                expect(local.headers.get('content-type')).toContain(
+                    'video/mp4'
+                );
+                expect(
+                    Number(local.headers.get('content-length'))
+                ).toBeGreaterThan(1024 * 1024);
+                await local.body?.cancel();
+            }
+            // Movies must finish quickly while episodes stay slow enough to
+            // keep a progress row in frame.
+            expect(Number(movie.headers.get('content-length'))).toBeGreaterThan(
+                Number(episode.headers.get('content-length'))
+            );
+
+            expect(ordinaryMovie.status).toBe(302);
+        } finally {
+            await running.close();
+        }
+    });
+
+    it('serves the download queue series fixture locally without changing ordinary series redirects', async () => {
+        const running = await startLoopbackServer(
+            createXtreamMockApp({ host: '127.0.0.1', port: 0 })
+        );
+        try {
+            const localSeries = await fetch(
+                `${running.origin}/series/downloadqueue/downloadqueue/80000.mkv`,
+                { redirect: 'manual' }
+            );
+            const ordinarySeries = await fetch(
+                `${running.origin}/series/user1/pass1/80000.mkv`,
+                { redirect: 'manual' }
+            );
+
+            expect(localSeries.status).toBe(200);
+            expect(localSeries.headers.get('content-type')).toContain(
+                'video/mp4'
+            );
+            expect(
+                Number(localSeries.headers.get('content-length'))
+            ).toBeGreaterThan(1024 * 1024);
+            await localSeries.body?.cancel();
+
+            expect(ordinarySeries.status).toBe(302);
+            expect(ordinarySeries.headers.get('location')).toBe(
+                'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8'
+            );
+        } finally {
+            await running.close();
+        }
+    });
+
+    it('drops stream-drop episodes a third of the way in, refuses the retry, then serves ranges again', async () => {
+        const running = await startLoopbackServer(
+            createXtreamMockApp({ host: '127.0.0.1', port: 0 })
+        );
+        try {
+            const first = await fetch(
+                `${running.origin}${DROPPING_EPISODE_URL}`,
+                {
+                    headers: { range: 'bytes=0-' },
+                }
+            );
+            expect(first.status).toBe(206);
+            expect(Number(first.headers.get('content-length'))).toBe(
+                droppingFixtureSize
+            );
+            expect(await readDroppingBody(first)).toEqual({
+                bytes: droppingCut,
+                complete: false,
+            });
+
+            // ffmpeg's own reconnect right after the drop.
+            const retry = await fetch(
+                `${running.origin}${DROPPING_EPISODE_URL}`,
+                {
+                    headers: { range: `bytes=${droppingCut}-` },
+                }
+            );
+            expect(retry.status).toBe(403);
+            await retry.body?.cancel();
+
+            const later = Date.now() + DROPPING_EPISODE_REFUSE_MS + 1;
+            jest.spyOn(Date, 'now').mockReturnValue(later);
+            const resumed = await fetch(
+                `${running.origin}${DROPPING_EPISODE_URL}`,
+                {
+                    headers: { range: `bytes=${droppingCut}-` },
+                }
+            );
+            expect(resumed.status).toBe(206);
+            expect(resumed.headers.get('content-range')).toBe(
+                `bytes ${droppingCut}-${droppingFixtureSize - 1}/${droppingFixtureSize}`
+            );
+            expect(await readDroppingBody(resumed)).toEqual({
+                bytes: droppingFixtureSize - droppingCut,
+                complete: true,
+            });
+
+            // A reset arms the drop again for the next test.
+            expect(
+                (await fetch(`${running.origin}/reset`, { method: 'POST' }))
+                    .status
+            ).toBe(200);
+            const afterReset = await fetch(
+                `${running.origin}${DROPPING_EPISODE_URL}`
+            );
+            expect(afterReset.status).toBe(200);
+            expect(await readDroppingBody(afterReset)).toEqual({
+                bytes: droppingCut,
+                complete: false,
+            });
+        } finally {
+            await running.close();
+        }
+    });
+
+    it('never answers the silent scenario detail actions while the rest of the portal works', async () => {
+        const running = await startLoopbackServer(
+            createXtreamMockApp({ host: '127.0.0.1', port: 0 })
+        );
+        try {
+            const categories = await fetch(
+                `${running.origin}/player_api.php?username=silent&password=silent&action=get_vod_categories`
+            );
+            expect(categories.status).toBe(200);
+            expect(await categories.json()).toHaveLength(2);
+
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), 300);
+            await expect(
+                fetch(
+                    `${running.origin}/player_api.php?username=silent&password=silent&action=get_vod_info&vod_id=1`,
+                    { signal: controller.signal }
+                )
+            ).rejects.toMatchObject({ name: 'AbortError' });
+            clearTimeout(timer);
+        } finally {
+            await running.close();
+        }
+    });
+
+    it('keeps a non-EPG timezone stream empty across repeated short-EPG requests', async () => {
+        const running = await startLoopbackServer(
+            createXtreamMockApp({ host: '127.0.0.1', port: 0 })
+        );
+        const requestUrl = `${running.origin}/player_api.php?username=epg&password=epg&action=get_short_epg&stream_id=10001`;
+        try {
+            const firstResponse = await fetch(requestUrl).then((response) =>
+                response.json()
+            );
+            const secondResponse = await fetch(requestUrl).then((response) =>
+                response.json()
+            );
+
+            expect(firstResponse.epg_listings).toHaveLength(0);
+            expect(secondResponse.epg_listings).toHaveLength(0);
+        } finally {
+            await running.close();
+        }
+    });
+
+    it('rejects non-loopback performance binds before opening a listener', () => {
+        expect(() =>
+            createXtreamMockApp({
+                control: { enabled: true, token: 'test-token' },
+                host: '0.0.0.0',
+                port: 0,
+            })
+        ).toThrow(/loopback/i);
+    });
+
+    it('makes local-only performance media routes terminal without outbound requests', async () => {
+        const running = await startLoopbackServer(
+            createXtreamMockApp({
+                control: { enabled: true, token: 'test-token' },
+                host: '127.0.0.1',
+                port: 0,
+            })
+        );
+        try {
+            const httpModule =
+                jest.requireActual<typeof import('node:http')>('node:http');
+            const httpsModule =
+                jest.requireActual<typeof import('node:https')>('node:https');
+            const httpRequest = jest.spyOn(httpModule, 'request');
+            const httpsRequest = jest.spyOn(httpsModule, 'request');
+            const globalFetch = jest.spyOn(globalThis, 'fetch');
+            const mediaResponses = await Promise.all(
+                [
+                    '/playlist.m3u',
+                    '/live/performance/performance/1000000.m3u8',
+                    '/live/performance/performance/1000000.ts',
+                    '/movie/performance/performance/2000000.mkv',
+                    '/series/performance/performance/3000000.mkv',
+                    '/timeshift/performance/performance/60/start/1000000.ts',
+                    '/streaming/timeshift.php?username=performance&password=performance',
+                ].map((path) => rawLoopbackGet(running.origin, path))
+            );
+
+            expect(mediaResponses.map(({ status }) => status)).toEqual(
+                Array(mediaResponses.length).fill(410)
+            );
+            expect(
+                mediaResponses.every(
+                    ({ headers }) => !headers.includes('location:')
+                )
+            ).toBe(true);
+            expect(httpRequest).not.toHaveBeenCalled();
+            expect(httpsRequest).not.toHaveBeenCalled();
+            expect(globalFetch).not.toHaveBeenCalled();
+        } finally {
+            await running.close();
+        }
+    });
+});
+
+describe('Slow series download stream', () => {
+    it('completes the configured byte count over a loopback response', async () => {
+        const options = {
+            chunkSize: 1_024,
+            intervalMs: 1,
+            totalBytes: 10 * 1_024 + 7,
+        } satisfies SlowSeriesDownloadOptions;
+        const running = await startLoopbackServer(
+            createSlowSeriesDownloadApp(options)
+        );
+        let closed = false;
+
+        try {
+            const response = await fetch(`${running.origin}/slow-series`);
+            const body = await response.arrayBuffer();
+
+            expect(response.status).toBe(200);
+            expect(response.headers.get('content-type')).toContain('video/mp4');
+            expect(Number(response.headers.get('content-length'))).toBe(
+                options.totalBytes
+            );
+            expect(body.byteLength).toBe(options.totalBytes);
+
+            await within(running.close(), 1_000);
+            closed = true;
+        } finally {
+            if (!closed) await running.close().catch(() => undefined);
+        }
+    });
+
+    it('stops a longer recursive stream after the response body is cancelled', async () => {
+        const options = {
+            chunkSize: 1_024,
+            intervalMs: 25,
+            totalBytes: 64 * 1_024,
+        } satisfies SlowSeriesDownloadOptions;
+        const running = await startLoopbackServer(
+            createSlowSeriesDownloadApp(options)
+        );
+        let closed = false;
+
+        try {
+            const response = await fetch(`${running.origin}/slow-series`);
+            const reader = response.body?.getReader();
+            if (!reader) throw new Error('Expected a streaming response body.');
+
+            const firstChunk = await within(reader.read(), 1_000);
+            expect(firstChunk.done).toBe(false);
+            expect(firstChunk.value?.byteLength).toBeGreaterThan(0);
+            await within(reader.cancel(), 1_000);
+            await within(running.close(), 1_000);
+            closed = true;
+        } finally {
+            if (!closed) await running.close().catch(() => undefined);
+        }
+    });
+});
+
+describe('Xtream mock environment parsing', () => {
+    it('uses safe defaults and enables control only for the exact flag', () => {
+        expect(parseXtreamMockServerEnvironment({})).toEqual({
+            host: '127.0.0.1',
+            port: 3211,
+        });
+        expect(
+            parseXtreamMockServerEnvironment({
+                IPTVNATOR_XTREAM_MOCK_CONTROL: '1',
+                IPTVNATOR_XTREAM_MOCK_CONTROL_TOKEN: 'secret-token',
+            })
+        ).toEqual({
+            control: { enabled: true, token: 'secret-token' },
+            host: '127.0.0.1',
+            port: 3211,
+        });
+        expect(
+            parseXtreamMockServerEnvironment({
+                HOST: '::1',
+                PORT: '4321',
+                IPTVNATOR_XTREAM_MOCK_CONTROL: '1',
+                IPTVNATOR_XTREAM_MOCK_CONTROL_TOKEN: 'secret-token',
+            })
+        ).toEqual({
+            control: { enabled: true, token: 'secret-token' },
+            host: '::1',
+            port: 4321,
+        });
+        expect(
+            parseXtreamMockServerEnvironment({
+                IPTVNATOR_XTREAM_MOCK_CONTROL: 'true',
+                IPTVNATOR_XTREAM_MOCK_CONTROL_TOKEN: 'ignored',
+            })
+        ).toEqual({ host: '127.0.0.1', port: 3211 });
+    });
+
+    it('falls back to the Playwright-side XTREAM_MOCK_PORT alias when PORT is unset', () => {
+        expect(
+            parseXtreamMockServerEnvironment({ XTREAM_MOCK_PORT: '3311' })
+        ).toEqual({ host: '127.0.0.1', port: 3311 });
+        expect(
+            parseXtreamMockServerEnvironment({
+                PORT: '3221',
+                XTREAM_MOCK_PORT: '3311',
+            })
+        ).toEqual({ host: '127.0.0.1', port: 3221 });
+        expect(() =>
+            parseXtreamMockServerEnvironment({ XTREAM_MOCK_PORT: '12x' })
+        ).toThrow(/port/i);
+    });
+
+    it.each([
+        [{ PORT: '-1' }, /port/i],
+        [{ PORT: '12x' }, /port/i],
+        [{ PORT: '65536' }, /port/i],
+        [{ IPTVNATOR_XTREAM_MOCK_CONTROL: '1' }, /token/i],
+        [
+            {
+                HOST: '192.0.2.1',
+                IPTVNATOR_XTREAM_MOCK_CONTROL: '1',
+                IPTVNATOR_XTREAM_MOCK_CONTROL_TOKEN: 'secret-token',
+            },
+            /loopback/i,
+        ],
+    ])('rejects invalid environment %#', (environment, message) => {
+        expect(() => parseXtreamMockServerEnvironment(environment)).toThrow(
+            message
+        );
+    });
+});
+
+async function rawLoopbackGet(
+    origin: string,
+    path: string
+): Promise<{ headers: string; status: number }> {
+    const url = new URL(origin);
+    return new Promise((resolve, reject) => {
+        const socket = connect(Number(url.port), url.hostname);
+        let raw = '';
+        socket.setEncoding('utf8');
+        socket.once('error', reject);
+        socket.on('data', (chunk) => (raw += chunk));
+        socket.once('end', () => {
+            const [headers = ''] = raw.split('\r\n\r\n');
+            const status = Number(headers.split(' ')[1]);
+            resolve({ headers: headers.toLowerCase(), status });
+        });
+        socket.once('connect', () => {
+            socket.write(
+                `GET ${path} HTTP/1.1\r\nHost: ${url.host}\r\nConnection: close\r\n\r\n`
+            );
+        });
+    });
+}
+
+function createSlowSeriesDownloadApp(
+    options: SlowSeriesDownloadOptions
+): express.Express {
+    const app = express();
+    app.get('/slow-series', (request, response) => {
+        streamSlowSeriesDownload(request, response, options);
+    });
+    return app;
+}
+
+async function within<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+    let timer: NodeJS.Timeout | undefined;
+    const timeout = new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(
+            () => reject(new Error(`Operation exceeded ${timeoutMs}ms.`)),
+            timeoutMs
+        );
+    });
+    try {
+        return await Promise.race([promise, timeout]);
+    } finally {
+        if (timer) clearTimeout(timer);
+    }
+}

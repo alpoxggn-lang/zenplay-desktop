@@ -1,0 +1,673 @@
+import { RuntimeCapabilitiesService } from './runtime-capabilities.service';
+
+describe('RuntimeCapabilitiesService', () => {
+    const testWindow = window as unknown as {
+        electron?: Record<string, unknown>;
+    };
+    const originalElectron = testWindow.electron;
+
+    afterEach(() => {
+        testWindow.electron = originalElectron;
+    });
+
+    it('offers the portal cooldown setting only with both desktop bridge methods', () => {
+        const service = new RuntimeCapabilitiesService();
+        testWindow.electron = { updateSettings: jest.fn() };
+        expect(service.supportsPortalConnectivityGuard).toBe(false);
+        testWindow.electron['resetHostConnectivityGuard'] = jest.fn();
+        expect(service.supportsPortalConnectivityGuard).toBe(true);
+        testWindow.electron = undefined;
+        expect(service.supportsPortalConnectivityGuard).toBe(false);
+    });
+
+    it('offers the parental lock worker filter only with both bridge methods', () => {
+        const service = new RuntimeCapabilitiesService();
+        testWindow.electron = { setParentalLockState: jest.fn() };
+        expect(service.supportsParentalLockSqliteFilter).toBe(false);
+        testWindow.electron['dbSetCategoryLocks'] = jest.fn();
+        expect(service.supportsParentalLockSqliteFilter).toBe(true);
+        testWindow.electron = undefined;
+        expect(service.supportsParentalLockSqliteFilter).toBe(false);
+    });
+
+    it('reports browser PWA capabilities when the Electron bridge is absent', () => {
+        testWindow.electron = undefined;
+
+        const service = new RuntimeCapabilitiesService();
+
+        expect(service.environment).toBe('pwa');
+        expect(service.isPwa).toBe(true);
+        expect(service.isElectron).toBe(false);
+        expect(service.platform).toBeUndefined();
+        expect(service.isMacOS).toBe(false);
+        expect(service.supportsEpg).toBe(false);
+        expect(service.supportsSqlite).toBe(false);
+        expect(service.supportsXtreamSqliteDataSource).toBe(false);
+        expect(service.supportsDownloads).toBe(false);
+        expect(service.supportsPortalActivityStorage).toBe(false);
+        expect(service.supportsPlaybackPositionStorage).toBe(false);
+        expect(service.supportsPlaybackPositionUpdates).toBe(false);
+        expect(service.supportsAppStateStorage).toBe(false);
+        expect(service.supportsStalkerPlaylistSqliteSync).toBe(false);
+        expect(service.supportsPlaylistRefresh).toBe(false);
+        expect(service.supportsManagedExternalPlayers).toBe(false);
+        expect(service.supportsExternalPlayerPathSettings).toBe(false);
+        expect(service.supportsEmbeddedMpv).toBe(false);
+        expect(service.supportsDesktopFileSave).toBe(false);
+        expect(service.supportsRemoteControl).toBe(false);
+        expect(service.supportsXtreamSectionNavigation).toBe(true);
+        expect(service.supportsEpgImport).toBe(false);
+        expect(service.supportsEpgFilePicker).toBe(false);
+        expect(service.supportsEpgProgress).toBe(false);
+        expect(service.supportsEpgProgramLookup).toBe(false);
+        expect(service.supportsEpgCurrentProgramBatch).toBe(false);
+        expect(service.supportsEpgChannelMetadata).toBe(false);
+        expect(service.supportsEpgSourceFreshness).toBe(false);
+        expect(service.supportsEpgDataManagement).toBe(false);
+        expect(service.supportsEpgGuide).toBe(false);
+        expect(service.supportsEpgProgramSearch).toBe(false);
+    });
+
+    it('reports Electron capabilities from the available preload bridge methods', () => {
+        testWindow.electron = {
+            platform: 'darwin',
+            dbDeleteAllPlaylists: jest.fn(),
+            dbDeletePlaylist: jest.fn(),
+            dbGetAppPlaylist: jest.fn(),
+            dbGetAppPlaylists: jest.fn(),
+            dbUpsertAppPlaylist: jest.fn(),
+            dbUpsertAppPlaylists: jest.fn(),
+            dbGetAppState: jest.fn(),
+            dbSetAppState: jest.fn(),
+            dbGetRecentlyViewed: jest.fn(),
+            dbClearRecentlyViewed: jest.fn(),
+            dbGetAllGlobalFavorites: jest.fn(),
+            dbGetGlobalRecentlyAdded: jest.fn(),
+            dbAddFavorite: jest.fn(),
+            dbRemoveRecentItem: jest.fn(),
+            dbRemoveFavorite: jest.fn(),
+            dbGetFavorites: jest.fn(),
+            dbReorderGlobalFavorites: jest.fn(),
+            dbGetRecentItems: jest.fn(),
+            dbAddRecentItem: jest.fn(),
+            dbClearPlaylistRecentItems: jest.fn(),
+            dbRemoveRecentItemsBatch: jest.fn(),
+            dbGetContentByXtreamId: jest.fn(),
+            dbGetPlaylist: jest.fn(),
+            dbCreatePlaylist: jest.fn(),
+            dbUpdatePlaylist: jest.fn(),
+            dbHasCategories: jest.fn(),
+            dbGetCategories: jest.fn(),
+            dbSaveCategories: jest.fn(),
+            dbGetAllCategories: jest.fn(),
+            dbUpdateCategoryVisibility: jest.fn(),
+            dbHasContent: jest.fn(),
+            dbGetContent: jest.fn(),
+            dbSaveContent: jest.fn(),
+            dbSearchContent: jest.fn(),
+            dbIsFavorite: jest.fn(),
+            dbSavePlaybackPosition: jest.fn(),
+            dbGetPlaybackPosition: jest.fn(),
+            dbGetSeriesPlaybackPositions: jest.fn(),
+            dbGetRecentPlaybackPositions: jest.fn(),
+            dbGetAllPlaybackPositions: jest.fn(),
+            dbClearAllPlaybackPositions: jest.fn(),
+            dbClearPlaybackPosition: jest.fn(),
+            dbSavePlaybackPositionsBatch: jest.fn(),
+            dbClearPlaybackPositionsBatch: jest.fn(),
+            onPlaybackPositionUpdate: jest.fn(),
+            dbDeleteXtreamContent: jest.fn(),
+            dbRestoreXtreamUserData: jest.fn(),
+            dbReplaceAllPlaybackPositions: jest.fn(),
+            downloadsStart: jest.fn(),
+            downloadsCancel: jest.fn(),
+            downloadsPause: jest.fn(),
+            downloadsResume: jest.fn(),
+            downloadsRetry: jest.fn(),
+            downloadsRedownloadMissing: jest.fn(),
+            downloadsRemove: jest.fn(),
+            downloadsGetList: jest.fn(),
+            downloadsGet: jest.fn(),
+            downloadsGetDefaultFolder: jest.fn(),
+            downloadsSelectFolder: jest.fn(),
+            downloadsRevealFile: jest.fn(),
+            downloadsPlayFile: jest.fn(),
+            downloadsClearCompleted: jest.fn(),
+            onDownloadsUpdate: jest.fn(),
+            refreshPlaylist: jest.fn(),
+            cancelPlaylistRefresh: jest.fn(),
+            onPlaylistRefreshEvent: jest.fn(),
+            openInMpv: jest.fn(),
+            openInVlc: jest.fn(),
+            setMpvPlayerPath: jest.fn(),
+            setVlcPlayerPath: jest.fn(),
+            prepareEmbeddedMpv: jest.fn(),
+            saveFileDialog: jest.fn(),
+            writeFile: jest.fn(),
+            updateRemoteControlStatus: jest.fn(),
+            onChannelChange: jest.fn(),
+            onRemoteControlCommand: jest.fn(),
+            xtreamRequest: jest.fn(),
+            fetchEpg: jest.fn(),
+            getChannelPrograms: jest.fn(),
+            getCurrentProgramsBatch: jest.fn(),
+            getEpgChannelMetadata: jest.fn(),
+            checkEpgFreshness: jest.fn(),
+            onEpgProgress: jest.fn(),
+            forceFetchEpg: jest.fn(),
+            openEpgFileDialog: jest.fn(),
+            clearEpgData: jest.fn(),
+            clearEpgDataForSource: jest.fn(),
+            getEpgProgramsForChannels: jest.fn(),
+            getEpgProgramCoverage: jest.fn(),
+            searchEpgPrograms: jest.fn(),
+        };
+
+        const service = new RuntimeCapabilitiesService();
+
+        expect(service.environment).toBe('electron');
+        expect(service.isElectron).toBe(true);
+        expect(service.isPwa).toBe(false);
+        expect(service.platform).toBe('darwin');
+        expect(service.isMacOS).toBe(true);
+        expect(service.supportsEpg).toBe(true);
+        expect(service.supportsSqlite).toBe(true);
+        expect(service.supportsXtreamSqliteDataSource).toBe(true);
+        expect(service.supportsDownloads).toBe(true);
+        expect(service.supportsPortalActivityStorage).toBe(true);
+        expect(service.supportsPlaybackPositionStorage).toBe(true);
+        expect(service.supportsPlaybackPositionUpdates).toBe(true);
+        expect(service.supportsAppStateStorage).toBe(true);
+        expect(service.supportsStalkerPlaylistSqliteSync).toBe(true);
+        expect(service.supportsPlaylistRefresh).toBe(true);
+        expect(service.supportsManagedExternalPlayers).toBe(true);
+        expect(service.supportsExternalPlayerPathSettings).toBe(true);
+        expect(service.supportsEmbeddedMpv).toBe(true);
+        expect(service.supportsDesktopFileSave).toBe(true);
+        expect(service.supportsRemoteControl).toBe(true);
+        expect(service.supportsXtreamSectionNavigation).toBe(true);
+        expect(service.supportsEpgImport).toBe(true);
+        expect(service.supportsEpgFilePicker).toBe(true);
+        expect(service.supportsEpgProgress).toBe(true);
+        expect(service.supportsEpgProgramLookup).toBe(true);
+        expect(service.supportsEpgCurrentProgramBatch).toBe(true);
+        expect(service.supportsEpgChannelMetadata).toBe(true);
+        expect(service.supportsEpgSourceFreshness).toBe(true);
+        expect(service.supportsEpgDataManagement).toBe(true);
+        expect(service.supportsEpgGuide).toBe(true);
+        expect(service.supportsEpgProgramSearch).toBe(true);
+    });
+
+    it('keeps feature-specific capabilities false when an Electron bridge is partial', () => {
+        testWindow.electron = {
+            updateRemoteControlStatus: jest.fn(),
+        };
+
+        const service = new RuntimeCapabilitiesService();
+
+        expect(service.environment).toBe('electron');
+        expect(service.platform).toBeUndefined();
+        expect(service.isMacOS).toBe(false);
+        expect(service.supportsEpg).toBe(false);
+        expect(service.supportsSqlite).toBe(false);
+        expect(service.supportsXtreamSqliteDataSource).toBe(false);
+        expect(service.supportsDownloads).toBe(false);
+        expect(service.supportsPortalActivityStorage).toBe(false);
+        expect(service.supportsPlaybackPositionStorage).toBe(false);
+        expect(service.supportsPlaybackPositionUpdates).toBe(false);
+        expect(service.supportsAppStateStorage).toBe(false);
+        expect(service.supportsStalkerPlaylistSqliteSync).toBe(false);
+        expect(service.supportsPlaylistRefresh).toBe(false);
+        expect(service.supportsManagedExternalPlayers).toBe(false);
+        expect(service.supportsExternalPlayerPathSettings).toBe(false);
+        expect(service.supportsEmbeddedMpv).toBe(false);
+        expect(service.supportsDesktopFileSave).toBe(false);
+        expect(service.supportsRemoteControl).toBe(false);
+        expect(service.supportsXtreamSectionNavigation).toBe(false);
+        expect(service.supportsEpgImport).toBe(false);
+        expect(service.supportsEpgProgress).toBe(false);
+        expect(service.supportsEpgProgramLookup).toBe(false);
+        expect(service.supportsEpgCurrentProgramBatch).toBe(false);
+        expect(service.supportsEpgChannelMetadata).toBe(false);
+        expect(service.supportsEpgSourceFreshness).toBe(false);
+        expect(service.supportsEpgDataManagement).toBe(false);
+        expect(service.supportsEpgGuide).toBe(false);
+        expect(service.supportsEpgProgramSearch).toBe(false);
+    });
+
+    it('reads the bridge dynamically so tests and late preload setup stay accurate', () => {
+        testWindow.electron = undefined;
+        const service = new RuntimeCapabilitiesService();
+
+        expect(service.isPwa).toBe(true);
+
+        testWindow.electron = {};
+
+        expect(service.isElectron).toBe(true);
+        expect(service.environment).toBe('electron');
+    });
+
+    it('keeps the Xtream SQLite data source disabled when only generic SQLite methods exist', () => {
+        testWindow.electron = createPlaylistStorageBridge();
+
+        const service = new RuntimeCapabilitiesService();
+
+        expect(service.supportsSqlite).toBe(true);
+        expect(service.supportsAppStateStorage).toBe(true);
+        expect(service.supportsXtreamSqliteDataSource).toBe(false);
+    });
+
+    it('checks app state storage without requiring full playlist SQLite support', () => {
+        testWindow.electron = {
+            dbGetAppState: jest.fn(),
+        };
+
+        const service = new RuntimeCapabilitiesService();
+
+        expect(service.isElectron).toBe(true);
+        expect(service.supportsAppStateStorage).toBe(false);
+
+        testWindow.electron = {
+            dbGetAppState: jest.fn(),
+            dbSetAppState: jest.fn(),
+        };
+
+        expect(service.supportsAppStateStorage).toBe(true);
+        expect(service.supportsSqlite).toBe(false);
+    });
+
+    it('checks Stalker playlist SQLite sync without requiring the full Xtream data source', () => {
+        testWindow.electron = {
+            dbGetPlaylist: jest.fn(),
+        };
+
+        const service = new RuntimeCapabilitiesService();
+
+        expect(service.isElectron).toBe(true);
+        expect(service.supportsStalkerPlaylistSqliteSync).toBe(false);
+
+        testWindow.electron = {
+            dbGetPlaylist: jest.fn(),
+            dbCreatePlaylist: jest.fn(),
+        };
+
+        expect(service.supportsStalkerPlaylistSqliteSync).toBe(true);
+        expect(service.supportsXtreamSqliteDataSource).toBe(false);
+    });
+
+    it('offers the startup window mode only with both the settings mirror and the F11 toggle', () => {
+        testWindow.electron = undefined;
+        const service = new RuntimeCapabilitiesService();
+
+        expect(service.supportsStartupWindowMode).toBe(false);
+
+        // The mirror alone would let a user pick fullscreen with no way out
+        // on Windows/Linux, where the title bar is hidden.
+        testWindow.electron = { updateSettings: jest.fn() };
+        expect(service.supportsStartupWindowMode).toBe(false);
+
+        testWindow.electron = { toggleFullScreenWindow: jest.fn() };
+        expect(service.supportsStartupWindowMode).toBe(false);
+
+        testWindow.electron = {
+            updateSettings: jest.fn(),
+            toggleFullScreenWindow: jest.fn(),
+        };
+        expect(service.supportsStartupWindowMode).toBe(true);
+    });
+
+    it('decouples external player launch support from path-setting support', () => {
+        testWindow.electron = {
+            openInMpv: jest.fn(),
+            openInVlc: jest.fn(),
+        };
+
+        const service = new RuntimeCapabilitiesService();
+
+        expect(service.isElectron).toBe(true);
+        expect(service.supportsManagedExternalPlayers).toBe(true);
+        expect(service.supportsExternalPlayerPathSettings).toBe(false);
+
+        testWindow.electron = {
+            openInMpv: jest.fn(),
+            openInVlc: jest.fn(),
+            setMpvPlayerPath: jest.fn(),
+            setVlcPlayerPath: jest.fn(),
+        };
+
+        expect(service.supportsManagedExternalPlayers).toBe(true);
+        expect(service.supportsExternalPlayerPathSettings).toBe(true);
+    });
+
+    it('requires the complete EPG preload surface', () => {
+        testWindow.electron = {
+            fetchEpg: jest.fn(),
+            getChannelPrograms: jest.fn(),
+            checkEpgFreshness: jest.fn(),
+        };
+
+        const service = new RuntimeCapabilitiesService();
+
+        expect(service.isElectron).toBe(true);
+        expect(service.supportsEpg).toBe(false);
+
+        testWindow.electron = {
+            fetchEpg: jest.fn(),
+            getChannelPrograms: jest.fn(),
+            checkEpgFreshness: jest.fn(),
+            forceFetchEpg: jest.fn(),
+            clearEpgData: jest.fn(),
+            clearEpgDataForSource: jest.fn(),
+            getEpgProgramsForChannels: jest.fn(),
+            getEpgProgramCoverage: jest.fn(),
+            searchEpgPrograms: jest.fn(),
+        };
+
+        expect(service.supportsEpg).toBe(true);
+    });
+
+    it('exposes EPG capabilities by the specific preload surface they need', () => {
+        testWindow.electron = {
+            fetchEpg: jest.fn(),
+            onEpgProgress: jest.fn(),
+            getChannelPrograms: jest.fn(),
+            checkEpgFreshness: jest.fn(),
+            forceFetchEpg: jest.fn(),
+            clearEpgData: jest.fn(),
+            clearEpgDataForSource: jest.fn(),
+            getEpgProgramsForChannels: jest.fn(),
+            getEpgProgramCoverage: jest.fn(),
+            searchEpgPrograms: jest.fn(),
+        };
+
+        const service = new RuntimeCapabilitiesService();
+
+        expect(service.supportsEpg).toBe(true);
+        expect(service.supportsEpgImport).toBe(true);
+        expect(service.supportsEpgProgress).toBe(true);
+        expect(service.supportsEpgProgramLookup).toBe(true);
+        expect(service.supportsEpgCurrentProgramBatch).toBe(false);
+        expect(service.supportsEpgChannelMetadata).toBe(false);
+        expect(service.supportsEpgSourceFreshness).toBe(true);
+        expect(service.supportsEpgDataManagement).toBe(true);
+        expect(service.supportsEpgGuide).toBe(true);
+        expect(service.supportsEpgProgramSearch).toBe(true);
+
+        testWindow.electron = {
+            checkEpgFreshness: jest.fn(),
+        };
+
+        expect(service.supportsEpg).toBe(false);
+        expect(service.supportsEpgSourceFreshness).toBe(true);
+        expect(service.supportsEpgImport).toBe(false);
+        expect(service.supportsEpgProgramLookup).toBe(false);
+        expect(service.supportsEpgDataManagement).toBe(false);
+        expect(service.supportsEpgGuide).toBe(false);
+        expect(service.supportsEpgProgramSearch).toBe(false);
+    });
+
+    it('does not report guide support with only one of the two guide reads', () => {
+        testWindow.electron = {
+            getEpgProgramsForChannels: jest.fn(),
+        };
+
+        const service = new RuntimeCapabilitiesService();
+
+        expect(service.supportsEpgGuide).toBe(false);
+    });
+
+    it('requires the complete downloads preload surface', () => {
+        testWindow.electron = {
+            downloadsGetList: jest.fn(),
+        };
+
+        const service = new RuntimeCapabilitiesService();
+
+        expect(service.isElectron).toBe(true);
+        expect(service.supportsDownloads).toBe(false);
+
+        testWindow.electron = {
+            downloadsStart: jest.fn(),
+            downloadsCancel: jest.fn(),
+            downloadsPause: jest.fn(),
+            downloadsResume: jest.fn(),
+            downloadsRetry: jest.fn(),
+            downloadsRemove: jest.fn(),
+            downloadsGetList: jest.fn(),
+            downloadsGet: jest.fn(),
+            downloadsGetDefaultFolder: jest.fn(),
+            downloadsSelectFolder: jest.fn(),
+            downloadsRevealFile: jest.fn(),
+            downloadsPlayFile: jest.fn(),
+            downloadsClearCompleted: jest.fn(),
+            onDownloadsUpdate: jest.fn(),
+        };
+
+        expect(service.supportsDownloads).toBe(false);
+
+        testWindow.electron = {
+            ...testWindow.electron,
+            downloadsRedownloadMissing: jest.fn(),
+        };
+
+        expect(service.supportsDownloads).toBe(true);
+    });
+
+    it('gates recordings separately from the downloads allowlist', () => {
+        testWindow.electron = {
+            recordingsGetList: jest.fn(),
+        };
+
+        const service = new RuntimeCapabilitiesService();
+
+        expect(service.isElectron).toBe(true);
+        expect(service.supportsRecordings).toBe(false);
+
+        testWindow.electron = {
+            recordingsGetList: jest.fn(),
+            recordingsGet: jest.fn(),
+            recordingsStop: jest.fn(),
+            recordingsRemove: jest.fn(),
+            recordingsUpdatePrograms: jest.fn(),
+            recordingsRevealFile: jest.fn(),
+            recordingsPlayFile: jest.fn(),
+        };
+
+        expect(service.supportsRecordings).toBe(false);
+
+        testWindow.electron = {
+            ...testWindow.electron,
+            onRecordingsUpdate: jest.fn(),
+        };
+
+        expect(service.supportsRecordings).toBe(true);
+        // An older build without the recordings bridge keeps the download
+        // manager: the downloads allowlist is untouched by recordings.
+        expect(service.supportsDownloads).toBe(false);
+    });
+
+    it('requires both desktop file-save preload methods', () => {
+        testWindow.electron = {
+            saveFileDialog: jest.fn(),
+        };
+
+        const service = new RuntimeCapabilitiesService();
+
+        expect(service.isElectron).toBe(true);
+        expect(service.supportsDesktopFileSave).toBe(false);
+
+        testWindow.electron = {
+            saveFileDialog: jest.fn(),
+            writeFile: jest.fn(),
+        };
+
+        expect(service.supportsDesktopFileSave).toBe(true);
+    });
+
+    it('requires the complete playlist refresh preload surface', () => {
+        testWindow.electron = {
+            refreshPlaylist: jest.fn(),
+        };
+
+        const service = new RuntimeCapabilitiesService();
+
+        expect(service.isElectron).toBe(true);
+        expect(service.supportsPlaylistRefresh).toBe(false);
+
+        testWindow.electron = {
+            refreshPlaylist: jest.fn(),
+            cancelPlaylistRefresh: jest.fn(),
+            onPlaylistRefreshEvent: jest.fn(),
+        };
+
+        expect(service.supportsPlaylistRefresh).toBe(true);
+    });
+
+    it('requires the complete playlist storage SQLite preload surface', () => {
+        testWindow.electron = {
+            dbGetAppPlaylists: jest.fn(),
+            dbUpsertAppPlaylist: jest.fn(),
+            dbGetAppState: jest.fn(),
+            dbSetAppState: jest.fn(),
+        };
+
+        const service = new RuntimeCapabilitiesService();
+
+        expect(service.isElectron).toBe(true);
+        expect(service.supportsSqlite).toBe(false);
+
+        testWindow.electron = createPlaylistStorageBridge();
+
+        expect(service.supportsSqlite).toBe(true);
+    });
+
+    it('checks playback-position storage and update bridge capabilities independently', () => {
+        testWindow.electron = {
+            dbSavePlaybackPosition: jest.fn(),
+            dbGetPlaybackPosition: jest.fn(),
+            dbGetSeriesPlaybackPositions: jest.fn(),
+            dbGetRecentPlaybackPositions: jest.fn(),
+            dbGetAllPlaybackPositions: jest.fn(),
+            dbClearAllPlaybackPositions: jest.fn(),
+        };
+
+        const service = new RuntimeCapabilitiesService();
+
+        expect(service.supportsPlaybackPositionStorage).toBe(false);
+        expect(service.supportsPlaybackPositionUpdates).toBe(false);
+
+        testWindow.electron = {
+            ...testWindow.electron,
+            dbClearPlaybackPosition: jest.fn(),
+        };
+
+        // The season-batch methods are part of the storage contract too.
+        expect(service.supportsPlaybackPositionStorage).toBe(false);
+
+        testWindow.electron = {
+            ...testWindow.electron,
+            dbSavePlaybackPositionsBatch: jest.fn(),
+            dbClearPlaybackPositionsBatch: jest.fn(),
+        };
+
+        expect(service.supportsPlaybackPositionStorage).toBe(true);
+        expect(service.supportsPlaybackPositionUpdates).toBe(false);
+
+        testWindow.electron = {
+            ...testWindow.electron,
+            onPlaybackPositionUpdate: jest.fn(),
+        };
+
+        expect(service.supportsPlaybackPositionStorage).toBe(true);
+        expect(service.supportsPlaybackPositionUpdates).toBe(true);
+        expect(service.supportsXtreamSqliteDataSource).toBe(false);
+    });
+
+    it('supports Xtream section navigation in Electron when Xtream API transport is available', () => {
+        testWindow.electron = {
+            xtreamRequest: jest.fn(),
+        };
+
+        const service = new RuntimeCapabilitiesService();
+
+        expect(service.isElectron).toBe(true);
+        expect(service.supportsXtreamSqliteDataSource).toBe(false);
+        expect(service.supportsXtreamSectionNavigation).toBe(true);
+    });
+
+    it('keeps Xtream SQLite and ordinary position storage when atomic restore is unavailable', () => {
+        const bridge = createXtreamSqliteBridge();
+        testWindow.electron = bridge;
+        const service = new RuntimeCapabilitiesService();
+        expect(service.supportsXtreamSqliteDataSource).toBe(true);
+        delete bridge['dbReplaceAllPlaybackPositions'];
+        expect(service.supportsXtreamSqliteDataSource).toBe(true);
+        expect(service.supportsPlaybackPositionStorage).toBe(true);
+        bridge['dbReplaceAllPlaybackPositions'] = jest.fn();
+        expect(service.supportsXtreamSqliteDataSource).toBe(true);
+    });
+
+    it('supports Xtream section navigation in Electron when only the SQLite data source is available', () => {
+        testWindow.electron = createXtreamSqliteBridge();
+
+        const service = new RuntimeCapabilitiesService();
+
+        expect(service.isElectron).toBe(true);
+        expect(service.supportsXtreamSqliteDataSource).toBe(true);
+        expect(service.supportsXtreamSectionNavigation).toBe(true);
+    });
+});
+
+function createPlaylistStorageBridge(): Record<string, jest.Mock> {
+    return {
+        dbDeleteAllPlaylists: jest.fn(),
+        dbDeletePlaylist: jest.fn(),
+        dbGetAppPlaylist: jest.fn(),
+        dbGetAppPlaylists: jest.fn(),
+        dbGetAppState: jest.fn(),
+        dbSetAppState: jest.fn(),
+        dbUpsertAppPlaylist: jest.fn(),
+        dbUpsertAppPlaylists: jest.fn(),
+    };
+}
+
+function createXtreamSqliteBridge(): Record<string, jest.Mock> {
+    return {
+        dbAddFavorite: jest.fn(),
+        dbAddRecentItem: jest.fn(),
+        dbClearAllPlaybackPositions: jest.fn(),
+        dbClearPlaybackPosition: jest.fn(),
+        dbSavePlaybackPositionsBatch: jest.fn(),
+        dbClearPlaybackPositionsBatch: jest.fn(),
+        dbClearPlaylistRecentItems: jest.fn(),
+        dbCreatePlaylist: jest.fn(),
+        dbDeletePlaylist: jest.fn(),
+        dbDeleteXtreamContent: jest.fn(),
+        dbGetAllCategories: jest.fn(),
+        dbGetAllPlaybackPositions: jest.fn(),
+        dbGetAppState: jest.fn(),
+        dbGetCategories: jest.fn(),
+        dbGetContent: jest.fn(),
+        dbGetContentByXtreamId: jest.fn(),
+        dbGetFavorites: jest.fn(),
+        dbGetPlaylist: jest.fn(),
+        dbGetPlaybackPosition: jest.fn(),
+        dbGetRecentItems: jest.fn(),
+        dbGetRecentPlaybackPositions: jest.fn(),
+        dbGetSeriesPlaybackPositions: jest.fn(),
+        dbHasCategories: jest.fn(),
+        dbHasContent: jest.fn(),
+        dbIsFavorite: jest.fn(),
+        dbRemoveFavorite: jest.fn(),
+        dbRemoveRecentItem: jest.fn(),
+        dbRestoreXtreamUserData: jest.fn(),
+        dbReplaceAllPlaybackPositions: jest.fn(),
+        dbSaveCategories: jest.fn(),
+        dbSaveContent: jest.fn(),
+        dbSavePlaybackPosition: jest.fn(),
+        dbSearchContent: jest.fn(),
+        dbSetAppState: jest.fn(),
+        dbUpdateCategoryVisibility: jest.fn(),
+        dbUpdatePlaylist: jest.fn(),
+    };
+}

@@ -1,0 +1,204 @@
+// ============================================================================
+// Detail View - page shell shared by the movie and series pages
+// ============================================================================
+
+@mixin base(
+    $season-title-font-size: 1.375rem,
+    $season-title-font-weight: 600,
+    $season-title-letter-spacing: 0,
+    $episode-title-font-size: 1.125rem,
+    $episode-title-letter-spacing: 0
+) {
+    :host {
+        --poster-width: 190px;
+        --poster-shadow: 0 18px 40px rgba(0, 0, 0, 0.3);
+        --content-max-width: 1400px;
+
+        // Page surface and text follow the app theme (light by default).
+        --hero-gradient-start: color-mix(in srgb, var(--app-content-bg, #f5f6f8) 0%, transparent);
+        --hero-gradient-mid: color-mix(in srgb, var(--app-content-bg, #f5f6f8) 75%, transparent);
+        --hero-gradient-end: var(--app-content-bg, #f5f6f8);
+        --surface-bg: var(--app-content-bg, #f5f6f8);
+        --text-primary: var(--app-heading-color, #1a1d23);
+        --text-secondary: var(--app-body-color, #4a5060);
+        --text-muted: var(--app-muted-color, #8891a4);
+        // Single primary CTA color — matches --app-selection-color so the
+        // Play button reads as the same blue used everywhere else for
+        // "active / call to action".
+        --accent-color: var(--app-selection-color, #2f7bff);
+        --tag-bg: color-mix(in srgb, var(--app-on-surface, #1d1b1e) 10%, transparent);
+        --tag-border: color-mix(in srgb, var(--app-on-surface, #1d1b1e) 14%, transparent);
+
+        width: 100%;
+        height: 100%;
+        display: block;
+        overflow: hidden;
+        background: var(--surface-bg);
+        color: var(--text-primary);
+    }
+
+    // Dark theme overrides - cinematic dark mode
+    :host-context(.dark-theme) {
+        --poster-shadow: 0 18px 40px rgba(0, 0, 0, 0.6);
+    }
+
+    // ============================================================================
+    // Details Section - Content Elements
+    // ============================================================================
+
+    .details {
+        // Styles for projected content elements
+
+        &__meta-item {
+            font-size: 0.875rem;
+
+            .label {
+                color: var(--text-muted);
+                font-weight: 400;
+                margin-bottom: 2px;
+                text-decoration: none;
+                display: block;
+            }
+
+            .value {
+                color: var(--text-primary);
+                font-weight: 500;
+            }
+        }
+    }
+
+    // ============================================================================
+    // Content Sections - Below the hero fold
+    // ============================================================================
+
+    .content-section {
+        padding: 20px 0;
+        width: 100%;
+        box-sizing: border-box;
+
+        &__title {
+            font-size: $season-title-font-size;
+            font-weight: $season-title-font-weight;
+            letter-spacing: $season-title-letter-spacing;
+            margin: 0 0 20px 0;
+            color: var(--text-primary);
+        }
+    }
+
+    // ============================================================================
+    // Seasons & Episodes - Inside details section
+    // ============================================================================
+
+    .seasons {
+        margin-top: 24px;
+        width: 100%;
+
+        .season-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 0;
+            cursor: pointer;
+            transition: opacity 0.2s ease;
+
+            &:hover {
+                opacity: 0.8;
+            }
+
+            h4 {
+                margin: 0;
+                font-size: 1rem;
+                font-weight: 600;
+            }
+
+            .expand-icon {
+                font-size: 0.75rem;
+                color: var(--text-muted);
+            }
+        }
+
+        .episodes {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            padding: 8px 0 16px;
+
+            button {
+                margin: 0;
+                font-weight: 500;
+            }
+        }
+
+        .episodes-loading,
+        .seasons-loading {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 20px 0;
+            color: var(--text-secondary);
+        }
+
+        .no-episodes {
+            color: var(--text-muted);
+            font-style: italic;
+            padding: 8px 0;
+        }
+    }
+
+    // Seasons loading when inside details
+    .details .seasons-loading {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 20px 0;
+        color: var(--text-secondary);
+        margin-top: 24px;
+    }
+
+    // Season container when inside details section
+    .details app-season-container {
+        display: block;
+        width: 100%;
+        margin-top: 24px;
+        box-sizing: border-box;
+    }
+
+    // ============================================================================
+    // Legacy container support (for gradual migration)
+    // ============================================================================
+
+    .container {
+        display: contents;
+    }
+
+    .image {
+        display: none; // Hidden - now using .poster in hero
+    }
+
+    // ============================================================================
+    // Mobile Responsive - Option A: Keep poster grid layout
+    // ============================================================================
+
+    @media (max-width: 800px) {
+        :host {
+            --poster-width: 120px;
+        }
+
+        .seasons {
+            padding: 16px 0 0;
+        }
+    }
+
+    // ============================================================================
+    // Utility - keep .label for backwards compatibility
+    // ============================================================================
+
+    .label {
+        font-weight: 400;
+        font-size: 0.8125rem;
+        color: var(--text-muted);
+        text-decoration: none;
+        padding: 0;
+        opacity: 1;
+    }
+}

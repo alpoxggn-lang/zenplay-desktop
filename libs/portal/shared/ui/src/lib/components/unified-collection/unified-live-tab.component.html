@@ -1,0 +1,211 @@
+<div
+    class="sidebar"
+    [class.sidebar-collapsed]="isSidebarCollapsed()"
+    [class.sidebar--reloading]="reloading()"
+    appResizable
+    [minWidth]="250"
+    [maxWidth]="600"
+    [defaultWidth]="360"
+    storageKey="unified-live-tab-sidebar-width"
+>
+    <app-global-favorites-list
+        [channels]="channelsForList()"
+        [mode]="mode()"
+        [showEpg]="supportsEpg"
+        [favoriteUids]="favoriteUids()"
+        [epgMap]="epgMap()"
+        [progressTick]="progressTick()"
+        [activeUid]="activeUid()"
+        [searchTermInput]="searchTerm()"
+        [draggable]="mode() === 'favorites'"
+        [sortMode]="sortMode()"
+        (channelSelected)="onChannelSelected($event)"
+        (playbackRequested)="onChannelPlaybackRequested($event)"
+        (channelsReordered)="onReorder($event)"
+        (epgMappingChanged)="onEpgMappingChanged()"
+        (favoriteToggled)="onFavoriteToggled($event)"
+        (removeRequested)="onRemoveRequested($event)"
+        (openInPlaylistRequested)="onOpenInPlaylistRequested($event)"
+    />
+</div>
+
+<div class="content-container">
+    @if (activeDetail()) {
+        @if (shouldUseInlinePlayer()) {
+            <div
+                class="video-player"
+                [class.video-player--radio]="isRadioSelection()"
+            >
+                @if (isRadioSelection()) {
+                    <button
+                        mat-icon-button
+                        (click)="onClose()"
+                        class="radio-close-btn"
+                        [attr.aria-label]="'PORTALS.CLOSE_PLAYER' | translate"
+                    >
+                        <mat-icon>close</mat-icon>
+                    </button>
+
+                    <app-audio-player
+                        [url]="currentStreamUrl()"
+                        [icon]="
+                            activeRadioChannel()?.tvg?.logo ??
+                            activeDetail()?.playback?.thumbnail ??
+                            ''
+                        "
+                        [channelName]="
+                            activeRadioChannel()?.name ||
+                            activeDetail()?.playback?.title ||
+                            ''
+                        "
+                        [playbackSessionKey]="playbackSessionKey()"
+                    />
+                } @else {
+                    <app-web-player-view
+                        [playbackSessionKey]="playbackSessionKey()"
+                        [streamUrl]="currentStreamUrl()"
+                        [title]="activeDetail()?.playback?.title ?? ''"
+                        [playback]="inlinePlayback()"
+                        [playerOverride]="inlinePlayer()"
+                        [timelineSegments]="catchupTimelineSegments()"
+                        [recordingMetadata]="recordingMetadata()"
+                        (externalFallbackRequested)="
+                            handleExternalFallbackRequest($event)
+                        "
+                        (recordingStopped)="onRecordingStopped($event)"
+                    />
+                }
+            </div>
+        }
+
+        @if (!isRadioSelection() && supportsEpg) {
+            <div
+                class="epg"
+                [class.epg--inline]="shouldUseInlinePlayer()"
+                [class.epg--list]="epgViewMode() === 'list'"
+                [class.epg-collapsed]="
+                    shouldUseInlinePlayer() && isLiveEpgPanelCollapsed()
+                "
+            >
+                <div class="epg-content">
+                    @if (epgViewMode() === 'list') {
+                        <app-epg-list-view
+                            [programs]="timelinePrograms()"
+                            [offsetMinutes]="epgOffsetMinutes()"
+                            [channelName]="timelineChannelName()"
+                            [channelLogo]="timelineChannelLogo()"
+                            [archiveContextKey]="archiveContextKey()"
+                            [archivePlaybackAvailable]="
+                                timelineArchiveAvailable()
+                            "
+                            [archiveDays]="timelineArchiveDays()"
+                            [activeProgram]="activeTimeshiftProgram()"
+                            [isLivePlayback]="!activeTimeshift()"
+                            [selectedDate]="selectedLiveEpgDate()"
+                            [collapsed]="
+                                shouldUseInlinePlayer() &&
+                                isLiveEpgPanelCollapsed()
+                            "
+                            [summary]="liveEpgPanelSummary()"
+                            [summaryLabelKey]="liveEpgPanelSummaryLabelKey()"
+                            (programActivated)="
+                                onTimelineProgramActivated($event)
+                            "
+                            (returnToLive)="returnToLivePlayback()"
+                            (selectedDateChange)="
+                                onLiveEpgSelectedDateChange($event)
+                            "
+                            (collapsedChange)="
+                                onLiveEpgPanelCollapsedChange($event)
+                            "
+                        >
+                            <!-- ngProjectAs: a control-flow block only reaches
+                                 a selected slot when the wrapper names it -->
+                            <ng-container ngProjectAs="[epgToolbarAction]">
+                                @if (openInPlaylistTarget()) {
+                                    <app-open-in-playlist-chip
+                                        [playlistName]="openInPlaylistName()"
+                                        (activated)="openActiveItemInPlaylist()"
+                                    />
+                                }
+                            </ng-container>
+                        </app-epg-list-view>
+                    } @else {
+                        <app-epg-timeline
+                            [programs]="timelinePrograms()"
+                            [offsetMinutes]="epgOffsetMinutes()"
+                            [channelName]="timelineChannelName()"
+                            [channelLogo]="timelineChannelLogo()"
+                            [archiveContextKey]="archiveContextKey()"
+                            [archivePlaybackAvailable]="
+                                timelineArchiveAvailable()
+                            "
+                            [archiveDays]="timelineArchiveDays()"
+                            [activeProgram]="activeTimeshiftProgram()"
+                            [isLivePlayback]="!activeTimeshift()"
+                            [selectedDate]="selectedLiveEpgDate()"
+                            [collapsed]="
+                                shouldUseInlinePlayer() &&
+                                isLiveEpgPanelCollapsed()
+                            "
+                            [summary]="liveEpgPanelSummary()"
+                            [summaryLabelKey]="liveEpgPanelSummaryLabelKey()"
+                            (programActivated)="
+                                onTimelineProgramActivated($event)
+                            "
+                            (returnToLive)="returnToLivePlayback()"
+                            (selectedDateChange)="
+                                onLiveEpgSelectedDateChange($event)
+                            "
+                            (collapsedChange)="
+                                onLiveEpgPanelCollapsedChange($event)
+                            "
+                        >
+                            <!-- ngProjectAs: a control-flow block only reaches
+                                 a selected slot when the wrapper names it -->
+                            <ng-container ngProjectAs="[epgToolbarAction]">
+                                @if (openInPlaylistTarget()) {
+                                    <app-open-in-playlist-chip
+                                        [playlistName]="openInPlaylistName()"
+                                        (activated)="openActiveItemInPlaylist()"
+                                    />
+                                }
+                            </ng-container>
+                        </app-epg-timeline>
+                    }
+                </div>
+            </div>
+        }
+    } @else if (isSidebarCollapsed()) {
+        <app-channel-list-hidden-state
+            (restore)="restoreSidebarRequested.emit()"
+        />
+    } @else {
+        <app-portal-empty-state
+            icon="live_tv"
+            [message]="'CHANNELS.SELECT_CHANNEL_PLAYBACK' | translate"
+        />
+    }
+</div>
+
+<!-- Stamped into the player's fullscreen channel panel (FULLSCREEN_CHANNEL_PANEL). -->
+<ng-template #fullscreenChannelPanel let-searchTerm="searchTerm">
+    <app-global-favorites-list
+        [channels]="fullscreenPanelChannels()"
+        [mode]="mode()"
+        [showEpg]="supportsEpg"
+        [favoriteUids]="favoriteUids()"
+        [epgMap]="epgMap()"
+        [progressTick]="progressTick()"
+        [activeUid]="activeUid()"
+        [searchTermInput]="searchTerm()"
+        [draggable]="false"
+        [sortMode]="sortMode()"
+        (channelSelected)="onChannelSelected($event)"
+        (playbackRequested)="onChannelPlaybackRequested($event)"
+        (epgMappingChanged)="onEpgMappingChanged()"
+        (favoriteToggled)="onFavoriteToggled($event)"
+        (removeRequested)="onRemoveRequested($event)"
+        (openInPlaylistRequested)="onOpenInPlaylistRequested($event)"
+    />
+</ng-template>

@@ -1,0 +1,709 @@
+import { SourceActivityService } from '@iptvnator/services';
+import { TestBed } from '@angular/core/testing';
+import { MatSnackBar } from '@angular/material/snack-bar';
+import { Store } from '@ngrx/store';
+import { TranslateService } from '@ngx-translate/core';
+import { of } from 'rxjs';
+import { DialogService } from '@iptvnator/ui/components';
+import { PlaylistActions } from '@iptvnator/m3u-state';
+import { SettingsStore } from '@iptvnator/services';
+import {
+    AUTO_UPDATE_PLAYLISTS,
+    AutoUpdatePlaylistOutcome,
+    AutoUpdatePlaylistStatus,
+    AutoUpdatePlaylistsResult,
+    ELECTRON_BRIDGE_SECURITY_ERROR_CODES,
+    ERROR,
+    PLAYLIST_PARSE_BY_URL,
+    STALKER_REQUEST,
+    XTREAM_REQUEST,
+    Playlist,
+    SECURITY_ERROR_PREFIX,
+    tagExternalPlayerError,
+} from '@iptvnator/shared/interfaces';
+import { ElectronService } from './electron.service';
+
+describe('ElectronService', () => {
+    const session = { id: 'session-1' };
+    let electronBridge: {
+        xtreamRequest: jest.Mock;
+        stalkerRequest: jest.Mock;
+        autoUpdatePlaylists: jest.Mock;
+        fetchPlaylistByUrl: jest.Mock;
+        onPlayerError: jest.Mock;
+        openInMpv: jest.Mock;
+        openInVlc: jest.Mock;
+    };
+    let snackBar: { open: jest.Mock };
+    let store: { dispatch: jest.Mock };
+    let translateService: { instant: jest.Mock };
+    let service: ElectronService;
+
+    beforeEach(() => {
+        jest.spyOn(console, 'log').mockImplementation(() => undefined);
+        jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+        jest.spyOn(console, 'error').mockImplementation(() => undefined);
+
+        electronBridge = {
+            xtreamRequest: jest.fn(),
+            stalkerRequest: jest.fn(),
+            autoUpdatePlaylists: jest.fn(),
+            fetchPlaylistByUrl: jest.fn(),
+            onPlayerError: jest.fn(),
+            openInMpv: jest.fn().mockResolvedValue(session),
+            openInVlc: jest.fn().mockResolvedValue(session),
+        };
+        snackBar = {
+            open: jest.fn(() => ({
+                onAction: () => of(undefined),
+            })),
+        };
+        store = { dispatch: jest.fn() };
+        translateService = { instant: jest.fn((key: string) => key) };
+
+        Object.defineProperty(window, 'electron', {
+            configurable: true,
+            value: electronBridge,
+        });
+
+        TestBed.configureTestingModule({
+            providers: [
+                ElectronService,
+                {
+                    provide: MatSnackBar,
+                    useValue: snackBar,
+                },
+                {
+                    provide: DialogService,
+                    useValue: {
+                        openConfirmDialog: jest.fn(),
+                    },
+                },
+                {
+                    provide: SettingsStore,
+                    useValue: {
+                        getTrustOptions: jest.fn(() => ({
+                            trustedPrivateNetworkEpgUrls: [],
+                            trustedInsecureTlsHosts: [],
+                        })),
+                        getSettings: jest.fn(() => ({
+                            trustedInsecureTlsHosts: [],
+                        })),
+                        updateSettings: jest.fn().mockResolvedValue(undefined),
+                    },
+                },
+                {
+                    provide: Store,
+                    useValue: store,
+                },
+                {
+                    provide: TranslateService,
+                    useValue: translateService,
+                },
+            ],
+        });
+
+        service = TestBed.inject(ElectronService);
+    });
+
+    afterEach(() => {
+        Object.defineProperty(window, 'electron', {
+            configurable: true,
+            value: undefined,
+        });
+        jest.restoreAllMocks();
+    });
+
+    it('protects all startup-refresh sources until the request settles, including failure', async () => {
+        let reject!: (error: Error) => void;
+        electronBridge.autoUpdatePlaylists.mockReturnValue(
+            new Promise((_, r) => {
+                reject = r;
+            })
+        );
+        const pending = service.sendIpcEvent(AUTO_UPDATE_PLAYLISTS, [
+            { _id: 'startup' },
+        ]);
+        const activity = TestBed.inject(SourceActivityService);
+        expect(activity.isBusy('startup')).toBe(true);
+        expect(activity.isBusy('other')).toBe(false);
+        reject(new Error('refresh failed'));
+        await expect(pending).rejects.toThrow('refresh failed');
+        expect(activity.isBusy('startup')).toBe(false);
+    });
+
+    it.each([401, 403])(
+        'preserves a health HTTP %s rejection without global error handling',
+        async (status) => {
+            const error = new Error(
+                `Error invoking remote method: Error: HTTP Error ${status}`
+            );
+            electronBridge.xtreamRequest.mockRejectedValue(error);
+            const post = jest.spyOn(window, 'postMessage');
+            await expect(
+                service.sendIpcEvent(XTREAM_REQUEST, {
+                    url: 'https://provider.example',
+                    params: {},
+                    probe: {
+                        requestId: 'health',
+                        deadlineAt: Date.now() + 5000,
+                    },
+                })
+            ).rejects.toBe(error);
+            expect(snackBar.open).not.toHaveBeenCalled();
+            expect(post).not.toHaveBeenCalled();
+        }
+    );
+    describe('resolved portal request failures', () => {
+        // The main process resolves a cancellation or an HTTP 401/403 as this
+        // envelope instead of rejecting (Electron logs every rejected handler
+        // as an error); the service must hand its callers the error they
+        // already classify, never a successful empty answer.
+        const cancelledEnvelope = {
+            portalRequestFailure: { kind: 'cancelled' },
+        };
+        const refusedEnvelope = (status: number) => ({
+            portalRequestFailure: {
+                kind: 'http',
+                status,
+                statusText: status === 401 ? 'Unauthorized' : 'Forbidden',
+            },
+        });
+        const stalkerPayload = {
+            url: 'http://portal.example/portal.php',
+            macAddress: '00:1A:79:00:00:01',
+            params: { type: 'stb', action: 'get_profile' },
+        };
+        const xtreamPayload = {
+            url: 'https://provider.example',
+            params: {
+                username: 'user',
+                password: 'pass',
+                action: 'get_live_streams',
+            },
+        };
+
+        it('rethrows a cancelled Stalker request as an AbortError, silently', async () => {
+            electronBridge.stalkerRequest.mockResolvedValue(cancelledEnvelope);
+
+            await expect(
+                service.sendIpcEvent(STALKER_REQUEST, stalkerPayload)
+            ).rejects.toMatchObject({
+                name: 'AbortError',
+                message: 'Stalker request cancelled',
+            });
+            expect(snackBar.open).not.toHaveBeenCalled();
+            expect(console.error).not.toHaveBeenCalled();
+        });
+
+        it.each([401, 403])(
+            'rethrows a Stalker HTTP %s carrying the status and reports it',
+            async (status) => {
+                electronBridge.stalkerRequest.mockResolvedValue(
+                    refusedEnvelope(status)
+                );
+
+                await expect(
+                    service.sendIpcEvent(STALKER_REQUEST, stalkerPayload)
+                ).rejects.toMatchObject({
+                    message: `HTTP Error ${status}: ${status === 401 ? 'Unauthorized' : 'Forbidden'}`,
+                    status,
+                });
+                expect(snackBar.open).toHaveBeenCalledTimes(1);
+                expect(snackBar.open).toHaveBeenCalledWith(
+                    'PORTALS.REQUEST_ERRORS.STALKER',
+                    'CLOSE',
+                    { duration: 5000 }
+                );
+                // The toast carries the portal's own error, not Electron's
+                // "Error invoking remote method" wrapper.
+                expect(translateService.instant).toHaveBeenCalledWith(
+                    'PORTALS.REQUEST_ERRORS.STALKER',
+                    {
+                        message: `HTTP Error ${status}: ${status === 401 ? 'Unauthorized' : 'Forbidden'}`,
+                        status,
+                    }
+                );
+            }
+        );
+
+        it('keeps a silent Stalker probe refusal off the snackbar', async () => {
+            electronBridge.stalkerRequest.mockResolvedValue(
+                refusedEnvelope(403)
+            );
+
+            await expect(
+                service.sendIpcEvent(STALKER_REQUEST, {
+                    ...stalkerPayload,
+                    silent: true,
+                })
+            ).rejects.toMatchObject({ status: 403 });
+            expect(snackBar.open).not.toHaveBeenCalled();
+        });
+
+        it('rethrows a cancelled Xtream health probe as an AbortError', async () => {
+            electronBridge.xtreamRequest.mockResolvedValue(cancelledEnvelope);
+            const post = jest.spyOn(window, 'postMessage');
+
+            await expect(
+                service.sendIpcEvent(XTREAM_REQUEST, {
+                    ...xtreamPayload,
+                    probe: {
+                        requestId: 'health',
+                        deadlineAt: Date.now() + 5000,
+                    },
+                })
+            ).rejects.toMatchObject({ name: 'AbortError' });
+            expect(post).not.toHaveBeenCalled();
+            expect(snackBar.open).not.toHaveBeenCalled();
+        });
+
+        it.each([401, 403])(
+            'rethrows an Xtream health-probe HTTP %s with the status in its message',
+            async (status) => {
+                electronBridge.xtreamRequest.mockResolvedValue(
+                    refusedEnvelope(status)
+                );
+
+                await expect(
+                    service.sendIpcEvent(XTREAM_REQUEST, {
+                        ...xtreamPayload,
+                        probe: {
+                            requestId: 'health',
+                            deadlineAt: Date.now() + 5000,
+                        },
+                    })
+                ).rejects.toMatchObject({
+                    message: expect.stringContaining(`HTTP Error ${status}`),
+                    status,
+                });
+                expect(snackBar.open).not.toHaveBeenCalled();
+            }
+        );
+
+        it('reports a cancelled Xtream request as a silent ERROR result, never a payload', async () => {
+            electronBridge.xtreamRequest.mockResolvedValue(cancelledEnvelope);
+            const post = jest.spyOn(window, 'postMessage');
+
+            const result = await service.sendIpcEvent(
+                XTREAM_REQUEST,
+                xtreamPayload
+            );
+
+            expect(result).toEqual({
+                type: ERROR,
+                status: 499,
+                message: 'Xtream request cancelled',
+            });
+            expect(result).not.toHaveProperty('payload');
+            expect(post).not.toHaveBeenCalled();
+            expect(snackBar.open).not.toHaveBeenCalled();
+            expect(console.error).not.toHaveBeenCalled();
+        });
+
+        it.each([401, 403])(
+            'turns an Xtream HTTP %s into an ERROR result carrying the status',
+            async (status) => {
+                electronBridge.xtreamRequest.mockResolvedValue(
+                    refusedEnvelope(status)
+                );
+
+                const result = await service.sendIpcEvent(
+                    XTREAM_REQUEST,
+                    xtreamPayload
+                );
+
+                expect(result).toEqual({
+                    type: ERROR,
+                    status,
+                    message: `HTTP Error ${status}: ${status === 401 ? 'Unauthorized' : 'Forbidden'}`,
+                });
+                expect(snackBar.open).toHaveBeenCalledTimes(1);
+                expect(translateService.instant).toHaveBeenCalledWith(
+                    'PORTALS.REQUEST_ERRORS.XTREAM',
+                    { message: expect.stringContaining(`HTTP Error ${status}`) }
+                );
+            }
+        );
+
+        it('passes an ordinary Stalker answer through untouched', async () => {
+            const answer = { js: { id: 7, portalRequestFailure: 'field' } };
+            electronBridge.stalkerRequest.mockResolvedValue(answer);
+
+            await expect(
+                service.sendIpcEvent(STALKER_REQUEST, stalkerPayload)
+            ).resolves.toBe(answer);
+        });
+    });
+
+    it('keeps health success request-local without broadcasting catalog responses', async () => {
+        const response = { payload: { user_info: { status: 'Active' } } };
+        electronBridge.xtreamRequest.mockResolvedValue(response);
+        const post = jest.spyOn(window, 'postMessage');
+        expect(
+            await service.sendIpcEvent(XTREAM_REQUEST, {
+                url: 'https://provider.example',
+                params: {},
+                probe: { requestId: 'health', deadlineAt: Date.now() + 5000 },
+            })
+        ).toEqual(response);
+        expect(post).not.toHaveBeenCalled();
+    });
+
+    it('preserves connection-test errors across the renderer bridge', async () => {
+        const response = {
+            connectionFailure: { kind: 'tls', canTryHttp: false },
+        };
+        electronBridge.xtreamRequest.mockResolvedValue(response);
+        const result = await service.sendIpcEvent(XTREAM_REQUEST, {
+            url: 'https://provider.example',
+            params: {},
+            connectionTest: true,
+        });
+        expect(result).toEqual(response);
+        expect(electronBridge.xtreamRequest).toHaveBeenCalledWith(
+            expect.objectContaining({ connectionTest: true })
+        );
+        expect(snackBar.open).not.toHaveBeenCalled();
+    });
+
+    it('ignores URL imports without a payload instead of calling the Electron bridge', async () => {
+        await service.sendIpcEvent(PLAYLIST_PARSE_BY_URL);
+
+        expect(electronBridge.fetchPlaylistByUrl).not.toHaveBeenCalled();
+    });
+
+    it('forwards URL import User-Agent alongside trust options and dispatches the persisted value', async () => {
+        const playlist = {
+            _id: 'ua-playlist',
+            userAgent: 'IPTVnator-Test/1.0',
+        };
+        electronBridge.fetchPlaylistByUrl.mockResolvedValue(playlist);
+        service.sendIpcEvent(PLAYLIST_PARSE_BY_URL, {
+            url: 'https://example.test/list.m3u',
+            userAgent: playlist.userAgent,
+        });
+        await Promise.resolve();
+        expect(electronBridge.fetchPlaylistByUrl).toHaveBeenCalledWith(
+            'https://example.test/list.m3u',
+            undefined,
+            {
+                trustedPrivateNetworkEpgUrls: [],
+                trustedInsecureTlsHosts: [],
+                userAgent: playlist.userAgent,
+            }
+        );
+        expect(store.dispatch).toHaveBeenCalledWith(
+            PlaylistActions.handleAddingPlaylistByUrl({
+                isTemporary: false,
+                playlist: playlist as Playlist,
+            })
+        );
+    });
+
+    it('redacts credentials from backend player errors before logging', () => {
+        const secret = 'player-error-token-secret';
+        const listener = electronBridge.onPlayerError.mock.calls[0][0];
+
+        listener({
+            player: 'MPV',
+            code: null,
+            error: `Request failed: token=${secret}&channel=news`,
+        });
+
+        const output = JSON.stringify((console.error as jest.Mock).mock.calls);
+        expect(output).not.toContain(secret);
+        expect(output).toContain('channel=news');
+    });
+
+    it('translates a classified player error by its code', () => {
+        const listener = electronBridge.onPlayerError.mock.calls[0][0];
+
+        listener({ player: 'VLC', code: 'access-denied', error: 'HTTP 403' });
+
+        expect(translateService.instant).toHaveBeenCalledWith(
+            'EXTERNAL_PLAYER.ERRORS.ACCESS_DENIED',
+            { player: 'VLC', error: 'HTTP 403' }
+        );
+        expect(snackBar.open).toHaveBeenCalledWith(
+            'EXTERNAL_PLAYER.ERRORS.ACCESS_DENIED',
+            'CLOSE',
+            expect.objectContaining({ duration: 7000 })
+        );
+    });
+
+    it('keeps unclassified player output in the translated message', () => {
+        const listener = electronBridge.onPlayerError.mock.calls[0][0];
+
+        listener({ player: 'MPV', code: null, error: 'demuxer gave up' });
+
+        expect(translateService.instant).toHaveBeenCalledWith(
+            'EXTERNAL_PLAYER.ERRORS.UNKNOWN',
+            { player: 'MPV', error: 'demuxer gave up' }
+        );
+    });
+
+    it('translates a rejected launch by the code the main process tagged', async () => {
+        electronBridge.openInVlc.mockRejectedValueOnce(
+            new Error(
+                `Error invoking remote method 'OPEN_VLC_PLAYER': Error: ${tagExternalPlayerError(
+                    'previous-closing',
+                    'Cannot launch player'
+                )}`
+            )
+        );
+
+        await expect(
+            service.sendIpcEvent('OPEN_VLC_PLAYER', {
+                url: 'https://example.test/live.m3u8',
+            })
+        ).rejects.toThrow('Cannot launch player');
+
+        expect(snackBar.open).toHaveBeenCalledWith(
+            'EXTERNAL_PLAYER.ERRORS.PREVIOUS_CLOSING',
+            'CLOSE',
+            { duration: 5000 }
+        );
+    });
+
+    it('shows a generic launch failure for an untagged rejection', async () => {
+        electronBridge.openInMpv.mockRejectedValueOnce(new Error('boom'));
+
+        await expect(
+            service.sendIpcEvent('OPEN_MPV_PLAYER', {
+                url: 'https://example.test/live.m3u8',
+            })
+        ).rejects.toThrow('boom');
+
+        expect(translateService.instant).toHaveBeenCalledWith(
+            'EXTERNAL_PLAYER.ERRORS.LAUNCH_FAILED',
+            { player: 'MPV' }
+        );
+    });
+
+    it('shows the trust-host action for Electron-wrapped security errors', async () => {
+        const securityPayload = {
+            code: ELECTRON_BRIDGE_SECURITY_ERROR_CODES.InvalidTlsCertificate,
+            host: 'playlist.local',
+            message: 'Certificate for this playlist host is invalid.',
+        };
+        electronBridge.fetchPlaylistByUrl.mockRejectedValue(
+            new Error(
+                `Error invoking remote method 'FETCH_PLAYLIST_BY_URL': Error: ${SECURITY_ERROR_PREFIX}${JSON.stringify(
+                    securityPayload
+                )}`
+            )
+        );
+
+        await service.sendIpcEvent(PLAYLIST_PARSE_BY_URL, {
+            url: 'https://playlist.local/list.m3u',
+        });
+        await Promise.resolve();
+
+        expect(snackBar.open).toHaveBeenCalledWith(
+            'HOME.URL_UPLOAD.ERROR_INVALID_TLS',
+            'HOME.URL_UPLOAD.TRUST_TLS_HOST',
+            { duration: 10000 }
+        );
+    });
+
+    it('preserves an absent MPV user-agent so backend fallback headers can apply', async () => {
+        await service.sendIpcEvent('OPEN_MPV_PLAYER', {
+            url: 'https://example.test/live.m3u8',
+            headers: {
+                'User-Agent': 'FallbackAgent/1.0',
+            },
+        });
+
+        expect(electronBridge.openInMpv).toHaveBeenCalledWith(
+            'https://example.test/live.m3u8',
+            '',
+            '',
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            {
+                'User-Agent': 'FallbackAgent/1.0',
+            }
+        );
+    });
+
+    it('preserves an absent VLC user-agent so backend fallback headers can apply', async () => {
+        await service.sendIpcEvent('OPEN_VLC_PLAYER', {
+            url: 'https://example.test/live.m3u8',
+            headers: {
+                'User-Agent': 'FallbackAgent/1.0',
+            },
+        });
+
+        expect(electronBridge.openInVlc).toHaveBeenCalledWith(
+            'https://example.test/live.m3u8',
+            '',
+            '',
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            {
+                'User-Agent': 'FallbackAgent/1.0',
+            }
+        );
+    });
+
+    describe('startup playlist auto-refresh feedback', () => {
+        function createPlaylist(id: string, title: string): Playlist {
+            return {
+                _id: id,
+                autoRefresh: true,
+                count: 1,
+                importDate: '2026-07-01T00:00:00.000Z',
+                lastUsage: '2026-07-01T00:00:00.000Z',
+                title,
+            };
+        }
+
+        function outcome(
+            playlistId: string,
+            title: string,
+            status: AutoUpdatePlaylistStatus
+        ): AutoUpdatePlaylistOutcome {
+            return { playlistId, status, title };
+        }
+
+        async function runAutoUpdate(
+            result: AutoUpdatePlaylistsResult
+        ): Promise<void> {
+            electronBridge.autoUpdatePlaylists.mockResolvedValue(result);
+
+            await service.sendIpcEvent(
+                AUTO_UPDATE_PLAYLISTS,
+                result.outcomes.map((entry) =>
+                    createPlaylist(entry.playlistId, entry.title)
+                )
+            );
+        }
+
+        it('reports success only when every requested playlist was refreshed', async () => {
+            const refreshed = [
+                createPlaylist('first', 'First'),
+                createPlaylist('second', 'Second'),
+            ];
+
+            await runAutoUpdate({
+                playlists: refreshed,
+                outcomes: [
+                    outcome('first', 'First', 'updated'),
+                    outcome('second', 'Second', 'updated'),
+                ],
+            });
+
+            expect(store.dispatch).toHaveBeenCalledWith(
+                PlaylistActions.updateManyPlaylists({ playlists: refreshed })
+            );
+            expect(translateService.instant).toHaveBeenCalledWith(
+                'HOME.PLAYLISTS.AUTO_REFRESH_UPDATE_SUCCESS',
+                { total: 2, updated: 2, failed: 0, skipped: 0 }
+            );
+            expect(snackBar.open).toHaveBeenCalledWith(
+                'HOME.PLAYLISTS.AUTO_REFRESH_UPDATE_SUCCESS',
+                undefined,
+                { duration: 2000 }
+            );
+        });
+
+        it('says the refresh was incomplete when only some playlists updated', async () => {
+            const refreshed = [createPlaylist('reachable', 'Reachable')];
+
+            await runAutoUpdate({
+                playlists: refreshed,
+                outcomes: [
+                    outcome('reachable', 'Reachable', 'updated'),
+                    outcome('unreachable', 'Unreachable', 'failed'),
+                ],
+            });
+
+            // Only the successfully refreshed playlists reach the store.
+            expect(store.dispatch).toHaveBeenCalledWith(
+                PlaylistActions.updateManyPlaylists({ playlists: refreshed })
+            );
+            expect(translateService.instant).toHaveBeenCalledWith(
+                'HOME.PLAYLISTS.AUTO_REFRESH_UPDATE_PARTIAL',
+                { total: 2, updated: 1, failed: 1, skipped: 0 }
+            );
+            expect(snackBar.open).toHaveBeenCalledWith(
+                'HOME.PLAYLISTS.AUTO_REFRESH_UPDATE_PARTIAL',
+                'CLOSE',
+                { duration: 6000, panelClass: ['error-snackbar'] }
+            );
+            expect(
+                JSON.stringify((console.warn as jest.Mock).mock.calls)
+            ).toContain('Unreachable (failed)');
+        });
+
+        it('accounts for skipped playlists in a batch that also failed', async () => {
+            await runAutoUpdate({
+                playlists: [createPlaylist('reachable', 'Reachable')],
+                outcomes: [
+                    outcome('reachable', 'Reachable', 'updated'),
+                    outcome('unreachable', 'Unreachable', 'failed'),
+                    outcome('sourceless', 'Sourceless', 'skipped'),
+                ],
+            });
+
+            // The plain partial message only names updated/total/failed, which
+            // would leave the skipped playlist unexplained.
+            expect(translateService.instant).toHaveBeenCalledWith(
+                'HOME.PLAYLISTS.AUTO_REFRESH_UPDATE_PARTIAL_WITH_SKIPPED',
+                { total: 3, updated: 1, failed: 1, skipped: 1 }
+            );
+            expect(snackBar.open).toHaveBeenCalledWith(
+                'HOME.PLAYLISTS.AUTO_REFRESH_UPDATE_PARTIAL_WITH_SKIPPED',
+                'CLOSE',
+                { duration: 6000, panelClass: ['error-snackbar'] }
+            );
+        });
+
+        it('reports a full failure when no playlist could be refreshed', async () => {
+            await runAutoUpdate({
+                playlists: [],
+                outcomes: [
+                    outcome('first', 'First', 'failed'),
+                    outcome('second', 'Second', 'failed'),
+                ],
+            });
+
+            expect(translateService.instant).toHaveBeenCalledWith(
+                'HOME.PLAYLISTS.AUTO_REFRESH_UPDATE_FAILED',
+                { total: 2, updated: 0, failed: 2, skipped: 0 }
+            );
+            expect(snackBar.open).toHaveBeenCalledWith(
+                'HOME.PLAYLISTS.AUTO_REFRESH_UPDATE_FAILED',
+                'CLOSE',
+                { duration: 6000, panelClass: ['error-snackbar'] }
+            );
+        });
+
+        it('distinguishes playlists skipped for a missing source from failures', async () => {
+            await runAutoUpdate({
+                playlists: [createPlaylist('reachable', 'Reachable')],
+                outcomes: [
+                    outcome('reachable', 'Reachable', 'updated'),
+                    outcome('sourceless', 'Sourceless', 'skipped'),
+                ],
+            });
+
+            expect(translateService.instant).toHaveBeenCalledWith(
+                'HOME.PLAYLISTS.AUTO_REFRESH_UPDATE_SKIPPED',
+                { total: 2, updated: 1, failed: 0, skipped: 1 }
+            );
+            expect(snackBar.open).toHaveBeenCalledWith(
+                'HOME.PLAYLISTS.AUTO_REFRESH_UPDATE_SKIPPED',
+                undefined,
+                { duration: 2000 }
+            );
+        });
+    });
+});

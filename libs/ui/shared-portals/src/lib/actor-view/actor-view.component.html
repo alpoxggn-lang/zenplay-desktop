@@ -1,0 +1,56 @@
+<div class="actor-view">
+    @if (isLoading()) {
+        <div class="actor-view__loading">
+            <mat-spinner diameter="48" />
+        </div>
+    } @else if (profile(); as person) {
+        <header class="actor-view__header">
+            @if (person.photoUrl) {
+                <img
+                    class="actor-view__photo"
+                    [src]="person.photoUrl"
+                    [alt]="person.name"
+                />
+            } @else {
+                <span class="actor-view__photo actor-view__photo--fallback">
+                    {{ person.name.charAt(0) }}
+                </span>
+            }
+            <div class="actor-view__meta">
+                <h1>{{ person.name }}</h1>
+                @if (person.birthday || person.deathday) {
+                    <p class="actor-view__born">
+                        @if (person.birthday) {
+                            {{ 'XTREAM.ACTOR_BORN' | translate }}
+                            {{ person.birthday }}
+                        }
+                        @if (person.deathday) {
+                            @if (person.birthday) {
+                                ·
+                            }
+                            {{ 'XTREAM.ACTOR_DIED' | translate }}
+                            {{ person.deathday }}
+                        }
+                        @if (person.placeOfBirth) {
+                            · {{ person.placeOfBirth }}
+                        }
+                    </p>
+                }
+                @if (person.biography) {
+                    <p class="actor-view__bio">{{ person.biography }}</p>
+                }
+            </div>
+        </header>
+
+        <app-title-results
+            headingKey="XTREAM.ACTOR_FILMOGRAPHY"
+            [items]="items()"
+            [isMatching]="isMatching()"
+            [showAvailabilityFilter]="showAvailabilityFilter()"
+            [showScopeToggle]="showScopeToggle()"
+            [scope]="scope()"
+            (scopeChanged)="scopeChanged.emit($event)"
+            (itemClicked)="itemClicked.emit($event)"
+        />
+    }
+</div>

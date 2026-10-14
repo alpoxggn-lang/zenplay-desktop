@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="es">
+    <head>
+        <meta charset="utf-8" />
+        <title>ZenPlay</title>
+        <base href="/" />
+
+        <meta
+            name="viewport"
+            content="width=device-width, initial-scale=1, viewport-fit=cover"
+        />
+        <meta name="theme-color" content="#070b1a" />
+        <meta
+            name="description"
+            content="Disfruta TV en vivo, películas y series con ZenPlay."
+        />
+        <meta name="apple-mobile-web-app-capable" content="yes" />
+        <meta
+            name="apple-mobile-web-app-status-bar-style"
+            content="black-translucent"
+        />
+        <meta name="apple-mobile-web-app-title" content="ZenPlay" />
+        <meta
+            http-equiv="Content-Security-Policy"
+            content="default-src 'self'; base-uri 'self'; object-src 'none'; frame-src https://www.youtube-nocookie.com; form-action 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' http: https: file: data: blob:; font-src 'self' data:; media-src 'self' http: https: file: data: blob:; connect-src 'self' http: https: ws: wss: blob: data:; worker-src 'self' blob:"
+        />
+        <meta property="og:type" content="website" />
+        <meta property="og:locale" content="es_MX" />
+        <meta property="og:title" content="ZenPlay" />
+        <meta
+            property="og:image"
+            content="assets/branding/zenplay-logo.png"
+        />
+        <meta
+            property="og:description"
+            content="Disfruta TV en vivo, películas y series con ZenPlay."
+        />
+        <link rel="manifest" href="manifest.webmanifest" />
+        <link
+            rel="apple-touch-icon"
+            sizes="180x180"
+            href="assets/branding/zenplay-apple-touch-icon.png"
+        />
+        <link
+            rel="icon"
+            type="image/png"
+            href="assets/branding/zenplay-logo.png"
+        />
+        <script src="assets/app-config.js" defer></script>
+        <style>
+            /* Branded splash while bundles load; main.ts removes it after bootstrap. */
+            #initial-splash {
+                position: fixed;
+                inset: 0;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+                gap: 18px;
+                background:
+                    radial-gradient(
+                        circle at 50% 40%,
+                        rgba(90, 50, 200, 0.24),
+                        transparent 42%
+                    ),
+                    #070b1a;
+                color: #e9ebff;
+                font-family:
+                    -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+                    'Helvetica Neue', Arial, sans-serif;
+                z-index: 99999;
+            }
+            #initial-splash .splash-logo {
+                width: 112px;
+                height: 112px;
+                object-fit: contain;
+                filter: drop-shadow(0 14px 28px rgba(69, 214, 255, 0.2));
+            }
+            #initial-splash .splash-mark {
+                font-size: 20px;
+                font-weight: 700;
+                letter-spacing: 0.03em;
+            }
+            #initial-splash .splash-spinner {
+                width: 28px;
+                height: 28px;
+                border: 3px solid rgba(184, 157, 255, 0.18);
+                border-top-color: #45d6ff;
+                border-radius: 50%;
+                animation: initial-splash-spin 0.9s linear infinite;
+            }
+            @keyframes initial-splash-spin {
+                to {
+                    transform: rotate(360deg);
+                }
+            }
+            @media (prefers-reduced-motion: reduce) {
+                #initial-splash .splash-spinner {
+                    animation: none;
+                    opacity: 0.6;
+                }
+            }
+        </style>
+    </head>
+    <body class="mat-app-background">
+        <div id="initial-splash" role="status" aria-label="Cargando ZenPlay">
+            <img
+                class="splash-logo"
+                src="assets/branding/zenplay-logo.png"
+                alt=""
+                aria-hidden="true"
+            />
+            <span class="splash-mark">ZenPlay</span>
+            <span class="splash-spinner" aria-hidden="true"></span>
+        </div>
+        <app-root></app-root>
+    </body>
+</html>

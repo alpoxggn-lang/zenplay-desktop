@@ -1,0 +1,1276 @@
+import {
+    ChangeDetectionStrategy,
+    Component,
+    input,
+    output,
+    signal,
+    ViewChild,
+} from '@angular/core';
+import { ComponentFixture, TestBed } from '@angular/core/testing';
+import { MatButtonToggleGroup } from '@angular/material/button-toggle';
+import { By } from '@angular/platform-browser';
+import { ActivatedRoute, convertToParamMap, Router } from '@angular/router';
+import { Store } from '@ngrx/store';
+import { TranslateModule } from '@ngx-translate/core';
+import { DialogService } from '@iptvnator/ui/components';
+import {
+    COLLECTION_VIEW_STATE_KEY,
+    CollectionScope,
+    FavoritesChannelSortMode,
+    OPEN_COLLECTION_DETAIL_STATE_KEY,
+    ScopeToggleService,
+    UnifiedCollectionItem,
+    WorkspaceViewCommandService,
+    LiveLayoutSidebarStateService,
+    liveSidebarStateStorageKey,
+} from '@iptvnator/portal/shared/util';
+import {
+    UnifiedFavoritesDataService,
+    UnifiedRecentDataService,
+} from '@iptvnator/portal/shared/data-access';
+import {
+    selectAllPlaylistsMeta,
+    selectPlaylistsLoadingFlag,
+} from '@iptvnator/m3u-state';
+import { RuntimeCapabilitiesService } from '@iptvnator/services';
+import { BehaviorSubject } from 'rxjs';
+import { PlaylistMeta } from '@iptvnator/shared/interfaces';
+import { COLLECTION_RELOAD_INDICATOR_DELAY_MS } from '@iptvnator/portal/shared/data-access';
+import { UnifiedCollectionPageComponent } from './unified-collection-page.component';
+import { UnifiedCollectionDetailDirective } from './unified-collection-detail.directive';
+import { UnifiedGridTabComponent } from './unified-grid-tab.component';
+import { UnifiedLiveTabComponent } from './unified-live-tab.component';
+
+@Component({
+    selector: 'app-unified-live-tab',
+    template: '',
+    changeDetection: ChangeDetectionStrategy.OnPush,
+})
+class StubUnifiedLiveTabComponent {
+    readonly items = input.required<UnifiedCollectionItem[]>();
+    readonly mode = input<'favorites' | 'recent'>('favorites');
+    readonly searchTerm = input('');
+    readonly autoOpenItem = input<unknown>(null);
+    readonly favoriteUids = input<ReadonlySet<string>>(new Set<string>());
+    readonly sortMode = input<FavoritesChannelSortMode>('custom');
+    readonly isSidebarCollapsed = input(false);
+    readonly reloading = input(false);
+
+    readonly removeItem = output<UnifiedCollectionItem>();
+    readonly favoriteToggled = output<UnifiedCollectionItem>();
+    readonly reorderItems = output<UnifiedCollectionItem[]>();
+    readonly itemPlayed = output<UnifiedCollectionItem>();
+    readonly autoOpenHandled = output<void>();
+    readonly restoreSidebarRequested = output<void>();
+}
+
+@Component({
+    selector: 'app-unified-grid-tab',
+    template: '',
+    changeDetection: ChangeDetectionStrategy.OnPush,
+})
+class StubUnifiedGridTabComponent {
+    readonly items = input.required<UnifiedCollectionItem[]>();
+    readonly mode = input<'favorites' | 'recent'>('favorites');
+    readonly contentType = input<'movie' | 'series'>('movie');
+    readonly searchTerm = input('');
+
+    readonly itemSelected = output<UnifiedCollectionItem>();
+    readonly removeItem = output<UnifiedCollectionItem>();
+}
+
+@Component({
+    template: `
+        <app-unified-collection-page
+            [mode]="mode"
+            [portalType]="portalType"
+            [defaultScope]="defaultScope"
+        >
+            <ng-template
+                unifiedCollectionDetail
+                let-item
+                let-seriesResume="seriesResume"
+            >
+                <div class="detail-probe">{{ item.name }}</div>
+                <div class="resume-probe">
+                    {{ seriesResume?.contentXtreamId }}
+                </div>
+            </ng-template>
+        </app-unified-collection-page>
+    `,
+    imports: [UnifiedCollectionDetailDirective, UnifiedCollectionPageComponent],
+    changeDetection: ChangeDetectionStrategy.OnPush,
+})
+class HostUnifiedCollectionPageComponent {
+    mode: 'favorites' | 'recent' = 'favorites';
+    portalType?: string;
+    defaultScope: CollectionScope | undefined = 'all';
+
+    @ViewChild(UnifiedCollectionPageComponent)
+    pageComponent?: UnifiedCollectionPageComponent;
+}
+
+describe('UnifiedCollectionPageComponent', () => {
+    let fixture: ComponentFixture<UnifiedCollectionPageComponent>;
+    let route: ActivatedRoute & {
+        snapshot: {
+            paramMap: ReturnType<typeof convertToParamMap>;
+            queryParamMap: ReturnType<typeof convertToParamMap>;
+            queryParams: Record<string, unknown>;
+            params: Record<string, unknown>;
+            data: Record<string, unknown>;
+            parent: null;
+        };
+        paramMap: ReturnType<
+            BehaviorSubject<
+                ReturnType<typeof convertToParamMap>
+            >['asObservable']
+        >;
+        queryParamMap: ReturnType<
+            BehaviorSubject<
+                ReturnType<typeof convertToParamMap>
+            >['asObservable']
+        >;
+        pathFromRoot: ActivatedRoute[];
+    };
+    let routeParamMap$: BehaviorSubject<ReturnType<typeof convertToParamMap>>;
+    let routeQueryParamMap$: BehaviorSubject<
+        ReturnType<typeof convertToParamMap>
+    >;
+    let workspaceParamMap$: BehaviorSubject<
+        ReturnType<typeof convertToParamMap>
+    >;
+    const playlistsLoaded = signal(false);
+    const playlists = signal<PlaylistMeta[]>([]);
+    const favoritesData = {
+        addFavorite: jest.fn().mockResolvedValue(undefined),
+        getFavorites: jest.fn().mockResolvedValue([]),
+        clearFavorites: jest.fn().mockResolvedValue(undefined),
+        removeFavorite: jest.fn().mockResolvedValue(undefined),
+        reorder: jest.fn().mockResolvedValue(undefined),
+    };
+    const recentData = {
+        getRecentItems: jest.fn().mockResolvedValue([]),
+        removeRecentItem: jest.fn(),
+        removeRecentItemsBatch: jest.fn(),
+        clearRecentItems: jest.fn(),
+    };
+    const dialogService = {
+        openConfirmDialog: jest.fn(),
+    };
+    const workspaceViewCommands = {
+        registerCommand: jest.fn(),
+    };
+    const router = {
+        navigate: jest.fn().mockResolvedValue(true),
+        url: '/workspace/global-favorites',
+    };
+
+    function toParamMapRecord(
+        values: Record<string, unknown>
+    ): Record<string, string> {
+        return Object.fromEntries(
+            Object.entries(values)
+                .filter(([, value]) => value != null)
+                .map(([key, value]) => [key, String(value)])
+        );
+    }
+
+    function setRouteParams(params: Record<string, unknown>): void {
+        const nextParamMap = convertToParamMap(toParamMapRecord(params));
+        route.snapshot.params = params;
+        route.snapshot.paramMap = nextParamMap;
+        routeParamMap$.next(nextParamMap);
+    }
+
+    function setRouteQueryParams(queryParams: Record<string, unknown>): void {
+        const nextQueryParamMap = convertToParamMap(
+            toParamMapRecord(queryParams)
+        );
+        route.snapshot.queryParams = queryParams;
+        route.snapshot.queryParamMap = nextQueryParamMap;
+        routeQueryParamMap$.next(nextQueryParamMap);
+    }
+
+    beforeEach(async () => {
+        playlistsLoaded.set(false);
+        playlists.set([]);
+        jest.clearAllMocks();
+        workspaceViewCommands.registerCommand.mockReturnValue(jest.fn());
+        routeParamMap$ = new BehaviorSubject(convertToParamMap({}));
+        routeQueryParamMap$ = new BehaviorSubject(convertToParamMap({}));
+        workspaceParamMap$ = new BehaviorSubject(convertToParamMap({}));
+
+        const workspaceRoute = {
+            snapshot: {
+                paramMap: convertToParamMap({}),
+                params: {},
+            },
+            paramMap: workspaceParamMap$.asObservable(),
+        } as unknown as ActivatedRoute;
+
+        route = {
+            snapshot: {
+                paramMap: convertToParamMap({}),
+                queryParamMap: convertToParamMap({}),
+                queryParams: {},
+                params: {},
+                data: {},
+                parent: null,
+            },
+            paramMap: routeParamMap$.asObservable(),
+            queryParamMap: routeQueryParamMap$.asObservable(),
+            pathFromRoot: [],
+        } as unknown as ActivatedRoute & {
+            snapshot: {
+                paramMap: ReturnType<typeof convertToParamMap>;
+                queryParamMap: ReturnType<typeof convertToParamMap>;
+                queryParams: Record<string, unknown>;
+                params: Record<string, unknown>;
+                data: Record<string, unknown>;
+                parent: null;
+            };
+            paramMap: ReturnType<
+                BehaviorSubject<
+                    ReturnType<typeof convertToParamMap>
+                >['asObservable']
+            >;
+            queryParamMap: ReturnType<
+                BehaviorSubject<
+                    ReturnType<typeof convertToParamMap>
+                >['asObservable']
+            >;
+            pathFromRoot: ActivatedRoute[];
+        };
+        route.pathFromRoot = [workspaceRoute, route];
+
+        await TestBed.configureTestingModule({
+            imports: [
+                HostUnifiedCollectionPageComponent,
+                UnifiedCollectionPageComponent,
+                TranslateModule.forRoot(),
+            ],
+            providers: [
+                {
+                    provide: ActivatedRoute,
+                    useValue: route,
+                },
+                {
+                    provide: Router,
+                    useValue: router,
+                },
+                {
+                    provide: Store,
+                    useValue: {
+                        selectSignal: jest.fn((selector: unknown) => {
+                            if (selector === selectAllPlaylistsMeta) {
+                                return playlists;
+                            }
+                            if (selector === selectPlaylistsLoadingFlag) {
+                                return playlistsLoaded;
+                            }
+                            return signal(null);
+                        }),
+                    },
+                },
+                {
+                    provide: ScopeToggleService,
+                    useValue: {
+                        getScope: jest.fn(() => signal<CollectionScope>('all')),
+                        setScope: jest.fn(),
+                    },
+                },
+                {
+                    provide: UnifiedFavoritesDataService,
+                    useValue: favoritesData,
+                },
+                {
+                    provide: UnifiedRecentDataService,
+                    useValue: recentData,
+                },
+                {
+                    provide: DialogService,
+                    useValue: dialogService,
+                },
+                {
+                    provide: WorkspaceViewCommandService,
+                    useValue: workspaceViewCommands,
+                },
+                {
+                    provide: RuntimeCapabilitiesService,
+                    useValue: {
+                        supportsEpg: false,
+                    },
+                },
+            ],
+        })
+            .overrideComponent(UnifiedCollectionPageComponent, {
+                remove: {
+                    imports: [UnifiedGridTabComponent, UnifiedLiveTabComponent],
+                },
+                add: {
+                    imports: [
+                        StubUnifiedGridTabComponent,
+                        StubUnifiedLiveTabComponent,
+                    ],
+                },
+            })
+            .compileComponents();
+
+        window.history.replaceState({}, document.title);
+        fixture = TestBed.createComponent(UnifiedCollectionPageComponent);
+        fixture.componentRef.setInput('mode', 'favorites');
+        fixture.componentRef.setInput('defaultScope', 'all');
+    });
+
+    it('uses compact loading rows when the runtime has no EPG support', () => {
+        fixture.detectChanges();
+
+        expect(
+            fixture.nativeElement.querySelector(
+                '.channel-list-item-skeleton.compact'
+            )
+        ).not.toBeNull();
+        expect(
+            fixture.nativeElement.querySelector(
+                '.channel-list-item-skeleton:not(.compact)'
+            )
+        ).toBeNull();
+    });
+
+    it('reloads favorites after playlist hydration completes', async () => {
+        fixture.detectChanges();
+        await fixture.whenStable();
+
+        expect(favoritesData.getFavorites).toHaveBeenCalledTimes(1);
+
+        playlists.set([
+            {
+                _id: 'xtream-1',
+                title: 'Xtream One',
+                count: 1,
+                importDate: '2026-04-03T10:00:00.000Z',
+                autoRefresh: false,
+                serverUrl: 'https://example.com',
+                favorites: ['fav-1'],
+            } as PlaylistMeta,
+        ]);
+        playlistsLoaded.set(true);
+
+        fixture.detectChanges();
+        await fixture.whenStable();
+
+        expect(favoritesData.getFavorites).toHaveBeenCalledTimes(2);
+        expect(favoritesData.getFavorites).toHaveBeenLastCalledWith(
+            'all',
+            undefined,
+            undefined
+        );
+    });
+
+    it('prefers the route default scope over the persisted collection scope', async () => {
+        setRouteParams({ id: 'playlist-1' });
+        playlistsLoaded.set(true);
+        fixture.componentRef.setInput('portalType', 'm3u');
+        fixture.componentRef.setInput('defaultScope', 'playlist');
+
+        fixture.detectChanges();
+        await fixture.whenStable();
+
+        expect(favoritesData.getFavorites).toHaveBeenCalledTimes(1);
+        expect(favoritesData.getFavorites).toHaveBeenLastCalledWith(
+            'playlist',
+            'playlist-1',
+            'm3u'
+        );
+    });
+
+    it('does not reload when local item state changes on empty playlist favorites', async () => {
+        setRouteParams({ id: 'playlist-1' });
+        setRouteQueryParams({ scope: 'playlist' });
+        playlistsLoaded.set(true);
+        playlists.set([
+            {
+                _id: 'playlist-1',
+                title: 'Playlist One',
+                count: 0,
+                importDate: '2026-04-05T20:00:00.000Z',
+                autoRefresh: false,
+                favorites: [],
+            } as PlaylistMeta,
+        ]);
+
+        fixture.componentRef.setInput('portalType', 'm3u');
+        fixture.componentRef.setInput('defaultScope', undefined);
+
+        fixture.detectChanges();
+        await fixture.whenStable();
+
+        expect(favoritesData.getFavorites).toHaveBeenCalledTimes(1);
+        expect(favoritesData.getFavorites).toHaveBeenLastCalledWith(
+            'playlist',
+            'playlist-1',
+            'm3u'
+        );
+
+        fixture.componentInstance.allItems.set([]);
+        fixture.detectChanges();
+        await fixture.whenStable();
+
+        expect(favoritesData.getFavorites).toHaveBeenCalledTimes(1);
+    });
+
+    it('reloads favorites when the playlist id changes in place', async () => {
+        setRouteParams({ id: 'playlist-1' });
+        setRouteQueryParams({ scope: 'playlist' });
+        playlistsLoaded.set(true);
+        fixture.componentRef.setInput('portalType', 'm3u');
+        fixture.componentRef.setInput('defaultScope', undefined);
+
+        fixture.detectChanges();
+        await fixture.whenStable();
+
+        expect(favoritesData.getFavorites).toHaveBeenCalledTimes(1);
+        expect(favoritesData.getFavorites).toHaveBeenLastCalledWith(
+            'playlist',
+            'playlist-1',
+            'm3u'
+        );
+
+        setRouteParams({ id: 'playlist-2' });
+        fixture.detectChanges();
+        await fixture.whenStable();
+
+        expect(favoritesData.getFavorites).toHaveBeenCalledTimes(2);
+        expect(favoritesData.getFavorites).toHaveBeenLastCalledWith(
+            'playlist',
+            'playlist-2',
+            'm3u'
+        );
+    });
+
+    it('reloads recent items when the playlist id changes in place', async () => {
+        setRouteParams({ id: 'playlist-1' });
+        setRouteQueryParams({ scope: 'playlist' });
+        playlistsLoaded.set(true);
+        fixture.componentRef.setInput('mode', 'recent');
+        fixture.componentRef.setInput('portalType', 'm3u');
+        fixture.componentRef.setInput('defaultScope', undefined);
+
+        fixture.detectChanges();
+        await fixture.whenStable();
+
+        expect(recentData.getRecentItems).toHaveBeenCalledTimes(1);
+        expect(recentData.getRecentItems).toHaveBeenLastCalledWith(
+            'playlist',
+            'playlist-1',
+            'm3u'
+        );
+
+        setRouteParams({ id: 'playlist-2' });
+        fixture.detectChanges();
+        await fixture.whenStable();
+
+        expect(recentData.getRecentItems).toHaveBeenCalledTimes(2);
+        expect(recentData.getRecentItems).toHaveBeenLastCalledWith(
+            'playlist',
+            'playlist-2',
+            'm3u'
+        );
+    });
+
+    it('passes favorite state to recent live rows and toggles favorites without removing the row', async () => {
+        const recentItem = {
+            uid: 'm3u::playlist-1::https://example.com/one.m3u8',
+            name: 'Recent One',
+            contentType: 'live',
+            sourceType: 'm3u',
+            playlistId: 'playlist-1',
+            playlistName: 'Playlist One',
+            streamUrl: 'https://example.com/one.m3u8',
+        } satisfies UnifiedCollectionItem;
+        recentData.getRecentItems.mockResolvedValueOnce([recentItem]);
+        favoritesData.getFavorites.mockResolvedValueOnce([recentItem]);
+
+        fixture.componentRef.setInput('mode', 'recent');
+        fixture.detectChanges();
+        await fixture.whenStable();
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+        fixture.componentInstance.isLoading.set(false);
+        fixture.componentInstance.selectedContentType.set('live');
+        fixture.componentInstance.allItems.set([recentItem]);
+        fixture.componentInstance.favoriteUidSet.set(
+            new Set<string>([recentItem.uid])
+        );
+        fixture.detectChanges();
+
+        const liveTab = fixture.debugElement.query(
+            By.directive(StubUnifiedLiveTabComponent)
+        ).componentInstance as StubUnifiedLiveTabComponent;
+
+        expect(liveTab.favoriteUids().has(recentItem.uid)).toBe(true);
+
+        liveTab.favoriteToggled.emit(recentItem);
+        await fixture.whenStable();
+
+        expect(favoritesData.removeFavorite).toHaveBeenCalledWith(recentItem);
+        expect(
+            fixture.componentInstance.favoriteUidSet().has(recentItem.uid)
+        ).toBe(false);
+        expect(fixture.componentInstance.allItems()).toEqual([recentItem]);
+
+        liveTab.favoriteToggled.emit(recentItem);
+        await fixture.whenStable();
+
+        expect(favoritesData.addFavorite).toHaveBeenCalledWith(recentItem);
+        expect(
+            fixture.componentInstance.favoriteUidSet().has(recentItem.uid)
+        ).toBe(true);
+        expect(fixture.componentInstance.allItems()).toEqual([recentItem]);
+    });
+
+    it('toggles the collection live rail with Cmd/Ctrl+B only while the live tab is on screen', async () => {
+        const recentItem = {
+            uid: 'm3u::playlist-1::https://example.com/one.m3u8',
+            name: 'Recent One',
+            contentType: 'live',
+            sourceType: 'm3u',
+            playlistId: 'playlist-1',
+            playlistName: 'Playlist One',
+            streamUrl: 'https://example.com/one.m3u8',
+        } satisfies UnifiedCollectionItem;
+        recentData.getRecentItems.mockResolvedValueOnce([recentItem]);
+        const sidebarState = TestBed.inject(LiveLayoutSidebarStateService);
+        sidebarState.setState('collection', 'expanded');
+
+        fixture.componentRef.setInput('mode', 'recent');
+        fixture.detectChanges();
+        await fixture.whenStable();
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+        fixture.componentInstance.isLoading.set(false);
+        fixture.componentInstance.selectedContentType.set('live');
+        fixture.componentInstance.allItems.set([recentItem]);
+        fixture.detectChanges();
+
+        const press = () => {
+            const event = new KeyboardEvent('keydown', {
+                key: 'b',
+                ctrlKey: true,
+                cancelable: true,
+                bubbles: true,
+            });
+            document.dispatchEvent(event);
+            return event;
+        };
+
+        expect(press().defaultPrevented).toBe(true);
+        expect(sidebarState.isCollapsedFor('collection')()).toBe(true);
+        expect(sidebarState.isCollapsedFor('m3u')()).toBe(false);
+
+        // Not on the movies grid: there is no rail to hide there.
+        fixture.componentInstance.selectedContentType.set('movie');
+        fixture.detectChanges();
+        expect(press().defaultPrevented).toBe(false);
+        expect(sidebarState.isCollapsedFor('collection')()).toBe(true);
+
+        sidebarState.setState('collection', 'expanded');
+        localStorage.removeItem(liveSidebarStateStorageKey('collection'));
+    });
+
+    it('removes one recent live row through the live tab remove event', async () => {
+        const recentItems = [
+            {
+                uid: 'm3u::playlist-1::https://example.com/one.m3u8',
+                name: 'Recent One',
+                contentType: 'live',
+                sourceType: 'm3u',
+                playlistId: 'playlist-1',
+                playlistName: 'Playlist One',
+                streamUrl: 'https://example.com/one.m3u8',
+            },
+            {
+                uid: 'xtream::playlist-2::live:42',
+                name: 'Recent Two',
+                contentType: 'live',
+                sourceType: 'xtream',
+                playlistId: 'playlist-2',
+                playlistName: 'Playlist Two',
+                xtreamId: 42,
+                contentId: 1001,
+            },
+        ] satisfies UnifiedCollectionItem[];
+        recentData.removeRecentItem.mockResolvedValue(undefined);
+        recentData.getRecentItems.mockResolvedValueOnce(recentItems);
+        favoritesData.getFavorites.mockResolvedValueOnce([]);
+
+        fixture.componentRef.setInput('mode', 'recent');
+        fixture.detectChanges();
+        await fixture.whenStable();
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+        fixture.componentInstance.isLoading.set(false);
+        fixture.componentInstance.selectedContentType.set('live');
+        fixture.componentInstance.allItems.set(recentItems);
+        fixture.detectChanges();
+
+        const liveTab = fixture.debugElement.query(
+            By.directive(StubUnifiedLiveTabComponent)
+        ).componentInstance as StubUnifiedLiveTabComponent;
+
+        liveTab.removeItem.emit(recentItems[0]);
+        await fixture.whenStable();
+
+        expect(recentData.removeRecentItem).toHaveBeenCalledWith(
+            recentItems[0]
+        );
+        expect(fixture.componentInstance.allItems()).toEqual([recentItems[1]]);
+    });
+
+    it('clears current favorites through the bulk clear service path', async () => {
+        const liveItems = [
+            {
+                uid: 'm3u::playlist-1::one',
+                name: 'Favorite One',
+                contentType: 'live',
+                sourceType: 'm3u',
+                playlistId: 'playlist-1',
+                playlistName: 'Playlist One',
+                streamUrl: 'https://example.com/one.m3u8',
+            },
+            {
+                uid: 'm3u::playlist-1::two',
+                name: 'Favorite Two',
+                contentType: 'live',
+                sourceType: 'm3u',
+                playlistId: 'playlist-1',
+                playlistName: 'Playlist One',
+                streamUrl: 'https://example.com/two.m3u8',
+            },
+        ] satisfies UnifiedCollectionItem[];
+        favoritesData.getFavorites.mockResolvedValueOnce(liveItems);
+
+        fixture.detectChanges();
+        await fixture.whenStable();
+
+        fixture.componentInstance.clearAllCurrent();
+        const [dialogConfig] = dialogService.openConfirmDialog.mock.calls.at(
+            -1
+        ) ?? [null];
+
+        expect(dialogConfig).toBeTruthy();
+
+        await dialogConfig.onConfirm();
+
+        expect(favoritesData.clearFavorites).toHaveBeenCalledTimes(1);
+        expect(favoritesData.clearFavorites).toHaveBeenCalledWith(liveItems);
+        expect(favoritesData.removeFavorite).not.toHaveBeenCalled();
+    });
+
+    it('registers a workspace command when the current view has actionable items', async () => {
+        fixture.detectChanges();
+        await fixture.whenStable();
+
+        fixture.componentInstance.allItems.set([
+            {
+                uid: 'm3u::playlist-1::one',
+                name: 'Favorite One',
+                contentType: 'live',
+                sourceType: 'm3u',
+                playlistId: 'playlist-1',
+                playlistName: 'Playlist One',
+                streamUrl: 'https://example.com/one.m3u8',
+            },
+        ]);
+        TestBed.flushEffects();
+
+        expect(workspaceViewCommands.registerCommand).toHaveBeenCalledWith(
+            expect.objectContaining({
+                id: 'unified-collection-clear-current-favorites',
+                group: 'view',
+                icon: 'delete_sweep',
+                labelKey: 'WORKSPACE.SHELL.CLEAR_FAVORITES_TYPE',
+                descriptionKey:
+                    'WORKSPACE.SHELL.COMMANDS.CLEAR_CURRENT_VIEW_DESCRIPTION',
+            })
+        );
+    });
+
+    it('unregisters the workspace command when the current view becomes empty', async () => {
+        const unregister = jest.fn();
+        workspaceViewCommands.registerCommand.mockReturnValue(unregister);
+
+        fixture.detectChanges();
+        await fixture.whenStable();
+
+        fixture.componentInstance.allItems.set([
+            {
+                uid: 'm3u::playlist-1::one',
+                name: 'Favorite One',
+                contentType: 'live',
+                sourceType: 'm3u',
+                playlistId: 'playlist-1',
+                playlistName: 'Playlist One',
+                streamUrl: 'https://example.com/one.m3u8',
+            },
+        ]);
+        TestBed.flushEffects();
+
+        fixture.componentInstance.allItems.set([]);
+        TestBed.flushEffects();
+        fixture.detectChanges();
+
+        expect(unregister).toHaveBeenCalled();
+    });
+
+    it('reloads favorites when bulk clear persistence fails', async () => {
+        const liveItems = [
+            {
+                uid: 'm3u::playlist-1::one',
+                name: 'Favorite One',
+                contentType: 'live',
+                sourceType: 'm3u',
+                playlistId: 'playlist-1',
+                playlistName: 'Playlist One',
+                streamUrl: 'https://example.com/one.m3u8',
+            },
+        ] satisfies UnifiedCollectionItem[];
+        favoritesData.getFavorites
+            .mockResolvedValueOnce(liveItems)
+            .mockResolvedValueOnce(liveItems);
+        favoritesData.clearFavorites.mockRejectedValueOnce(
+            new Error('clear failed')
+        );
+
+        fixture.detectChanges();
+        await fixture.whenStable();
+
+        fixture.componentInstance.clearAllCurrent();
+        const [dialogConfig] = dialogService.openConfirmDialog.mock.calls.at(
+            -1
+        ) ?? [null];
+
+        await dialogConfig.onConfirm();
+
+        expect(favoritesData.getFavorites).toHaveBeenCalledTimes(2);
+        expect(favoritesData.getFavorites).toHaveBeenLastCalledWith(
+            'all',
+            undefined,
+            undefined
+        );
+        expect(fixture.componentInstance.allItems()).toEqual(liveItems);
+    });
+
+    it('opens inline detail from history state when a detail template is projected', async () => {
+        const item: UnifiedCollectionItem = {
+            uid: 'xtream::xtream-1::77',
+            name: 'Inline Movie',
+            contentType: 'movie',
+            sourceType: 'xtream',
+            playlistId: 'xtream-1',
+            playlistName: 'Xtream One',
+            xtreamId: 77,
+            categoryId: 12,
+        };
+        window.history.replaceState(
+            {
+                [OPEN_COLLECTION_DETAIL_STATE_KEY]: {
+                    item,
+                },
+            },
+            document.title
+        );
+
+        const hostFixture = TestBed.createComponent(
+            HostUnifiedCollectionPageComponent
+        );
+
+        hostFixture.detectChanges();
+        await hostFixture.whenStable();
+        hostFixture.detectChanges();
+
+        expect(
+            hostFixture.nativeElement.querySelector('.detail-probe')
+                ?.textContent
+        ).toContain('Inline Movie');
+        expect(
+            hostFixture.componentInstance.pageComponent?.selectedContentType()
+        ).toBe('movie');
+    });
+
+    it('exposes a dashboard series resume target to the inline detail host', async () => {
+        const item: UnifiedCollectionItem = {
+            uid: 'xtream::xtream-1::series:103',
+            name: 'Resume Series',
+            contentType: 'series',
+            sourceType: 'xtream',
+            playlistId: 'xtream-1',
+            playlistName: 'Xtream One',
+            xtreamId: 103,
+            categoryId: 3,
+        };
+        window.history.replaceState(
+            {
+                [OPEN_COLLECTION_DETAIL_STATE_KEY]: {
+                    item,
+                    seriesResume: {
+                        seriesXtreamId: 103,
+                        contentXtreamId: 2001,
+                        seasonNumber: 2,
+                        episodeNumber: 1,
+                    },
+                },
+            },
+            document.title
+        );
+
+        const hostFixture = TestBed.createComponent(
+            HostUnifiedCollectionPageComponent
+        );
+        hostFixture.detectChanges();
+        await hostFixture.whenStable();
+        hostFixture.detectChanges();
+
+        expect(
+            hostFixture.nativeElement.querySelector('.resume-probe')
+                ?.textContent
+        ).toContain('2001');
+        expect(
+            hostFixture.componentInstance.pageComponent?.selectedDetailSeriesResume()
+                ?.episodeNumber
+        ).toBe(1);
+        hostFixture.destroy();
+    });
+
+    it('redirects cross-provider detail selections with the resume target intact', async () => {
+        const originalUrl = router.url;
+        router.url = '/workspace/stalker/stalker-7/favorites';
+        try {
+            fixture.detectChanges();
+            await fixture.whenStable();
+            router.navigate.mockClear();
+
+            const seriesResume = {
+                seriesXtreamId: 103,
+                contentXtreamId: 2001,
+                seasonNumber: 2,
+                episodeNumber: 1,
+            };
+            fixture.componentInstance.selectedDetailSeriesResume.set(
+                seriesResume
+            );
+            fixture.componentInstance.selectedDetailItem.set({
+                uid: 'xtream::xtream-1::series:103',
+                name: 'Resume Series',
+                contentType: 'series',
+                sourceType: 'xtream',
+                playlistId: 'xtream-1',
+                playlistName: 'Xtream One',
+                xtreamId: 103,
+                categoryId: 3,
+            } satisfies UnifiedCollectionItem);
+            fixture.detectChanges();
+            await fixture.whenStable();
+
+            expect(router.navigate).toHaveBeenCalledWith(
+                ['/workspace', 'global-favorites'],
+                {
+                    state: {
+                        [OPEN_COLLECTION_DETAIL_STATE_KEY]: {
+                            item: expect.objectContaining({ xtreamId: 103 }),
+                            seriesResume,
+                        },
+                    },
+                }
+            );
+            expect(fixture.componentInstance.selectedDetailItem()).toBeNull();
+        } finally {
+            router.url = originalUrl;
+        }
+    });
+
+    it('restores collection scope and selected content type from history state', async () => {
+        setRouteParams({ id: 'playlist-1' });
+        playlistsLoaded.set(true);
+        fixture.destroy();
+        window.history.replaceState(
+            {
+                [COLLECTION_VIEW_STATE_KEY]: {
+                    selectedContentType: 'movie',
+                    scope: 'all',
+                },
+            },
+            document.title
+        );
+
+        const restoredFixture = TestBed.createComponent(
+            UnifiedCollectionPageComponent
+        );
+        restoredFixture.componentRef.setInput('mode', 'recent');
+        restoredFixture.componentRef.setInput('portalType', 'stalker');
+        restoredFixture.componentRef.setInput('defaultScope', 'playlist');
+
+        restoredFixture.detectChanges();
+        await restoredFixture.whenStable();
+
+        expect(restoredFixture.componentInstance.scope()).toBe('all');
+        expect(restoredFixture.componentInstance.selectedContentType()).toBe(
+            'movie'
+        );
+        expect(recentData.getRecentItems).toHaveBeenLastCalledWith(
+            'all',
+            'playlist-1',
+            'stalker'
+        );
+    });
+
+    it('closes inline detail when popstate removes the detail state', async () => {
+        const item: UnifiedCollectionItem = {
+            uid: 'stalker::stalker-1::series-9',
+            name: 'Inline Series',
+            contentType: 'series',
+            sourceType: 'stalker',
+            playlistId: 'stalker-1',
+            playlistName: 'Stalker One',
+            stalkerId: 'series-9',
+            categoryId: 'series',
+        };
+        const hostFixture = TestBed.createComponent(
+            HostUnifiedCollectionPageComponent
+        );
+
+        hostFixture.detectChanges();
+        await hostFixture.whenStable();
+        hostFixture.componentInstance.pageComponent?.onGridItemSelected(item);
+        hostFixture.detectChanges();
+
+        expect(
+            hostFixture.nativeElement.querySelector('.detail-probe')
+                ?.textContent
+        ).toContain('Inline Series');
+
+        window.history.replaceState({}, document.title);
+        window.dispatchEvent(new PopStateEvent('popstate'));
+        await hostFixture.whenStable();
+        hostFixture.detectChanges();
+
+        expect(
+            hostFixture.nativeElement.querySelector('.detail-probe')
+        ).toBeNull();
+    });
+
+    it('routes cross-provider collection detail opens through the global collection route', async () => {
+        const item: UnifiedCollectionItem = {
+            uid: 'xtream::xtream-1::77',
+            name: 'Cross Provider Movie',
+            contentType: 'movie',
+            sourceType: 'xtream',
+            playlistId: 'xtream-1',
+            playlistName: 'Xtream One',
+            xtreamId: 77,
+            categoryId: 12,
+        };
+        const hostFixture = TestBed.createComponent(
+            HostUnifiedCollectionPageComponent
+        );
+        setRouteParams({ id: 'host-playlist' });
+        router.url = '/workspace/stalker/host/recent';
+        hostFixture.componentInstance.mode = 'recent';
+        hostFixture.componentInstance.portalType = 'stalker';
+
+        hostFixture.detectChanges();
+        await hostFixture.whenStable();
+        hostFixture.componentInstance.pageComponent?.onScopeChange('all');
+        hostFixture.componentInstance.pageComponent?.onContentTypeChange(
+            'movie'
+        );
+
+        hostFixture.componentInstance.pageComponent?.onGridItemSelected(item);
+
+        expect(window.history.state).toEqual(
+            expect.objectContaining({
+                [COLLECTION_VIEW_STATE_KEY]: {
+                    selectedContentType: 'movie',
+                    scope: 'all',
+                },
+            })
+        );
+        expect(router.navigate).toHaveBeenCalledWith(
+            ['/workspace', 'global-recent'],
+            {
+                state: {
+                    [OPEN_COLLECTION_DETAIL_STATE_KEY]: {
+                        item: expect.objectContaining({
+                            uid: item.uid,
+                            name: item.name,
+                            contentType: item.contentType,
+                            sourceType: item.sourceType,
+                            playlistId: item.playlistId,
+                            playlistName: item.playlistName,
+                            xtreamId: item.xtreamId,
+                            categoryId: String(item.categoryId),
+                        }),
+                    },
+                },
+            }
+        );
+    });
+
+    describe('reload feedback while items stay on screen', () => {
+        const liveItem = {
+            uid: 'm3u::playlist-1::https://example.com/one.m3u8',
+            name: 'Channel One',
+            contentType: 'live',
+            sourceType: 'm3u',
+            playlistId: 'playlist-1',
+            playlistName: 'Playlist One',
+            streamUrl: 'https://example.com/one.m3u8',
+        } satisfies UnifiedCollectionItem;
+        const otherLiveItem = {
+            ...liveItem,
+            uid: 'm3u::playlist-2::https://example.com/two.m3u8',
+            name: 'Channel Two',
+            playlistId: 'playlist-2',
+            playlistName: 'Playlist Two',
+            streamUrl: 'https://example.com/two.m3u8',
+        } satisfies UnifiedCollectionItem;
+
+        function deferred<T>(): {
+            promise: Promise<T>;
+            resolve: (value: T) => void;
+        } {
+            let resolve!: (value: T) => void;
+            const promise = new Promise<T>((r) => {
+                resolve = r;
+            });
+            return { promise, resolve };
+        }
+
+        async function flushMicrotasks(): Promise<void> {
+            for (let i = 0; i < 8; i++) {
+                await Promise.resolve();
+            }
+        }
+
+        function liveTab(): StubUnifiedLiveTabComponent | null {
+            return (
+                fixture.debugElement.query(
+                    By.directive(StubUnifiedLiveTabComponent)
+                )?.componentInstance ?? null
+            );
+        }
+
+        function reloadBar(): HTMLElement | null {
+            return fixture.nativeElement.querySelector(
+                '.collection-reload-bar'
+            );
+        }
+
+        function contentRegion(): HTMLElement {
+            return fixture.nativeElement.querySelector('.collection-content');
+        }
+
+        function scopeToggleValue(): CollectionScope {
+            return fixture.debugElement
+                .query(By.css('.scope-toggle'))
+                .injector.get(MatButtonToggleGroup).value;
+        }
+
+        async function mountWithLiveItems(
+            scope: CollectionScope = 'playlist',
+            items: UnifiedCollectionItem[] = [liveItem]
+        ): Promise<void> {
+            setRouteParams({ id: 'playlist-1' });
+            setRouteQueryParams({ scope });
+            playlistsLoaded.set(true);
+            fixture.componentRef.setInput('portalType', 'm3u');
+            fixture.componentRef.setInput('defaultScope', undefined);
+            favoritesData.getFavorites.mockResolvedValueOnce(items);
+
+            fixture.detectChanges();
+            await fixture.whenStable();
+            fixture.detectChanges();
+
+            expect(fixture.componentInstance.isLoading()).toBe(false);
+            expect(fixture.componentInstance.isReloading()).toBe(false);
+            expect(liveTab()?.items()).toEqual(items);
+            expect(scopeToggleValue()).toBe(scope);
+        }
+
+        afterEach(() => {
+            jest.useRealTimers();
+        });
+
+        it('keeps the previous items and live tab mounted and shows the bar only after the grace period', async () => {
+            await mountWithLiveItems();
+            jest.useFakeTimers();
+            const pending = deferred<UnifiedCollectionItem[]>();
+            favoritesData.getFavorites.mockReturnValueOnce(pending.promise);
+
+            fixture.componentInstance.onScopeChange('all');
+            fixture.detectChanges();
+
+            expect(favoritesData.getFavorites).toHaveBeenLastCalledWith(
+                'all',
+                'playlist-1',
+                'm3u'
+            );
+            expect(fixture.componentInstance.isReloading()).toBe(true);
+            expect(fixture.componentInstance.isLoading()).toBe(false);
+            expect(fixture.componentInstance.showReloadIndicator()).toBe(false);
+            expect(reloadBar()).toBeNull();
+            expect(
+                fixture.nativeElement.querySelector('.skeleton-list')
+            ).toBeNull();
+            expect(liveTab()?.items()).toEqual([liveItem]);
+            expect(liveTab()?.reloading()).toBe(false);
+            expect(contentRegion().getAttribute('aria-busy')).toBe('true');
+            expect(scopeToggleValue()).toBe('all');
+
+            jest.advanceTimersByTime(COLLECTION_RELOAD_INDICATOR_DELAY_MS);
+            fixture.detectChanges();
+
+            expect(reloadBar()).not.toBeNull();
+            expect(reloadBar()?.getAttribute('mode')).toBe('indeterminate');
+            expect(contentRegion().classList).toContain(
+                'collection-content--reloading'
+            );
+            expect(liveTab()?.items()).toEqual([liveItem]);
+            expect(liveTab()?.reloading()).toBe(true);
+
+            pending.resolve([liveItem, otherLiveItem]);
+            await flushMicrotasks();
+            fixture.detectChanges();
+
+            expect(fixture.componentInstance.isReloading()).toBe(false);
+            expect(reloadBar()).toBeNull();
+            expect(contentRegion().getAttribute('aria-busy')).toBeNull();
+            expect(contentRegion().classList).not.toContain(
+                'collection-content--reloading'
+            );
+            expect(liveTab()?.items()).toEqual([liveItem, otherLiveItem]);
+            expect(liveTab()?.reloading()).toBe(false);
+        });
+
+        it('does not clear the indicator when a superseded reload settles', async () => {
+            await mountWithLiveItems();
+            jest.useFakeTimers();
+            const first = deferred<UnifiedCollectionItem[]>();
+            const second = deferred<UnifiedCollectionItem[]>();
+            favoritesData.getFavorites
+                .mockReturnValueOnce(first.promise)
+                .mockReturnValueOnce(second.promise);
+
+            fixture.componentInstance.onScopeChange('all');
+            fixture.detectChanges();
+            fixture.componentInstance.onScopeChange('playlist');
+            fixture.detectChanges();
+
+            expect(favoritesData.getFavorites).toHaveBeenCalledTimes(3);
+            jest.advanceTimersByTime(COLLECTION_RELOAD_INDICATOR_DELAY_MS);
+            fixture.detectChanges();
+            expect(reloadBar()).not.toBeNull();
+
+            first.resolve([]);
+            await flushMicrotasks();
+            fixture.detectChanges();
+
+            expect(fixture.componentInstance.isReloading()).toBe(true);
+            expect(reloadBar()).not.toBeNull();
+            expect(liveTab()?.items()).toEqual([liveItem]);
+
+            second.resolve([otherLiveItem]);
+            await flushMicrotasks();
+            fixture.detectChanges();
+
+            expect(fixture.componentInstance.isReloading()).toBe(false);
+            expect(reloadBar()).toBeNull();
+            expect(liveTab()?.items()).toEqual([otherLiveItem]);
+        });
+
+        it('never shows the bar for a reload that settles inside the grace period', async () => {
+            await mountWithLiveItems();
+            jest.useFakeTimers();
+            const pending = deferred<UnifiedCollectionItem[]>();
+            favoritesData.getFavorites.mockReturnValueOnce(pending.promise);
+
+            fixture.componentInstance.onScopeChange('all');
+            fixture.detectChanges();
+            pending.resolve([otherLiveItem]);
+            await flushMicrotasks();
+            fixture.detectChanges();
+            jest.advanceTimersByTime(COLLECTION_RELOAD_INDICATOR_DELAY_MS * 2);
+            fixture.detectChanges();
+
+            expect(fixture.componentInstance.isReloading()).toBe(false);
+            expect(fixture.componentInstance.showReloadIndicator()).toBe(false);
+            expect(reloadBar()).toBeNull();
+            expect(liveTab()?.items()).toEqual([otherLiveItem]);
+        });
+
+        it('binds Clear and reorder to the scope that loaded the rows still on screen', async () => {
+            await mountWithLiveItems('all', [liveItem, otherLiveItem]);
+            const pending = deferred<UnifiedCollectionItem[]>();
+            favoritesData.getFavorites.mockReturnValueOnce(pending.promise);
+
+            fixture.componentInstance.onScopeChange('playlist');
+            fixture.detectChanges();
+
+            expect(scopeToggleValue()).toBe('playlist');
+            expect(liveTab()?.items()).toEqual([liveItem, otherLiveItem]);
+
+            fixture.componentInstance.clearAllCurrent();
+            const [dialogConfig] =
+                dialogService.openConfirmDialog.mock.calls.at(-1) ?? [null];
+            expect(dialogConfig.message).toContain(
+                'CLEAR_FAVORITES_DIALOG_MESSAGE_ALL'
+            );
+
+            await fixture.componentInstance.onReorder([
+                otherLiveItem,
+                liveItem,
+            ]);
+            expect(favoritesData.reorder).toHaveBeenLastCalledWith(
+                [otherLiveItem, liveItem],
+                { scope: 'all', playlistId: 'playlist-1', portalType: 'm3u' }
+            );
+
+            pending.resolve([liveItem]);
+            await flushMicrotasks();
+            fixture.detectChanges();
+
+            await fixture.componentInstance.onReorder([liveItem]);
+            expect(favoritesData.reorder).toHaveBeenLastCalledWith([liveItem], {
+                scope: 'playlist',
+                playlistId: 'playlist-1',
+                portalType: 'm3u',
+            });
+            fixture.componentInstance.clearAllCurrent();
+            const [playlistDialogConfig] =
+                dialogService.openConfirmDialog.mock.calls.at(-1) ?? [null];
+            expect(playlistDialogConfig.message).toContain(
+                'CLEAR_FAVORITES_DIALOG_MESSAGE_PLAYLIST'
+            );
+        });
+
+        it('keeps the empty first load on the skeleton instead of the reload indicator', async () => {
+            const pending = deferred<UnifiedCollectionItem[]>();
+            favoritesData.getFavorites.mockReturnValueOnce(pending.promise);
+
+            fixture.detectChanges();
+
+            expect(fixture.componentInstance.isLoading()).toBe(true);
+            expect(fixture.componentInstance.isReloading()).toBe(false);
+            expect(
+                fixture.nativeElement.querySelector('.skeleton-list')
+            ).not.toBeNull();
+
+            pending.resolve([]);
+            await flushMicrotasks();
+            fixture.detectChanges();
+
+            expect(fixture.componentInstance.isLoading()).toBe(false);
+        });
+    });
+});

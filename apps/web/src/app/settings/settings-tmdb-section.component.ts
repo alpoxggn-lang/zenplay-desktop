@@ -1,0 +1,171 @@
+import {
+    Component,
+    inject,
+    input,
+    signal,
+    ViewEncapsulation,
+    ChangeDetectionStrategy,
+} from '@angular/core';
+import { FormControl, FormGroup, ReactiveFormsModule } from '@angular/forms';
+import { MatButtonModule } from '@angular/material/button';
+import { MatFormFieldModule } from '@angular/material/form-field';
+import { MatIconModule } from '@angular/material/icon';
+import { MatInputModule } from '@angular/material/input';
+import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
+import { MatSlideToggleModule } from '@angular/material/slide-toggle';
+import { TranslateModule } from '@ngx-translate/core';
+import { TmdbApiService, TmdbCacheService } from '@iptvnator/services';
+import type { TmdbCacheStats } from '@iptvnator/shared/interfaces';
+import { markSectionForCheckOnFormEvents } from './settings-section-form-render';
+
+type TmdbKeyTestState = 'idle' | 'testing' | 'success' | 'error';
+
+@Component({
+    selector: 'app-settings-tmdb-section',
+    imports: [
+        MatButtonModule,
+        MatFormFieldModule,
+        MatIconModule,
+        MatInputModule,
+        MatProgressSpinnerModule,
+        MatSlideToggleModule,
+        ReactiveFormsModule,
+        TranslateModule,
+    ],
+    templateUrl: './settings-tmdb-section.component.html',
+    encapsulation: ViewEncapsulation.None,
+    changeDetection: ChangeDetectionStrategy.OnPush,
+    styles: [
+        `
+            app-settings-tmdb-section {
+                display: contents;
+            }
+
+            .tmdb-key-test {
+                align-items: center;
+                display: flex;
+                flex-wrap: wrap;
+                gap: 12px;
+                margin-top: 8px;
+            }
+
+            .tmdb-key-test__result {
+                align-items: center;
+                display: inline-flex;
+                font-size: 0.875rem;
+                gap: 4px;
+
+                mat-icon {
+                    font-size: 18px;
+                    height: 18px;
+                    width: 18px;
+                }
+            }
+
+            .tmdb-key-test__result--success {
+                color: #4caf50;
+            }
+
+            .tmdb-key-test__result--error {
+                color: #f44336;
+            }
+
+            .tmdb-cache__size {
+                font-variant-numeric: tabular-nums;
+            }
+
+            .tmdb-cache__error {
+                color: #f44336;
+            }
+        `,
+    ],
+})
+export class SettingsTmdbSectionComponent {
+    private readonly tmdbApi = inject(TmdbApiService);
+    private readonly tmdbCache = inject(TmdbCacheService);
+
+    readonly form = input.required<FormGroup>();
+
+    readonly keyTestState = signal<TmdbKeyTestState>('idle');
+    readonly cacheStats = signal<TmdbCacheStats | null>(null);
+    readonly cacheError = signal(false);
+    readonly isClearing = signal(false);
+
+    constructor() {
+        markSectionForCheckOnFormEvents(this.form);
+        // Sizing the cache is a full table scan, but this component only
+        // exists while its section page is open, so loading on construction
+        // preserves the old "wait until the user is actually looking"
+        // behaviour. A failed read leaves the signals in their "unknown"
+        // state and reopening the section recreates the component, which
+        // retries naturally.
+        void this.refreshCacheStats();
+    }
+
+    get enteredApiKey(): string {
+        return (this.form().value.tmdb?.apiKey ?? '').trim();
+    }
+
+    /**
+     * The M3U movie-recognition toggle lives at the settings ROOT (it is a
+     * player-layout preference, not part of the persisted `tmdb` group this
+     * section's `formGroupName` wraps), so the template binds it via
+     * `[formControl]` instead of a group-relative `formControlName`.
+     * Nullable: the template hides the row for a form without the control.
+     */
+    get m3uVodDetailsControl(): FormControl | null {
+        const control = this.form().get('m3uVodDetails');
+        return control instanceof FormControl ? control : null;
+    }
+
+    async testApiKey(): Promise<void> {
+        const apiKey = this.enteredApiKey;
+        if (!apiKey || this.keyTestState() === 'testing') {
+            return;
+        }
+
+        this.keyTestState.set('testing');
+        const isValid = await this.tmdbApi.validateApiKey(apiKey);
+        this.keyTestState.set(isValid ? 'success' : 'error');
+    }
+
+    async clearCache(): Promise<void> {
+        if (this.isClearing()) {
+            return;
+        }
+        this.isClearing.set(true);
+        try {
+            const deleted = await this.tmdbCache.clear();
+            if (deleted === null) {
+                // Do not claim an empty cache we failed to empty
+                this.cacheError.set(true);
+                this.cacheStats.set(null);
+                return;
+            }
+            await this.refreshCacheStats();
+        } finally {
+            this.isClearing.set(false);
+        }
+    }
+
+    /** "12.4 MB" — cache payloads are JSON, so decimal units read right */
+    formatBytes(bytes: number): string {
+        if (bytes < 1024) {
+            return `${bytes} B`;
+        }
+        const units = ['KB', 'MB', 'GB'];
+        let value = bytes / 1024;
+        let unit = 0;
+        while (value >= 1024 && unit < units.length - 1) {
+            value /= 1024;
+            unit++;
+        }
+        return `${value.toFixed(value < 10 ? 1 : 0)} ${units[unit]}`;
+    }
+
+    private async refreshCacheStats(): Promise<void> {
+        const stats = await this.tmdbCache.getStats();
+        this.cacheError.set(stats === null);
+        this.cacheStats.set(stats);
+    }
+}

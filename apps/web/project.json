@@ -1,0 +1,277 @@
+{
+    "name": "web",
+    "$schema": "../../node_modules/nx/schemas/project-schema.json",
+    "projectType": "application",
+    "prefix": "app",
+    "sourceRoot": "apps/web/src",
+    "cli": {
+        "cache": {
+            "enabled": false
+        }
+    },
+    "tags": ["scope:app", "domain:web", "type:app"],
+    "targets": {
+        "build": {
+            "executor": "@angular/build:application",
+            "outputs": ["{workspaceRoot}/dist/apps/web"],
+            "options": {
+                "outputPath": {
+                    "base": "dist/apps/web",
+                    "browser": ""
+                },
+                "polyfills": ["zone.js"],
+                "tsConfig": "apps/web/tsconfig.app.json",
+                "inlineStyleLanguage": "scss",
+                "serviceWorker": "ngsw-config.json",
+                "assets": [
+                    "apps/web/src/favicon.ico",
+                    "apps/web/src/assets",
+                    "apps/web/src/manifest.webmanifest"
+                ],
+                "styles": [
+                    "apps/web/src/styles.scss",
+                    "apps/web/src/m3-theme.scss",
+                    "./node_modules/video.js/dist/video-js.css"
+                ],
+                "allowedCommonJsDependencies": [
+                    "qrcode",
+                    "iptv-playlist-parser",
+                    "mpegts.js",
+                    "videojs-contrib-quality-levels",
+                    "videojs-quality-selector-hls",
+                    "global/window",
+                    "global/document",
+                    "@videojs/xhr",
+                    "videojs-vtt.js",
+                    "mux.js/lib/tools/parse-sidx",
+                    "mux.js/lib/utils/clock",
+                    "keycode",
+                    "safe-json-parse/tuple",
+                    "@xmldom/xmldom",
+                    "url-toolkit"
+                ]
+            },
+            "configurations": {
+                "production": {
+                    "baseHref": "./",
+                    "budgets": [
+                        {
+                            "type": "initial",
+                            "maximumWarning": "1.8mb",
+                            "maximumError": "2mb"
+                        },
+                        {
+                            "type": "anyComponentStyle",
+                            "maximumWarning": "12.5kb",
+                            "maximumError": "15kb"
+                        }
+                    ],
+                    "optimization": {
+                        "scripts": true,
+                        "styles": {
+                            "minify": true,
+                            "inlineCritical": false,
+                            "removeSpecialComments": true
+                        },
+                        "fonts": true
+                    },
+                    "outputHashing": "all",
+                    "fileReplacements": [
+                        {
+                            "replace": "apps/web/src/environments/environment.ts",
+                            "with": "apps/web/src/environments/environment.prod.ts"
+                        }
+                    ]
+                },
+                "pwa": {
+                    "baseHref": "/",
+                    "budgets": [
+                        {
+                            "type": "initial",
+                            "maximumWarning": "1.8mb",
+                            "maximumError": "2mb"
+                        },
+                        {
+                            "type": "anyComponentStyle",
+                            "maximumWarning": "12.5kb",
+                            "maximumError": "15kb"
+                        }
+                    ],
+                    "outputHashing": "all",
+                    "optimization": {
+                        "scripts": true,
+                        "styles": {
+                            "minify": true,
+                            "inlineCritical": false,
+                            "removeSpecialComments": true
+                        },
+                        "fonts": true
+                    },
+                    "extractLicenses": true,
+                    "sourceMap": false,
+                    "fileReplacements": [
+                        {
+                            "replace": "apps/web/src/environments/environment.ts",
+                            "with": "apps/web/src/environments/environment.prod.ts"
+                        }
+                    ]
+                },
+                "development": {
+                    "serviceWorker": false,
+                    "optimization": false,
+                    "extractLicenses": false,
+                    "sourceMap": true,
+                    "fileReplacements": [
+                        {
+                            "replace": "apps/web/src/environments/store-devtools.providers.ts",
+                            "with": "apps/web/src/environments/store-devtools.providers.dev.ts"
+                        }
+                    ]
+                },
+                "electron-performance": {
+                    "baseHref": "./",
+                    "serviceWorker": false,
+                    "optimization": {
+                        "scripts": true,
+                        "styles": {
+                            "minify": true,
+                            "inlineCritical": false,
+                            "removeSpecialComments": true
+                        },
+                        "fonts": true
+                    },
+                    "outputHashing": "all",
+                    "sourceMap": true,
+                    "fileReplacements": [
+                        {
+                            "replace": "apps/web/src/environments/environment.ts",
+                            "with": "apps/web/src/environments/environment.performance.ts"
+                        }
+                    ]
+                },
+                "electron-performance-zoneless": {
+                    "baseHref": "./",
+                    "serviceWorker": false,
+                    "optimization": {
+                        "scripts": true,
+                        "styles": {
+                            "minify": true,
+                            "inlineCritical": false,
+                            "removeSpecialComments": true
+                        },
+                        "fonts": true
+                    },
+                    "outputHashing": "all",
+                    "sourceMap": true,
+                    "fileReplacements": [
+                        {
+                            "replace": "apps/web/src/environments/environment.ts",
+                            "with": "apps/web/src/environments/environment.performance.ts"
+                        },
+                        {
+                            "replace": "apps/web/src/environments/change-detection.providers.ts",
+                            "with": "apps/web/src/environments/change-detection.providers.zoneless.ts"
+                        }
+                    ]
+                },
+                "electron-e2e": {
+                    "baseHref": "./",
+                    "serviceWorker": false,
+                    "optimization": false,
+                    "extractLicenses": false,
+                    "sourceMap": true,
+                    "fileReplacements": [
+                        {
+                            "replace": "apps/web/src/environments/store-devtools.providers.ts",
+                            "with": "apps/web/src/environments/store-devtools.providers.dev.ts"
+                        }
+                    ]
+                },
+                "electron-e2e-zoneless": {
+                    "baseHref": "./",
+                    "serviceWorker": false,
+                    "optimization": false,
+                    "extractLicenses": false,
+                    "sourceMap": true,
+                    "fileReplacements": [
+                        {
+                            "replace": "apps/web/src/environments/store-devtools.providers.ts",
+                            "with": "apps/web/src/environments/store-devtools.providers.dev.ts"
+                        },
+                        {
+                            "replace": "apps/web/src/environments/change-detection.providers.ts",
+                            "with": "apps/web/src/environments/change-detection.providers.zoneless.ts"
+                        }
+                    ]
+                }
+            },
+            "defaultConfiguration": "production"
+        },
+        "build-e2e": {
+            "executor": "nx:run-commands",
+            "options": {
+                "command": "pnpm nx run web:build:electron-e2e"
+            }
+        },
+        "build-performance": {
+            "executor": "nx:run-commands",
+            "options": {
+                "command": "pnpm nx run web:build:electron-performance"
+            }
+        },
+        "serve": {
+            "continuous": true,
+            "executor": "@angular/build:dev-server",
+            "configurations": {
+                "production": {
+                    "buildTarget": "web:build:production"
+                },
+                "pwa": {
+                    "buildTarget": "web:build:pwa"
+                },
+                "development": {
+                    "buildTarget": "web:build:development"
+                }
+            },
+            "defaultConfiguration": "development",
+            "options": {
+                "proxyConfig": "apps/web/proxy.conf.json"
+            }
+        },
+        "extract-i18n": {
+            "executor": "@angular/build:extract-i18n",
+            "options": {
+                "buildTarget": "web:build"
+            }
+        },
+        "lint": {
+            "executor": "@nx/eslint:lint"
+        },
+        "test": {
+            "executor": "nx:run-commands",
+            "outputs": ["{workspaceRoot}/coverage/{projectRoot}"],
+            "options": {
+                "command": [
+                    "node",
+                    "./node_modules/jest/bin/jest.js",
+                    "--config",
+                    "apps/web/jest.config.ts"
+                ],
+                "env": {
+                    "NODE_OPTIONS": "--experimental-vm-modules"
+                },
+                "forwardAllArgs": true
+            }
+        },
+        "serve-static": {
+            "continuous": true,
+            "executor": "@nx/web:file-server",
+            "options": {
+                "buildTarget": "web:build:pwa",
+                "port": 4200,
+                "staticFilePath": "dist/apps/web",
+                "spa": true
+            }
+        }
+    }
+}

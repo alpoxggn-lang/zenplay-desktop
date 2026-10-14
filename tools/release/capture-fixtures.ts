@@ -1,0 +1,108 @@
+/**
+ * Fixture identities and M3U generation shared by the capture driver and
+ * the named setup actions (guide shots that re-enter the add-playlist dialog). Kept in
+ * a leaf module so capture-navigation.ts can import them without pulling in
+ * the driver, which itself imports the navigation module.
+ *
+ * Everything here is fictional and resolves only against the local Xtream
+ * mock server; the G4 frame guard still rejects any URL carrying query
+ * credentials, so the auto-detect hand-out deliberately uses labeled lines
+ * instead of a `get.php?username=…` link.
+ */
+
+import { writeFileSync } from 'node:fs';
+import path from 'node:path';
+
+import { FICTIONAL_STALKER_MAC } from './screenshot-guards.mjs';
+
+export const XTREAM_MOCK_ORIGIN = 'http://localhost:3211';
+export const XTREAM_FIXTURE_TITLE = 'Fictional Xtream Demo';
+export const M3U_FIXTURE_TITLE = 'release-demo';
+
+export const STALKER_MOCK_ORIGIN = 'http://localhost:3210';
+export const STALKER_FIXTURE_TITLE = 'Fictional Stalker Demo';
+/** Reseller-panel shape most hand-outs use; discovery classifies the mock's answer itself. */
+export const STALKER_FIXTURE_PORTAL_URL = `${STALKER_MOCK_ORIGIN}/portal.php`;
+/** The mock's `marketing-demo` scenario; the only MAC the frame guard lets through. */
+export const STALKER_FIXTURE_MAC = FICTIONAL_STALKER_MAC;
+
+/** Credential pair of the mock server's curated `marketing` scenario. */
+export const XTREAM_FIXTURE_CREDENTIALS = {
+    username: 'marketing',
+    password: 'marketing',
+} as const;
+
+/**
+ * Second Xtream source for the alternative-sources guide: the mock's
+ * `marketing2` scenario serves the identical catalog, so every movie exists in
+ * both playlists and the detail page shows its Sources chip. Seeded only for
+ * shots that walk into it — it adds a card to the dashboard.
+ */
+export const XTREAM_SECONDARY_FIXTURE_TITLE = 'Fictional Xtream Backup';
+export const XTREAM_SECONDARY_FIXTURE_CREDENTIALS = {
+    username: 'marketing2',
+    password: 'marketing2',
+} as const;
+
+/**
+ * Port the remote-control guide shots enable in the app's settings. The app's
+ * default; the phone-view shot opens `http://127.0.0.1:<port>/` in a mobile
+ * viewport. A capture fails with a clear message when something else holds it.
+ */
+export const CAPTURE_REMOTE_CONTROL_PORT = 8765;
+export const CAPTURE_REMOTE_CONTROL_URL = `http://127.0.0.1:${CAPTURE_REMOTE_CONTROL_PORT}/`;
+
+/**
+ * Download folder the guide shots authorize inside the isolated data dir. The
+ * capture stubs Electron's folder dialog to return it, so no download ever
+ * lands in the real OS Downloads folder and no personal path reaches a frame.
+ */
+export const CAPTURE_DOWNLOAD_FOLDER_NAME = 'IPTVnator downloads';
+
+/** Fictional playlist and guide addresses typed into forms for the M3U guide shots; never fetched. */
+export const M3U_FIXTURE_PLAYLIST_URL = `${XTREAM_MOCK_ORIGIN}/demo/channels.m3u8`;
+export const M3U_FIXTURE_PLAYLIST_TITLE = 'Fictional TV playlist';
+export const EPG_FIXTURE_URL = `${XTREAM_MOCK_ORIGIN}/demo/guide.xml.gz`;
+/** Served by the Xtream mock (`/demo/guide.xml`); the EPG-mapping guide shots import it for real. */
+export const DEMO_EPG_URL = `${XTREAM_MOCK_ORIGIN}/demo/guide.xml`;
+
+/** A fictional "your subscription is ready" message for the Auto-detect shot. */
+export const AUTO_DETECT_FIXTURE_MESSAGE = [
+    'Welcome to Fictional TV! Your account is ready.',
+    '',
+    `Host: ${XTREAM_MOCK_ORIGIN}`,
+    `Username: ${XTREAM_FIXTURE_CREDENTIALS.username}`,
+    `Password: ${XTREAM_FIXTURE_CREDENTIALS.password}`,
+    '',
+    'Use these details in any Xtream Codes compatible player.',
+].join('\n');
+
+/** Entirely synthetic channels; streams and logos point at the mock. */
+export function writeM3uFixture(dataDir: string): string {
+    const channels = [
+        ['Newsroom', 'Aurora Local', 'aurora-local'],
+        ['Newsroom', 'Civic Pulse', 'civic-pulse'],
+        ['Sports', 'Fieldside One', 'fieldside-one'],
+        ['Sports', 'Motion Arena', 'motion-arena'],
+        ['Kids', 'Horizon Kids', 'horizon-kids'],
+        ['Kids', 'Story Lantern', 'story-lantern'],
+        ['Culture', 'Atlas Culture', 'atlas-culture'],
+        ['Culture', 'Night Music', 'night-music'],
+    ];
+    const lines = ['#EXTM3U'];
+
+    channels.forEach(([group, title, slug], index) => {
+        // Distinct URLs keep the player from highlighting every demo channel
+        // as the current one when a fullscreen list is captured.
+        const stream = `${XTREAM_MOCK_ORIGIN}/live/marketing/marketing/${52000 + index}.m3u8`;
+        lines.push(
+            `#EXTINF:-1 tvg-id="demo-${index + 1}" tvg-name="${title}" tvg-logo="${XTREAM_MOCK_ORIGIN}/assets/marketing/logo/${slug}.svg?size=256x256" group-title="${group}",${title}`,
+            stream
+        );
+    });
+
+    const filePath = path.join(dataDir, `${M3U_FIXTURE_TITLE}.m3u`);
+    writeFileSync(filePath, `${lines.join('\n')}\n`, 'utf8');
+
+    return filePath;
+}

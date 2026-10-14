@@ -1,0 +1,15 @@
+{
+    "extends": "../../tsconfig.base.json",
+    "compilerOptions": {
+        "types": ["node"],
+        "moduleResolution": "nodenext",
+        "module": "NodeNext",
+        "target": "ES2022",
+        "lib": ["ES2022"],
+        "strict": true,
+        "esModuleInterop": true,
+        "skipLibCheck": true,
+        "ignoreDeprecations": "6.0"
+    },
+    "include": ["src/**/*.ts"]
+}

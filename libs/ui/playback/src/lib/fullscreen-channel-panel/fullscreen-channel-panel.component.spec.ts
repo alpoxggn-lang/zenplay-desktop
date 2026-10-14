@@ -1,0 +1,825 @@
+import {
+    Component,
+    TemplateRef,
+    computed,
+    forwardRef,
+    signal,
+    viewChild,
+} from '@angular/core';
+import { OverlayContainer } from '@angular/cdk/overlay';
+import { ComponentFixture, TestBed } from '@angular/core/testing';
+import { NoopAnimationsModule } from '@angular/platform-browser/animations';
+import { TranslateModule, TranslateService } from '@ngx-translate/core';
+import {
+    CHANNEL_PANEL_CLOSE_GRACE_MS,
+    CHANNEL_PANEL_HINT_IDLE_MS,
+    CHANNEL_PANEL_OPEN_DWELL_MS,
+} from './fullscreen-channel-panel-state';
+import { FullscreenChannelPanelComponent } from './fullscreen-channel-panel.component';
+import {
+    FULLSCREEN_CHANNEL_PANEL,
+    type FullscreenChannelPanelContext,
+    type FullscreenChannelPanelHost,
+} from './fullscreen-channel-panel.model';
+
+@Component({
+    imports: [FullscreenChannelPanelComponent],
+    template: `
+        <div #stage class="stage">
+            <app-fullscreen-channel-panel
+                [stage]="stage"
+                [enabled]="panelEnabled()"
+            />
+        </div>
+        <ng-template #panel let-searchTerm="searchTerm" let-close="close">
+            <div data-test-id="host-list">{{ searchTerm() }}</div>
+            <button type="button" data-test-id="host-close" (click)="close()">
+                close
+            </button>
+        </ng-template>
+    `,
+    providers: [
+        {
+            provide: FULLSCREEN_CHANNEL_PANEL,
+            useExisting: forwardRef(() => HostComponent),
+        },
+    ],
+})
+class HostComponent implements FullscreenChannelPanelHost {
+    private readonly panelRef =
+        viewChild<TemplateRef<FullscreenChannelPanelContext>>('panel');
+    readonly enabled = signal(true);
+    readonly panelEnabled = signal(true);
+    readonly panelTemplate = computed(() =>
+        this.enabled() ? (this.panelRef() ?? null) : null
+    );
+    readonly panelTitle = signal('Playlist One');
+}
+
+@Component({
+    imports: [FullscreenChannelPanelComponent],
+    template: `
+        <div #stage class="stage">
+            <app-fullscreen-channel-panel [stage]="stage" />
+        </div>
+    `,
+})
+class NoHostComponent {}
+
+@Component({
+    imports: [FullscreenChannelPanelComponent],
+    template: `
+        <div #stage class="stage">
+            <app-fullscreen-channel-panel [stage]="stage" />
+        </div>
+        <ng-template #panel let-open="open" let-close="close">
+            <div data-test-id="host-body">{{ open() ? 'open' : 'closed' }}</div>
+            <button type="button" data-test-id="host-close" (click)="close()">
+                close
+            </button>
+        </ng-template>
+    `,
+    providers: [
+        {
+            provide: FULLSCREEN_CHANNEL_PANEL,
+            useExisting: forwardRef(() => NoSearchHostComponent),
+        },
+    ],
+})
+class NoSearchHostComponent implements FullscreenChannelPanelHost {
+    private readonly panelRef =
+        viewChild<TemplateRef<FullscreenChannelPanelContext>>('panel');
+    readonly panelTemplate = computed(() => this.panelRef() ?? null);
+    readonly panelTitle = signal('Some Show');
+    readonly panelSearchEnabled = signal(false);
+    readonly panelKind = 'episodes' as const;
+}
+
+function pointerEvent(
+    type: string,
+    pointerType = 'mouse',
+    init: {
+        relatedTarget?: EventTarget | null;
+        button?: number;
+        pointerId?: number;
+    } = {}
+): Event {
+    const event = new Event(type, { bubbles: true, cancelable: true });
+    Object.defineProperty(event, 'pointerType', { value: pointerType });
+    Object.defineProperty(event, 'relatedTarget', {
+        value: init.relatedTarget ?? null,
+    });
+    Object.defineProperty(event, 'button', { value: init.button ?? 0 });
+    Object.defineProperty(event, 'pointerId', {
+        value: init.pointerId ?? 1,
+    });
+    return event;
+}
+
+describe('FullscreenChannelPanelComponent', () => {
+    let fixture: ComponentFixture<HostComponent>;
+    let host: HostComponent;
+    let stage: HTMLElement;
+    let fullscreenElement: Element | null;
+
+    const query = <T extends HTMLElement>(testId: string): T | null =>
+        fixture.nativeElement.querySelector(`[data-test-id="${testId}"]`);
+    const panel = () => query('fullscreen-channel-panel');
+    const hotZone = () => query('fullscreen-channel-panel-hot-zone');
+    const isOpen = () =>
+        panel()?.classList.contains('fullscreen-channel-panel--open') === true;
+    const edgeHint = () => query('fullscreen-channel-panel-edge-hint');
+    const isHintVisible = () =>
+        edgeHint()?.classList.contains(
+            'fullscreen-channel-panel__edge-hint--visible'
+        ) === true;
+
+    const setFullscreen = (element: Element | null) => {
+        fullscreenElement = element;
+        document.dispatchEvent(new Event('fullscreenchange'));
+        fixture.detectChanges();
+    };
+
+    // A real mouse moves over the stage before it reaches the edge; the move
+    // is what re-arms the hot zone after an explicit close.
+    const openByHover = () => {
+        stage.dispatchEvent(pointerEvent('pointermove'));
+        hotZone()?.dispatchEvent(pointerEvent('pointerenter'));
+        jest.advanceTimersByTime(CHANNEL_PANEL_OPEN_DWELL_MS);
+        fixture.detectChanges();
+    };
+
+    beforeEach(async () => {
+        jest.useFakeTimers();
+        await TestBed.configureTestingModule({
+            imports: [
+                HostComponent,
+                NoHostComponent,
+                NoSearchHostComponent,
+                NoopAnimationsModule,
+                TranslateModule.forRoot(),
+            ],
+        }).compileComponents();
+
+        fullscreenElement = null;
+        Object.defineProperty(document, 'fullscreenElement', {
+            configurable: true,
+            get: () => fullscreenElement,
+        });
+
+        fixture = TestBed.createComponent(HostComponent);
+        host = fixture.componentInstance;
+        fixture.detectChanges();
+        stage = fixture.nativeElement.querySelector('.stage');
+    });
+
+    afterEach(() => {
+        fixture.destroy();
+        jest.useRealTimers();
+    });
+
+    it('renders nothing outside fullscreen', () => {
+        expect(hotZone()).toBeNull();
+        expect(panel()).toBeNull();
+    });
+
+    it('renders nothing without a host list, even in fullscreen', () => {
+        fixture.destroy();
+        const noHost = TestBed.createComponent(NoHostComponent);
+        noHost.detectChanges();
+        fullscreenElement = noHost.nativeElement.querySelector('.stage');
+        document.dispatchEvent(new Event('fullscreenchange'));
+        noHost.detectChanges();
+
+        expect(
+            noHost.nativeElement.querySelector(
+                '[data-test-id="fullscreen-channel-panel-hot-zone"]'
+            )
+        ).toBeNull();
+        expect(
+            noHost.nativeElement.querySelector(
+                '[data-test-id="fullscreen-channel-panel"]'
+            )
+        ).toBeNull();
+        noHost.destroy();
+    });
+
+    it('renders nothing when the host disables the panel', () => {
+        host.enabled.set(false);
+        setFullscreen(stage);
+
+        expect(hotZone()).toBeNull();
+        expect(panel()).toBeNull();
+    });
+
+    it('withdraws everything while the view disables it (native-view Embedded MPV)', () => {
+        setFullscreen(stage);
+        openByHover();
+        expect(isOpen()).toBe(true);
+
+        host.panelEnabled.set(false);
+        fixture.detectChanges();
+        expect(panel()).toBeNull();
+        expect(hotZone()).toBeNull();
+
+        host.panelEnabled.set(true);
+        fixture.detectChanges();
+        expect(isOpen()).toBe(false);
+        expect(hotZone()).not.toBeNull();
+        expect(query('host-list')).toBeNull();
+    });
+
+    describe('CDK overlays opened from the list', () => {
+        let overlay: HTMLElement;
+        let pane: HTMLElement;
+
+        beforeEach(() => {
+            overlay = TestBed.inject(OverlayContainer).getContainerElement();
+            pane = document.createElement('div');
+            pane.className = 'cdk-overlay-pane';
+            overlay.appendChild(pane);
+        });
+
+        afterEach(() => {
+            pane.remove();
+        });
+
+        it('keeps the panel open while the pointer is over the overlay and closes once it leaves it', () => {
+            setFullscreen(stage);
+            openByHover();
+
+            // Straight from the list into the menu: no close is scheduled.
+            panel()?.dispatchEvent(
+                pointerEvent('pointerleave', 'mouse', { relatedTarget: pane })
+            );
+            jest.advanceTimersByTime(CHANNEL_PANEL_CLOSE_GRACE_MS);
+            fixture.detectChanges();
+            expect(isOpen()).toBe(true);
+
+            // A pending close is cancelled by reaching the menu.
+            panel()?.dispatchEvent(pointerEvent('pointerleave'));
+            pane.dispatchEvent(pointerEvent('pointerover'));
+            jest.advanceTimersByTime(CHANNEL_PANEL_CLOSE_GRACE_MS);
+            fixture.detectChanges();
+            expect(isOpen()).toBe(true);
+
+            // Leaving the menu for the video closes after the grace period.
+            document.body.dispatchEvent(pointerEvent('pointerover'));
+            jest.advanceTimersByTime(CHANNEL_PANEL_CLOSE_GRACE_MS - 1);
+            fixture.detectChanges();
+            expect(isOpen()).toBe(true);
+            jest.advanceTimersByTime(1);
+            fixture.detectChanges();
+            expect(isOpen()).toBe(false);
+        });
+
+        it('leaves Escape to an open menu and closes on the next press', () => {
+            setFullscreen(stage);
+            openByHover();
+            const backdrop = document.createElement('div');
+            backdrop.className = 'cdk-overlay-backdrop';
+            overlay.appendChild(backdrop);
+
+            document.dispatchEvent(
+                new KeyboardEvent('keydown', { key: 'Escape' })
+            );
+            fixture.detectChanges();
+            expect(isOpen()).toBe(true);
+
+            backdrop.remove();
+            document.dispatchEvent(
+                new KeyboardEvent('keydown', { key: 'Escape' })
+            );
+            fixture.detectChanges();
+            expect(isOpen()).toBe(false);
+        });
+    });
+
+    it('draws nothing over the video while closed and idle: only the hot zone with its hidden hint beside the inert, off-screen panel', () => {
+        setFullscreen(stage);
+
+        const children = Array.from(
+            (
+                fixture.nativeElement.querySelector(
+                    '.fullscreen-channel-panel-host'
+                ) as HTMLElement
+            ).children
+        );
+        expect(children.map((child) => child.tagName.toLowerCase())).toEqual([
+            'div',
+            'aside',
+        ]);
+        expect(children[0]).toBe(hotZone());
+        expect(hotZone()?.textContent?.trim()).toBe('');
+        expect(hotZone()?.children.length).toBe(1);
+        expect(hotZone()?.firstElementChild).toBe(edgeHint());
+        expect(isHintVisible()).toBe(false);
+        expect(isOpen()).toBe(false);
+        expect(panel()?.getAttribute('aria-hidden')).toBe('true');
+        expect(panel()?.hasAttribute('inert')).toBe(true);
+        expect(query('host-list')).toBeNull();
+    });
+
+    it('reveals the edge hint while the mouse moves over the stage and hides it once idle', () => {
+        setFullscreen(stage);
+
+        stage.dispatchEvent(pointerEvent('pointermove'));
+        fixture.detectChanges();
+        expect(isHintVisible()).toBe(true);
+
+        jest.advanceTimersByTime(CHANNEL_PANEL_HINT_IDLE_MS);
+        fixture.detectChanges();
+        expect(isHintVisible()).toBe(false);
+
+        // Touch has no pointer to hint at.
+        stage.dispatchEvent(pointerEvent('pointermove', 'touch'));
+        fixture.detectChanges();
+        expect(isHintVisible()).toBe(false);
+
+        // Resting on the edge lights the hint up before the dwell completes.
+        hotZone()?.dispatchEvent(pointerEvent('pointerenter'));
+        fixture.detectChanges();
+        expect(isHintVisible()).toBe(true);
+        expect(
+            edgeHint()?.classList.contains(
+                'fullscreen-channel-panel__edge-hint--armed'
+            )
+        ).toBe(true);
+
+        jest.advanceTimersByTime(CHANNEL_PANEL_OPEN_DWELL_MS);
+        fixture.detectChanges();
+        expect(isOpen()).toBe(true);
+        expect(edgeHint()).toBeNull();
+    });
+
+    it('opens at once on a primary click on the edge, without the dwell', () => {
+        setFullscreen(stage);
+        hotZone()?.dispatchEvent(pointerEvent('pointerdown'));
+        hotZone()?.dispatchEvent(pointerEvent('pointerup'));
+        fixture.detectChanges();
+
+        expect(isOpen()).toBe(true);
+        expect(query('host-list')).not.toBeNull();
+    });
+
+    it('ignores a release that is not a primary click begun on the edge', () => {
+        setFullscreen(stage);
+        const expectClosed = () => {
+            fixture.detectChanges();
+            expect(isOpen()).toBe(false);
+        };
+
+        // A drag started elsewhere and released over the edge.
+        hotZone()?.dispatchEvent(pointerEvent('pointerup'));
+        expectClosed();
+
+        // Right and middle buttons.
+        for (const button of [1, 2]) {
+            hotZone()?.dispatchEvent(
+                pointerEvent('pointerdown', 'mouse', { button })
+            );
+            hotZone()?.dispatchEvent(
+                pointerEvent('pointerup', 'mouse', { button })
+            );
+            expectClosed();
+        }
+
+        // A press that left the zone before its release.
+        hotZone()?.dispatchEvent(pointerEvent('pointerdown'));
+        hotZone()?.dispatchEvent(pointerEvent('pointerleave'));
+        hotZone()?.dispatchEvent(pointerEvent('pointerup'));
+        expectClosed();
+
+        // A different pointer releasing than the one that pressed.
+        hotZone()?.dispatchEvent(
+            pointerEvent('pointerdown', 'mouse', { pointerId: 1 })
+        );
+        hotZone()?.dispatchEvent(
+            pointerEvent('pointerup', 'mouse', { pointerId: 2 })
+        );
+        expectClosed();
+    });
+
+    it('keeps a C-opened panel while the mouse roams the video until it has visited the list', () => {
+        setFullscreen(stage);
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'c' }));
+        fixture.detectChanges();
+        expect(isOpen()).toBe(true);
+
+        query('fullscreen-channel-panel-scrim')?.dispatchEvent(
+            pointerEvent('pointerover')
+        );
+        panel()?.dispatchEvent(pointerEvent('pointerleave'));
+        jest.advanceTimersByTime(CHANNEL_PANEL_CLOSE_GRACE_MS);
+        fixture.detectChanges();
+        expect(isOpen()).toBe(true);
+
+        panel()?.dispatchEvent(pointerEvent('pointerenter'));
+        panel()?.dispatchEvent(pointerEvent('pointerleave'));
+        jest.advanceTimersByTime(CHANNEL_PANEL_CLOSE_GRACE_MS);
+        fixture.detectChanges();
+        expect(isOpen()).toBe(false);
+    });
+
+    it('never closes on a click inside the panel, even where the click target is replaced', () => {
+        setFullscreen(stage);
+        openByHover();
+        const list = query('host-list');
+        if (!list) {
+            throw new Error('host list missing');
+        }
+        // A click that re-renders what was under the pointer: the pointer's
+        // next target is still inside the panel, so no close is scheduled.
+        list.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+        panel()?.dispatchEvent(pointerEvent('pointerover'));
+        jest.advanceTimersByTime(CHANNEL_PANEL_CLOSE_GRACE_MS);
+        fixture.detectChanges();
+
+        expect(isOpen()).toBe(true);
+    });
+
+    it('slides in after the mouse rests on the left edge and stamps the host list', () => {
+        setFullscreen(stage);
+        openByHover();
+
+        expect(isOpen()).toBe(true);
+        expect(query('host-list')).not.toBeNull();
+        expect(query('fullscreen-channel-panel-scrim')).not.toBeNull();
+        expect(hotZone()).not.toBeNull();
+    });
+
+    it('retains the hover target above the scrim during a delayed opening paint', () => {
+        setFullscreen(stage);
+        const originalHotZone = hotZone();
+        openByHover();
+        const scrim = query('fullscreen-channel-panel-scrim');
+        if (!originalHotZone?.parentElement || !scrim) {
+            throw new Error('Fullscreen hover surfaces are missing');
+        }
+        expect(hotZone()).toBe(originalHotZone);
+        const children = Array.from(originalHotZone.parentElement.children);
+        expect(children.indexOf(originalHotZone)).toBeGreaterThan(
+            children.indexOf(scrim)
+        );
+        hotZone()?.dispatchEvent(pointerEvent('pointerover'));
+        jest.advanceTimersByTime(CHANNEL_PANEL_CLOSE_GRACE_MS + 1);
+        fixture.detectChanges();
+        expect(isOpen()).toBe(true);
+
+        // Moving away still closes, even if the panel has not painted yet.
+        query('fullscreen-channel-panel-scrim')?.dispatchEvent(
+            pointerEvent('pointerover')
+        );
+        jest.advanceTimersByTime(CHANNEL_PANEL_CLOSE_GRACE_MS);
+        fixture.detectChanges();
+        expect(isOpen()).toBe(false);
+    });
+
+    it('does not open for a mouse that merely sweeps across the edge', () => {
+        setFullscreen(stage);
+        hotZone()?.dispatchEvent(pointerEvent('pointerenter'));
+        jest.advanceTimersByTime(CHANNEL_PANEL_OPEN_DWELL_MS - 1);
+        hotZone()?.dispatchEvent(pointerEvent('pointerleave'));
+        jest.advanceTimersByTime(CHANNEL_PANEL_OPEN_DWELL_MS);
+        fixture.detectChanges();
+
+        expect(isOpen()).toBe(false);
+    });
+
+    it('opens on a touch tap on the edge without any dwell', () => {
+        setFullscreen(stage);
+        hotZone()?.dispatchEvent(pointerEvent('pointerenter', 'touch'));
+        jest.advanceTimersByTime(CHANNEL_PANEL_OPEN_DWELL_MS);
+        fixture.detectChanges();
+        expect(isOpen()).toBe(false);
+
+        hotZone()?.dispatchEvent(pointerEvent('pointerdown', 'touch'));
+        hotZone()?.dispatchEvent(pointerEvent('pointerup', 'touch'));
+        fixture.detectChanges();
+        expect(isOpen()).toBe(true);
+    });
+
+    it('puts the host title into the search placeholder and the dialog label instead of a title row', () => {
+        const translate = TestBed.inject(TranslateService);
+        translate.setTranslation(
+            'en',
+            {
+                EMBEDDED_MPV: {
+                    PLAYER: {
+                        SEARCH_IN: 'Search in {{title}}',
+                        SEARCH_CHANNELS: 'Search channels',
+                    },
+                },
+            },
+            true
+        );
+        translate.use('en');
+        setFullscreen(stage);
+        openByHover();
+
+        const input = query<HTMLInputElement>(
+            'fullscreen-channel-panel-search'
+        );
+        expect(input?.placeholder).toBe('Search in Playlist One');
+        expect(panel()?.getAttribute('aria-label')).toBe('Playlist One');
+        expect(panel()?.querySelector('h1, h2, h3')).toBeNull();
+
+        host.panelTitle.set('');
+        fixture.detectChanges();
+        expect(input?.placeholder).toBe('Search channels');
+    });
+
+    it('feeds the search field into the host template context', () => {
+        setFullscreen(stage);
+        openByHover();
+
+        const input = query<HTMLInputElement>(
+            'fullscreen-channel-panel-search'
+        );
+        input!.value = 'news';
+        input!.dispatchEvent(new Event('input'));
+        fixture.detectChanges();
+
+        expect(query('host-list')?.textContent?.trim()).toBe('news');
+
+        query('fullscreen-channel-panel-search-clear')?.click();
+        fixture.detectChanges();
+        expect(query('host-list')?.textContent?.trim()).toBe('');
+    });
+
+    it('closes on a click in the edge gutter the inset card leaves exposed', () => {
+        setFullscreen(stage);
+        openByHover();
+        hotZone()?.dispatchEvent(pointerEvent('pointerdown'));
+        hotZone()?.dispatchEvent(pointerEvent('pointerup'));
+        fixture.detectChanges();
+
+        expect(isOpen()).toBe(false);
+        expect(query('host-list')).not.toBeNull();
+    });
+
+    it('keeps the panel open when the hover dwell opens it during a held press', () => {
+        setFullscreen(stage);
+        stage.dispatchEvent(pointerEvent('pointermove'));
+        hotZone()?.dispatchEvent(pointerEvent('pointerenter'));
+        hotZone()?.dispatchEvent(pointerEvent('pointerdown'));
+        jest.advanceTimersByTime(CHANNEL_PANEL_OPEN_DWELL_MS);
+        fixture.detectChanges();
+        expect(isOpen()).toBe(true);
+
+        hotZone()?.dispatchEvent(pointerEvent('pointerup'));
+        fixture.detectChanges();
+
+        expect(isOpen()).toBe(true);
+    });
+
+    it('closes on the scrim but keeps the list mounted for the next opening', () => {
+        setFullscreen(stage);
+        openByHover();
+        query('fullscreen-channel-panel-scrim')?.click();
+        fixture.detectChanges();
+
+        expect(isOpen()).toBe(false);
+        expect(query('host-list')).not.toBeNull();
+        expect(hotZone()).not.toBeNull();
+
+        openByHover();
+        expect(isOpen()).toBe(true);
+    });
+
+    it('closes from the close button', () => {
+        setFullscreen(stage);
+        openByHover();
+        query('fullscreen-channel-panel-close')?.click();
+        fixture.detectChanges();
+
+        expect(isOpen()).toBe(false);
+    });
+
+    it('closes after the mouse leaves the panel unless it comes back', () => {
+        setFullscreen(stage);
+        openByHover();
+
+        panel()?.dispatchEvent(pointerEvent('pointerleave'));
+        jest.advanceTimersByTime(CHANNEL_PANEL_CLOSE_GRACE_MS - 1);
+        panel()?.dispatchEvent(pointerEvent('pointerenter'));
+        jest.advanceTimersByTime(CHANNEL_PANEL_CLOSE_GRACE_MS);
+        fixture.detectChanges();
+        expect(isOpen()).toBe(true);
+
+        panel()?.dispatchEvent(pointerEvent('pointerleave'));
+        jest.advanceTimersByTime(CHANNEL_PANEL_CLOSE_GRACE_MS);
+        fixture.detectChanges();
+        expect(isOpen()).toBe(false);
+    });
+
+    it('lets the host close the panel through the template context', () => {
+        setFullscreen(stage);
+        openByHover();
+        query('host-close')?.click();
+        fixture.detectChanges();
+
+        expect(isOpen()).toBe(false);
+    });
+
+    it('toggles with the C key and focuses the search field', () => {
+        setFullscreen(stage);
+
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'c' }));
+        fixture.detectChanges();
+        expect(isOpen()).toBe(true);
+
+        jest.advanceTimersByTime(0);
+        expect(document.activeElement).toBe(
+            query('fullscreen-channel-panel-search')
+        );
+
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'C' }));
+        fixture.detectChanges();
+        expect(isOpen()).toBe(false);
+    });
+
+    it('leaves the C key alone while typing and outside fullscreen', () => {
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'c' }));
+        fixture.detectChanges();
+        expect(panel()).toBeNull();
+
+        setFullscreen(stage);
+        openByHover();
+        const input = query<HTMLInputElement>(
+            'fullscreen-channel-panel-search'
+        );
+        input?.dispatchEvent(
+            new KeyboardEvent('keydown', { key: 'c', bubbles: true })
+        );
+        fixture.detectChanges();
+        expect(isOpen()).toBe(true);
+
+        document.dispatchEvent(
+            new KeyboardEvent('keydown', { key: 'c', ctrlKey: true })
+        );
+        fixture.detectChanges();
+        expect(isOpen()).toBe(true);
+    });
+
+    it('stays closed after Escape until the resting mouse actually moves', () => {
+        setFullscreen(stage);
+        openByHover();
+
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+        fixture.detectChanges();
+        expect(isOpen()).toBe(false);
+
+        // The panel slid out from under the pointer: the browser reports the
+        // hot zone under it again without any movement. The edge stays clear.
+        hotZone()?.dispatchEvent(pointerEvent('pointerenter'));
+        jest.advanceTimersByTime(CHANNEL_PANEL_OPEN_DWELL_MS);
+        fixture.detectChanges();
+        expect(isOpen()).toBe(false);
+        expect(isHintVisible()).toBe(false);
+
+        stage.dispatchEvent(pointerEvent('pointermove'));
+        fixture.detectChanges();
+        expect(isHintVisible()).toBe(true);
+        jest.advanceTimersByTime(CHANNEL_PANEL_OPEN_DWELL_MS);
+        fixture.detectChanges();
+        expect(isOpen()).toBe(true);
+    });
+
+    it('closes on Escape', () => {
+        setFullscreen(stage);
+        openByHover();
+
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+        fixture.detectChanges();
+
+        expect(isOpen()).toBe(false);
+    });
+
+    it('consumes only the Escape that closes the panel', () => {
+        // Electron leaves HTML fullscreen on an unhandled Escape, so the close
+        // shortcut must claim the key — while a closed panel leaves Escape
+        // alone, so it still exits fullscreen then.
+        setFullscreen(stage);
+        openByHover();
+
+        const closing = new KeyboardEvent('keydown', {
+            key: 'Escape',
+            cancelable: true,
+        });
+        document.dispatchEvent(closing);
+        fixture.detectChanges();
+        expect(isOpen()).toBe(false);
+        expect(closing.defaultPrevented).toBe(true);
+
+        const idle = new KeyboardEvent('keydown', {
+            key: 'Escape',
+            cancelable: true,
+        });
+        document.dispatchEvent(idle);
+        fixture.detectChanges();
+        expect(idle.defaultPrevented).toBe(false);
+    });
+
+    it('drops the panel, its list and the search when fullscreen ends', () => {
+        setFullscreen(stage);
+        openByHover();
+        const input = query<HTMLInputElement>(
+            'fullscreen-channel-panel-search'
+        );
+        input!.value = 'sport';
+        input!.dispatchEvent(new Event('input'));
+        fixture.detectChanges();
+
+        setFullscreen(null);
+
+        expect(panel()).toBeNull();
+        expect(hotZone()).toBeNull();
+
+        setFullscreen(stage);
+        expect(isOpen()).toBe(false);
+        expect(query('host-list')).toBeNull();
+        openByHover();
+        expect(query('host-list')?.textContent?.trim()).toBe('');
+    });
+
+    describe('host without a search field (series episodes)', () => {
+        let noSearch: ComponentFixture<NoSearchHostComponent>;
+        const q = <T extends HTMLElement>(testId: string): T | null =>
+            noSearch.nativeElement.querySelector(`[data-test-id="${testId}"]`);
+
+        beforeEach(() => {
+            fixture.destroy();
+            const translate = TestBed.inject(TranslateService);
+            translate.setTranslation(
+                'en',
+                {
+                    EMBEDDED_MPV: {
+                        PLAYER: {
+                            EPISODE_LIST: 'Episode list',
+                            HIDE_EPISODE_LIST: 'Hide episode list',
+                        },
+                    },
+                },
+                true
+            );
+            translate.use('en');
+            noSearch = TestBed.createComponent(NoSearchHostComponent);
+            noSearch.detectChanges();
+            fullscreenElement = noSearch.nativeElement.querySelector('.stage');
+            document.dispatchEvent(new Event('fullscreenchange'));
+            noSearch.detectChanges();
+        });
+
+        afterEach(() => noSearch.destroy());
+
+        it('shows the title as a header row instead of the search field and names the list by kind', () => {
+            document.dispatchEvent(new KeyboardEvent('keydown', { key: 'c' }));
+            noSearch.detectChanges();
+
+            const panel = q('fullscreen-channel-panel');
+            expect(panel?.classList).toContain(
+                'fullscreen-channel-panel--open'
+            );
+            expect(panel?.getAttribute('data-panel-kind')).toBe('episodes');
+            expect(panel?.getAttribute('aria-label')).toBe('Some Show');
+            expect(q('fullscreen-channel-panel-search')).toBeNull();
+            expect(
+                q('fullscreen-channel-panel-title')?.textContent?.trim()
+            ).toBe('Some Show');
+            expect(
+                q('fullscreen-channel-panel-close')?.getAttribute('aria-label')
+            ).toBe('Hide episode list');
+
+            noSearch.componentInstance.panelTitle.set('');
+            noSearch.detectChanges();
+            expect(
+                q('fullscreen-channel-panel-title')?.textContent?.trim()
+            ).toBe('Episode list');
+            expect(panel?.getAttribute('aria-label')).toBe('Episode list');
+        });
+
+        it('lands keyboard focus on the panel itself when C opens it', () => {
+            document.dispatchEvent(new KeyboardEvent('keydown', { key: 'c' }));
+            noSearch.detectChanges();
+            jest.advanceTimersByTime(0);
+
+            expect(document.activeElement).toBe(q('fullscreen-channel-panel'));
+        });
+
+        it('tells the host template whether the panel is open', () => {
+            document.dispatchEvent(new KeyboardEvent('keydown', { key: 'c' }));
+            noSearch.detectChanges();
+            expect(q('host-body')?.textContent?.trim()).toBe('open');
+
+            q('host-close')?.click();
+            noSearch.detectChanges();
+            expect(q('host-body')?.textContent?.trim()).toBe('closed');
+            expect(
+                q('fullscreen-channel-panel')?.classList.contains(
+                    'fullscreen-channel-panel--open'
+                )
+            ).toBe(false);
+        });
+    });
+});

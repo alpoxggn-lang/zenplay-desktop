@@ -1,0 +1,214 @@
+@use '../../../../../../ui/styles/portal-layout' as portal;
+
+@include portal.live-layout;
+
+:host {
+    min-height: 0;
+    background: var(--app-content-bg);
+}
+
+.sidebar {
+    > app-channel-list-loading-state {
+        flex: 1;
+        min-height: 0;
+        overflow: hidden;
+    }
+
+    app-sidebar {
+        flex: 1;
+        min-height: 0;
+        overflow: hidden;
+    }
+
+    .sidebar-collapse-toggle {
+        position: absolute;
+        top: 6px;
+        right: 6px;
+        z-index: 3;
+        width: 32px;
+        height: 32px;
+        opacity: 0.7;
+        transition: opacity 0.15s ease;
+        padding: 0;
+
+        &:hover,
+        &:focus-visible {
+            opacity: 1;
+        }
+    }
+}
+
+.content-container {
+    min-width: 0;
+    background: var(--app-content-bg);
+}
+
+.video-player {
+    background: #000;
+
+    &:has(> app-audio-player) {
+        background: var(--app-content-bg);
+    }
+
+    > app-audio-player,
+    > app-vjs-player,
+    > app-html-video-player,
+    > app-art-player {
+        flex: 1;
+        min-height: 0;
+        display: block;
+    }
+}
+
+.epg {
+    border-top: 1px solid var(--app-separator);
+    background: var(--app-content-bg);
+}
+
+.epg-content {
+    > app-epg-list {
+        flex: 1;
+        min-height: 0;
+    }
+}
+
+.channel-number-overlay {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 1000;
+    pointer-events: none;
+}
+
+.channel-number-display {
+    min-width: 120px;
+    padding: 2rem 3rem;
+    border: 2px solid rgba(255, 255, 255, 0.1);
+    border-radius: 16px;
+    background: rgba(0, 0, 0, 0.85);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+    color: #fff;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 6rem;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-align: center;
+    animation: scaleIn 0.15s ease-out;
+}
+
+@keyframes scaleIn {
+    from {
+        opacity: 0;
+        transform: scale(0.8);
+    }
+
+    to {
+        opacity: 1;
+        transform: scale(1);
+    }
+}
+
+// Matches the phone breakpoint in portal-layout's live-layout mixin, which
+// this component includes; a narrower one here would leave a band of widths
+// where only the mixin's generic stacking applied.
+@media only screen and (max-width: 640px) {
+    :host {
+        flex-direction: column-reverse;
+    }
+
+    .sidebar {
+        width: 100% !important;
+        min-width: 100%;
+        max-width: 100%;
+        height: 50vh;
+        // The mixin caps the list's share; here the explicit height is the
+        // whole point of the bottom-drawer layout, so release the cap.
+        max-height: none;
+        border-right: none;
+        border-top: 1px solid var(--app-separator);
+        border-bottom: none;
+
+        // Sidebar collapse uses width=0 on desktop; on mobile the rail flips
+        // to a bottom drawer so collapse it via height instead.
+        &.sidebar-collapsed {
+            width: 100% !important;
+            min-width: 100% !important;
+            height: 0 !important;
+        }
+    }
+
+    // Keeps the mixin's player floor rather than releasing it: `height: 50vh`
+    // is a preference, not a reservation, so on a short landscape phone the
+    // drawer could otherwise squeeze the video away entirely.
+    .content-container {
+        height: 50vh;
+    }
+}
+
+// ─── Guide mode ─────────────────────────────────────────────────────────────
+// The sidebar stays MOUNTED while the guide is open and is only hidden: its
+// channel-list container dispatches `resetActiveChannel()` from `ngOnDestroy`,
+// so removing it would clear the active channel the guide needs and close the
+// guide again. `!important` beats the resizable directive's inline width, and
+// it is declared after the phone breakpoint so the bottom-drawer rules
+// (`height: 50vh`, borders) cannot leave a phantom band on small screens.
+// Hiding rather than removing also preserves the list's scroll position.
+.sidebar.sidebar--guide-hidden {
+    display: none !important;
+}
+
+// The player keeps its DOM position and is only re-flowed into a docked strip;
+// no remount, so playback (and native-view Embedded MPV bounds) survive.
+.content-container.is-guide {
+    .video-player {
+        flex: 0 0 auto;
+        height: 128px;
+        // The shared player mixin floors `.video-player` at 96px on phones;
+        // the docked strip is 128px expanded and 48px collapsed, so the floor
+        // has to go or the collapsed strip cannot shrink.
+        min-height: 0;
+        display: flex;
+        align-items: stretch;
+        gap: 18px;
+        padding: 14px 18px;
+        box-sizing: border-box;
+        background: var(--app-widget-bg);
+        border-bottom: 1px solid var(--app-separator);
+
+        > app-web-player-view {
+            flex: 0 0 auto;
+            height: 100%;
+            aspect-ratio: 16 / 9;
+            border-radius: 9px;
+            overflow: hidden;
+            background: #000;
+        }
+
+        > app-epg-guide-now-playing {
+            flex: 1;
+            min-width: 0;
+        }
+    }
+
+    .guide-dock--external {
+        height: 48px;
+        padding: 6px 18px;
+    }
+
+    .epg-guide-host {
+        flex: 1;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+    }
+
+    &.is-guide-collapsed .video-player {
+        height: 48px;
+        padding: 6px 18px;
+
+        > app-web-player-view {
+            display: none;
+        }
+    }
+}

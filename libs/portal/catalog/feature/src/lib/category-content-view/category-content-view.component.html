@@ -1,0 +1,216 @@
+@if (selectedCategory()) {
+    @if (selectedDetailComponent(); as detailComponentRef) {
+        <ng-container
+            *ngComponentOutlet="
+                detailComponentRef;
+                inputs: detailComponentInputs()
+            "
+        />
+    } @else {
+        <div class="category-content-layout">
+            <div class="category-content-header">
+                <div class="category-meta">
+                    <h2 class="category-title">
+                        {{
+                            selectedCategoryTitle() ??
+                                ('PORTALS.ALL_ITEMS' | translate)
+                        }}
+                    </h2>
+                    <div class="category-subtitle">
+                        @let subtitle = categoryItemSubtitle();
+                        {{ subtitle.key | translate: subtitle.params }}
+                    </div>
+                </div>
+                @if (hasRefineControls()) {
+                    <div class="active-refinements" aria-live="polite">
+                        @if (canSortContent()) {
+                            @let sortLabels = activeSortLabels();
+                            <!-- A plain div cannot carry an accessible name:
+                                 screen readers get the full text from the
+                                 hidden span instead of the short label. -->
+                            <div class="refinement-chip sort-refinement-chip">
+                                <mat-icon>sort</mat-icon>
+                                <span
+                                    class="refinement-chip-label"
+                                    aria-hidden="true"
+                                >
+                                    {{ sortLabels.chipLabelKey | translate }}
+                                </span>
+                                <span class="visually-hidden"
+                                    >{{ 'WORKSPACE.SORT_LABEL' | translate
+                                    }}{{
+                                        sortLabels.labelKey | translate
+                                    }}</span
+                                >
+                            </div>
+                        }
+                        @if (minRating(); as rating) {
+                            <button
+                                type="button"
+                                mat-button
+                                class="refinement-chip rating-refinement-chip"
+                                (click)="setMinRating(null)"
+                                [attr.aria-label]="
+                                    'WORKSPACE.REFINE_CLEAR_RATING'
+                                        | translate: { value: rating }
+                                "
+                            >
+                                <mat-icon>star</mat-icon>
+                                <span class="refinement-chip-label">
+                                    {{ rating }}.0+
+                                </span>
+                                <mat-icon iconPositionEnd>close</mat-icon>
+                            </button>
+                        }
+                    </div>
+                    <button
+                        type="button"
+                        mat-button
+                        class="refine-action"
+                        [class.refine-action-active]="
+                            activeRefinementCount() > 0
+                        "
+                        [matMenuTriggerFor]="refineMenu"
+                        [matTooltip]="'WORKSPACE.REFINE_ACTION' | translate"
+                        [attr.aria-label]="
+                            'WORKSPACE.REFINE_ACTION' | translate
+                        "
+                    >
+                        <mat-icon>tune</mat-icon>
+                        <span>{{ 'WORKSPACE.REFINE_ACTION' | translate }}</span>
+                        @if (activeRefinementCount() > 0) {
+                            <span class="refine-count">{{
+                                activeRefinementCount()
+                            }}</span>
+                        }
+                    </button>
+                    <mat-menu #refineMenu="matMenu" class="refine-menu">
+                        @if (canSortContent()) {
+                            <div
+                                role="group"
+                                [attr.aria-label]="
+                                    'WORKSPACE.REFINE_SORT_SECTION' | translate
+                                "
+                            >
+                                <div
+                                    class="refine-menu-section-title"
+                                    aria-hidden="true"
+                                >
+                                    {{
+                                        'WORKSPACE.REFINE_SORT_SECTION'
+                                            | translate
+                                    }}
+                                </div>
+                                @for (
+                                    option of sortOptions();
+                                    track option.mode
+                                ) {
+                                    <button
+                                        mat-menu-item
+                                        [appMenuItemRadio]="
+                                            contentSortMode() === option.mode
+                                        "
+                                        (click)="
+                                            setContentSortMode(option.mode)
+                                        "
+                                    >
+                                        <mat-icon appMenuItemRadioCheck
+                                            >check</mat-icon
+                                        >
+                                        <span>{{
+                                            option.labelKey | translate
+                                        }}</span>
+                                    </button>
+                                }
+                            </div>
+                        }
+                        @if (canFilterByRating()) {
+                            @if (canSortContent()) {
+                                <div
+                                    class="refine-menu-divider"
+                                    role="separator"
+                                ></div>
+                            }
+                            <div
+                                role="group"
+                                [attr.aria-label]="
+                                    'WORKSPACE.REFINE_RATING_SECTION'
+                                        | translate
+                                "
+                            >
+                                <div
+                                    class="refine-menu-section-title"
+                                    aria-hidden="true"
+                                >
+                                    {{
+                                        'WORKSPACE.REFINE_RATING_SECTION'
+                                            | translate
+                                    }}
+                                </div>
+                                <button
+                                    mat-menu-item
+                                    [appMenuItemRadio]="minRating() === null"
+                                    (click)="setMinRating(null)"
+                                >
+                                    <mat-icon appMenuItemRadioCheck
+                                        >check</mat-icon
+                                    >
+                                    <span>{{
+                                        'WORKSPACE.FILTER_RATING_ANY'
+                                            | translate
+                                    }}</span>
+                                </button>
+                                @for (
+                                    threshold of ratingThresholds;
+                                    track threshold
+                                ) {
+                                    <button
+                                        mat-menu-item
+                                        [appMenuItemRadio]="
+                                            minRating() === threshold
+                                        "
+                                        (click)="setMinRating(threshold)"
+                                    >
+                                        <mat-icon appMenuItemRadioCheck
+                                            >check</mat-icon
+                                        >
+                                        <span>{{
+                                            'WORKSPACE.FILTER_RATING_MIN'
+                                                | translate
+                                                    : { value: threshold }
+                                        }}</span>
+                                    </button>
+                                }
+                            </div>
+                        }
+                    </mat-menu>
+                }
+            </div>
+            <app-grid-list
+                appInfiniteScroll
+                [infiniteHasMore]="infiniteHasMore()"
+                [infiniteAppending]="infiniteAppending()"
+                [infiniteItemCount]="contentWithProgress().length"
+                [infiniteResetKey]="gridResetKey()"
+                (infiniteLoadMore)="onLoadMore()"
+                [isLoading]="isPaginatedContentLoading()"
+                [isAppending]="infiniteAppending()"
+                [appendError]="infiniteAppendError()"
+                (retryLoadMore)="onRetryAppend()"
+                [items]="contentWithProgress()"
+                (itemClicked)="onItemClick($event)"
+                [searchTerm]="searchTerm()"
+                [type]="contentType() ?? ''"
+            />
+        </div>
+    }
+} @else {
+    <app-playlist-error-view
+        [title]="'PORTALS.ERROR_VIEW.NO_CATEGORY_SELECTED.TITLE' | translate"
+        [description]="
+            'PORTALS.ERROR_VIEW.NO_CATEGORY_SELECTED.DESCRIPTION' | translate
+        "
+        [showActionButtons]="false"
+        [viewType]="'EMPTY_CATEGORY'"
+    />
+}

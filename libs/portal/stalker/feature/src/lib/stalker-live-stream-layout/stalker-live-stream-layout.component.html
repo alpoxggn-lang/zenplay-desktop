@@ -1,0 +1,378 @@
+@let isEmbeddedPlayer = usesEmbeddedPlayer();
+
+@if (stalkerStore.selectedCategoryId()) {
+    <div
+        class="sidebar"
+        [class.sidebar-collapsed]="isSidebarCollapsed()"
+        [attr.inert]="isSidebarCollapsed() ? '' : null"
+        appResizable
+        [minWidth]="250"
+        [maxWidth]="600"
+        [defaultWidth]="400"
+        storageKey="live-channels-sidebar-width"
+    >
+        <div class="sidebar-header category-content-header">
+            @if (livePanels.canOpenCategoriesPopover()) {
+                <!-- The categories rail is folded: the title becomes the way
+                     back to it (a dropdown of the same list) so switching
+                     categories stays one click away. -->
+                <button
+                    #showCategoriesButton
+                    mat-icon-button
+                    type="button"
+                    class="sidebar-show-categories"
+                    data-test-id="live-show-categories"
+                    [attr.aria-label]="'LAYOUT.SHOW_CATEGORIES' | translate"
+                    [matTooltip]="'LAYOUT.SHOW_CATEGORIES' | translate"
+                    (click)="livePanels.showCategories()"
+                >
+                    <mat-icon>chevron_right</mat-icon>
+                </button>
+                <button
+                    #categoryDropdown
+                    type="button"
+                    class="category-dropdown"
+                    data-test-id="live-category-dropdown"
+                    aria-haspopup="dialog"
+                    aria-expanded="false"
+                    [attr.aria-label]="'LAYOUT.CHOOSE_CATEGORY' | translate"
+                    (click)="livePanels.openCategoriesPopover(categoryDropdown)"
+                >
+                    <span class="category-title">
+                        {{ selectedCategoryTitle() }}
+                    </span>
+                    @if (totalChannelCount() > 0) {
+                        <span class="category-count">{{
+                            totalChannelCount()
+                        }}</span>
+                    }
+                    <mat-icon class="category-dropdown__caret"
+                        >expand_more</mat-icon
+                    >
+                </button>
+            } @else {
+                <div class="category-meta">
+                    <h2 class="category-title">
+                        {{ selectedCategoryTitle() }}
+                    </h2>
+                    @if (totalChannelCount() > 0) {
+                        <span class="category-subtitle"
+                            >{{ totalChannelCount() }}
+                            {{
+                                (totalChannelCount() === 1
+                                    ? 'PORTALS.ITEM'
+                                    : 'PORTALS.ITEMS'
+                                ) | translate
+                            }}</span
+                        >
+                    }
+                </div>
+            }
+            @if (navigation.canReveal()) {
+                <button
+                    mat-icon-button
+                    type="button"
+                    [attr.aria-label]="
+                        'CHANNELS.SHOW_PLAYING_CHANNEL' | translate
+                    "
+                    [matTooltip]="'CHANNELS.SHOW_PLAYING_CHANNEL' | translate"
+                    (click)="navigation.reveal()"
+                >
+                    <mat-icon>playlist_play</mat-icon>
+                </button>
+            }
+            @if (isFullListMode()) {
+                <button
+                    mat-icon-button
+                    type="button"
+                    [disabled]="isFullListLoading()"
+                    [attr.aria-label]="
+                        'PORTALS.REFRESH_CHANNEL_LIST' | translate
+                    "
+                    [matTooltip]="'PORTALS.REFRESH_CHANNEL_LIST' | translate"
+                    (click)="refreshChannels()"
+                >
+                    <mat-icon>refresh</mat-icon>
+                </button>
+            }
+            <button
+                mat-icon-button
+                type="button"
+                [attr.aria-label]="'LAYOUT.HIDE_PANELS' | translate"
+                [matTooltip]="'LAYOUT.HIDE_PANELS_TOOLTIP' | translate"
+                (click)="livePanels.collapsePanels()"
+            >
+                <mat-icon>chevron_left</mat-icon>
+            </button>
+        </div>
+
+        <ng-container *ngTemplateOutlet="stalkerChannelList" />
+    </div>
+}
+
+<div class="content-container">
+    @if (isSidebarCollapsed()) {
+        <button
+            #restoreButton
+            mat-icon-button
+            type="button"
+            class="sidebar-restore"
+            [attr.aria-label]="'LAYOUT.SHOW_PANELS' | translate"
+            [matTooltip]="'LAYOUT.SHOW_PANELS_TOOLTIP' | translate"
+            (click)="livePanels.toggleSidebar()"
+        >
+            <mat-icon>chevron_right</mat-icon>
+        </button>
+    }
+    @if (!stalkerStore.selectedItem() && !stalkerStore.selectedCategoryId()) {
+        @if (showItvAllItems()) {
+            <!-- Xtream parity: all channels of the portal, paginated, before
+                 any category is picked. Clicking a card starts playback. -->
+            <app-stalker-itv-all-items
+                [channels]="itvFullChannelList()"
+                [loading]="isFullListLoading()"
+                [progress]="fullListProgress()"
+                [searchTerm]="searchTerm()"
+                (channelActivated)="playChannel($event)"
+            />
+        } @else {
+            <app-portal-empty-state
+                icon="live_tv"
+                [message]="'PORTALS.SELECT_CATEGORY' | translate"
+            />
+        }
+    } @else if (stalkerStore.selectedItem()) {
+        @if (streamUrl() && (isEmbeddedPlayer || isRadioMode())) {
+            <div class="video-player">
+                @if (isRadioMode()) {
+                    <app-audio-player
+                        [url]="streamUrl()"
+                        [icon]="activePlaybackArtwork()"
+                        [channelName]="activePlaybackTitle()"
+                        [dispatchAdjacentChannelAction]="false"
+                        (channelSwitchRequested)="
+                            handleRadioChannelSwitch($event)
+                        "
+                    />
+                } @else {
+                    <app-web-player-view
+                        [playbackSessionKey]="playbackSessionKey()"
+                        [streamUrl]="streamUrl()"
+                        [title]="activePlayback()?.title ?? ''"
+                        [playback]="activePlayback()"
+                        [recordingMetadata]="recordingMetadata()"
+                        (externalFallbackRequested)="
+                            handleExternalFallbackRequest($event)
+                        "
+                        (recordingStopped)="onRecordingStopped($event)"
+                    />
+                }
+            </div>
+        }
+        @if (!isRadioMode() && supportsEpg) {
+            @let canCollapseEpgPanel = !!streamUrl() && isEmbeddedPlayer;
+            <div
+                class="epg"
+                [class.epg--inline]="canCollapseEpgPanel"
+                [class.epg--list]="epgViewMode() === 'list'"
+                [class.epg-collapsed]="
+                    canCollapseEpgPanel && isLiveEpgPanelCollapsed()
+                "
+            >
+                <ng-container *ngTemplateOutlet="epgPanelContent" />
+            </div>
+        }
+    } @else if (isSidebarCollapsed()) {
+        <app-channel-list-hidden-state (restore)="livePanels.toggleSidebar()" />
+    } @else {
+        <app-portal-empty-state
+            icon="live_tv"
+            [message]="'CHANNELS.SELECT_CHANNEL_PLAYBACK' | translate"
+        />
+    }
+</div>
+
+<ng-template #epgPanelContent>
+    <div class="epg-content">
+        @if (epgViewMode() === 'list') {
+            <app-epg-list-view
+                [programs]="activeEpgPrograms()"
+                [offsetMinutes]="epgOffsetMinutes()"
+                [channelName]="
+                    controlledChannel()?.name ?? activePlaybackTitle()
+                "
+                [channelLogo]="activePlaybackArtwork()"
+                [sourceLabel]="'WORKSPACE.SHELL.STALKER_PORTAL' | translate"
+                [archivePlaybackAvailable]="false"
+                [archiveDays]="0"
+                [loading]="isLoadingEpg()"
+                [emptyReason]="supportsEpg ? 'none' : 'provider-no-epg'"
+                [selectedDate]="selectedLiveEpgDate()"
+                [collapsed]="
+                    !!streamUrl() &&
+                    usesEmbeddedPlayer() &&
+                    isLiveEpgPanelCollapsed()
+                "
+                [summary]="liveEpgPanelSummary()"
+                (selectedDateChange)="onLiveEpgSelectedDateChange($event)"
+                (collapsedChange)="onLiveEpgPanelCollapsedChange($event)"
+            />
+        } @else {
+            <app-epg-timeline
+                [programs]="activeEpgPrograms()"
+                [offsetMinutes]="epgOffsetMinutes()"
+                [channelName]="
+                    controlledChannel()?.name ?? activePlaybackTitle()
+                "
+                [channelLogo]="activePlaybackArtwork()"
+                [sourceLabel]="'WORKSPACE.SHELL.STALKER_PORTAL' | translate"
+                [archivePlaybackAvailable]="false"
+                [archiveDays]="0"
+                [loading]="isLoadingEpg()"
+                [emptyReason]="supportsEpg ? 'none' : 'provider-no-epg'"
+                [selectedDate]="selectedLiveEpgDate()"
+                [collapsed]="
+                    !!streamUrl() &&
+                    usesEmbeddedPlayer() &&
+                    isLiveEpgPanelCollapsed()
+                "
+                [summary]="liveEpgPanelSummary()"
+                (selectedDateChange)="onLiveEpgSelectedDateChange($event)"
+                (collapsedChange)="onLiveEpgPanelCollapsedChange($event)"
+            />
+        }
+    </div>
+</ng-template>
+
+<div
+    aria-hidden="true"
+    class="channel-context-menu-anchor"
+    [style.left]="contextMenuPosition().x"
+    [style.top]="contextMenuPosition().y"
+    [matMenuTriggerFor]="channelContextMenu"
+    #contextMenuTrigger="matMenuTrigger"
+></div>
+
+<mat-menu #channelContextMenu="matMenu">
+    <button mat-menu-item (click)="openEpgMapping()">
+        <mat-icon>settings_remote</mat-icon>
+        <span>{{ 'CHANNELS.MAP_EPG' | translate }}</span>
+    </button>
+</mat-menu>
+
+<!-- The channel list, stamped into the sidebar and — with its own search
+     term — into the player's fullscreen channel panel. Every instance carries
+     the #scrollContainer that drives infinite scroll. -->
+<ng-template #stalkerChannelList let-panelSearchTerm="searchTerm">
+    @if (isFullListLoading()) {
+        <div class="full-list-progress" role="status">
+            <mat-spinner diameter="14" />
+            <span class="full-list-progress__label">
+                {{ 'PORTALS.LOADING_ALL_CHANNELS' | translate }}
+            </span>
+            @if (fullListProgress(); as progress) {
+                <span class="full-list-progress__count">
+                    {{ progress.loaded }}/{{ progress.total }}
+                </span>
+            }
+        </div>
+    }
+
+    <!-- Only the sidebar copy is the `live-channels` pane the category
+         list's ArrowRight/ArrowLeft hand-off targets; the fullscreen panel's
+         copy must not duplicate that id. -->
+    <div
+        #scrollContainer
+        class="channels-list app-scrollbar"
+        appChannelScrollFocus
+        [attr.id]="panelSearchTerm ? null : 'live-channels'"
+        [attr.aria-label]="'HOME.PLAYLISTS.CHANNELS' | translate"
+    >
+        @if (isInitialChannelsLoading()) {
+            <app-channel-list-skeleton
+                [count]="9"
+                [showEpg]="supportsEpg && !isRadioMode()"
+                [actionCount]="1"
+            />
+        } @else if (
+            hasSearchTerm(panelSearchTerm) &&
+            channelsForList(panelSearchTerm).length === 0
+        ) {
+            <div class="empty-search-state">
+                <app-portal-empty-state
+                    icon="search_off"
+                    [message]="'CHANNELS.NO_SEARCH_RESULTS' | translate"
+                />
+            </div>
+        } @else if (isCategoryEmpty()) {
+            <div class="empty-search-state">
+                <app-portal-empty-state
+                    icon="tv_off"
+                    [message]="'PORTALS.NO_CHANNELS_IN_CATEGORY' | translate"
+                />
+            </div>
+        } @else {
+            @for (
+                item of channelsForList(panelSearchTerm);
+                track item.id ?? $index
+            ) {
+                <app-channel-list-item
+                    [attr.data-channel-id]="normalizeStalkerEntityId(item.id)"
+                    [name]="item.o_name || item.name || ''"
+                    [logo]="item.logo"
+                    [selected]="isSelectedChannel(item)"
+                    [epgProgram]="
+                        supportsEpg
+                            ? (epgPreviewPrograms.get(
+                                  normalizeStalkerEntityId(item.id)
+                              ) ?? null)
+                            : null
+                    "
+                    [progressPercentage]="
+                        supportsEpg
+                            ? (currentProgramsProgress.get(
+                                  normalizeStalkerEntityId(item.id)
+                              ) ?? 0)
+                            : 0
+                    "
+                    [showEpg]="supportsEpg && !isRadioMode()"
+                    [isRadio]="isRadioMode()"
+                    [showFavoriteButton]="true"
+                    [showProgramInfoButton]="true"
+                    [showDetailsContextMenu]="
+                        supportsEpgMapping && !isRadioMode()
+                    "
+                    [isFavorite]="
+                        favorites.get(normalizeStalkerEntityId(item.id)) ??
+                        false
+                    "
+                    (clicked)="playChannel(item, undefined, panelSearchTerm)"
+                    (activated)="playChannel(item, true, panelSearchTerm)"
+                    (keyboardActivated)="
+                        playChannel(item, true, panelSearchTerm)
+                    "
+                    (favoriteToggled)="toggleFavorite(item)"
+                    (contextMenuRequested)="onChannelContextMenu(item, $event)"
+                />
+            }
+        }
+
+        @if (isLoadingMore()) {
+            <div class="loading-indicator">
+                <mat-spinner diameter="24" />
+            </div>
+        }
+    </div>
+</ng-template>
+
+<!-- Stamped into the player's fullscreen channel panel (FULLSCREEN_CHANNEL_PANEL). -->
+<ng-template #fullscreenChannelPanel let-searchTerm="searchTerm">
+    <div class="fullscreen-channel-list">
+        <ng-container
+            *ngTemplateOutlet="
+                stalkerChannelList;
+                context: { searchTerm: searchTerm }
+            "
+        />
+    </div>
+</ng-template>

@@ -1,0 +1,495 @@
+import { ControlsSurface } from './controls-surface';
+
+/** jsdom has no PointerEvent; a MouseEvent with a pointerType matches how the
+ * surface reads events (it only inspects the property). */
+function pointerTypedEvent(type: string, pointerType: string): MouseEvent {
+    const event = new MouseEvent(type, { bubbles: true });
+    Object.defineProperty(event, 'pointerType', { value: pointerType });
+    return event;
+}
+
+describe('ControlsSurface', () => {
+    let reveal: jest.Mock;
+    let toggleFullscreen: jest.Mock;
+    let closePopovers: jest.Mock;
+    let togglePlay: jest.Mock;
+    let hideControls: jest.Mock;
+    let canTogglePlay: boolean;
+    let menuOpen: boolean;
+    let controlsVisible: boolean;
+    let surface: ControlsSurface;
+    let element: HTMLElement;
+
+    beforeEach(() => {
+        reveal = jest.fn();
+        toggleFullscreen = jest.fn();
+        closePopovers = jest.fn();
+        togglePlay = jest.fn();
+        hideControls = jest.fn();
+        canTogglePlay = true;
+        menuOpen = false;
+        controlsVisible = true;
+        element = document.createElement('div');
+        document.body.appendChild(element);
+        surface = new ControlsSurface({
+            reveal,
+            toggleFullscreen,
+            closePopovers,
+            togglePlay,
+            canTogglePlay: () => canTogglePlay,
+            isMenuOpen: () => menuOpen,
+            controlsVisible: () => controlsVisible,
+            hideControls,
+        });
+    });
+
+    afterEach(() => {
+        surface.dispose();
+        element.remove();
+        jest.useRealTimers();
+    });
+
+    it('reveals on pointer activity over the surface', () => {
+        surface.attachSurface(element);
+        element.dispatchEvent(new MouseEvent('pointermove', { bubbles: true }));
+        element.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+        expect(reveal).toHaveBeenCalledTimes(2);
+    });
+
+    it('toggles fullscreen on a double-click outside interactive elements', () => {
+        surface.attachSurface(element);
+        element.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+        expect(toggleFullscreen).toHaveBeenCalledTimes(1);
+    });
+
+    it('ignores double-clicks on buttons/inputs/sliders', () => {
+        const button = document.createElement('button');
+        element.appendChild(button);
+        surface.attachSurface(element);
+        button.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+        expect(toggleFullscreen).not.toHaveBeenCalled();
+    });
+
+    it('toggles play on a single click after the defer delay', () => {
+        jest.useFakeTimers();
+        surface.attachSurface(element);
+        element.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+        expect(togglePlay).not.toHaveBeenCalled();
+        jest.advanceTimersByTime(300);
+        expect(togglePlay).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not queue play while toggling is unavailable', () => {
+        jest.useFakeTimers();
+        canTogglePlay = false;
+        surface.attachSurface(element);
+        element.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+
+        canTogglePlay = true;
+        jest.advanceTimersByTime(300);
+
+        expect(togglePlay).not.toHaveBeenCalled();
+    });
+
+    it('does not toggle play on a double-click, only fullscreens', () => {
+        jest.useFakeTimers();
+        surface.attachSurface(element);
+        element.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+        element.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+        jest.advanceTimersByTime(300);
+        expect(togglePlay).not.toHaveBeenCalled();
+        expect(toggleFullscreen).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not toggle play on a click on a button', () => {
+        jest.useFakeTimers();
+        const button = document.createElement('button');
+        element.appendChild(button);
+        surface.attachSurface(element);
+        button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+        jest.advanceTimersByTime(300);
+        expect(togglePlay).not.toHaveBeenCalled();
+    });
+
+    it('ignores clicks and double-clicks from the controls root', () => {
+        jest.useFakeTimers();
+        surface.dispose();
+        const controlsRoot = document.createElement('div');
+        const timeLabel = document.createElement('span');
+        controlsRoot.appendChild(timeLabel);
+        element.appendChild(controlsRoot);
+        surface = new ControlsSurface(
+            {
+                reveal,
+                toggleFullscreen,
+                closePopovers,
+                togglePlay,
+                canTogglePlay: () => canTogglePlay,
+                isMenuOpen: () => menuOpen,
+            },
+            controlsRoot
+        );
+        surface.attachSurface(element);
+
+        timeLabel.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+        jest.advanceTimersByTime(300);
+        expect(togglePlay).not.toHaveBeenCalled();
+
+        timeLabel.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+        expect(toggleFullscreen).not.toHaveBeenCalled();
+    });
+
+    it('closes an open menu on click instead of toggling play', () => {
+        jest.useFakeTimers();
+        menuOpen = true;
+        surface.attachSurface(element);
+        element.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+        jest.advanceTimersByTime(300);
+        expect(togglePlay).not.toHaveBeenCalled();
+        expect(closePopovers).toHaveBeenCalledTimes(1);
+    });
+
+    it('closes popovers on an outside pointer-down', () => {
+        surface.attachSurface(element);
+        const outside = document.createElement('div');
+        document.body.appendChild(outside);
+        outside.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true }));
+        expect(closePopovers).toHaveBeenCalledTimes(1);
+        outside.remove();
+    });
+
+    it('does not close popovers when the pointer-down is inside the surface', () => {
+        surface.attachSurface(element);
+        element.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true }));
+        expect(closePopovers).not.toHaveBeenCalled();
+    });
+
+    it('detaches the previous surface listeners when rebinding', () => {
+        const first = document.createElement('div');
+        surface.attachSurface(first);
+        surface.attachSurface(element);
+        first.dispatchEvent(new MouseEvent('pointermove', { bubbles: true }));
+        expect(reveal).not.toHaveBeenCalled();
+    });
+
+    it('cancels a pending click-to-play action when rebinding', () => {
+        jest.useFakeTimers();
+        const first = document.createElement('div');
+        surface.attachSurface(first);
+        first.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+
+        surface.attachSurface(element);
+        jest.advanceTimersByTime(300);
+
+        expect(togglePlay).not.toHaveBeenCalled();
+    });
+
+    it('stops reacting after dispose', () => {
+        surface.attachSurface(element);
+        surface.dispose();
+        element.dispatchEvent(new MouseEvent('pointermove', { bubbles: true }));
+        expect(reveal).not.toHaveBeenCalled();
+    });
+
+    describe('touch', () => {
+        it('does not reveal on the pointer activity a tap synthesizes', () => {
+            surface.attachSurface(element);
+            element.dispatchEvent(pointerTypedEvent('pointerenter', 'touch'));
+            element.dispatchEvent(pointerTypedEvent('pointermove', 'touch'));
+            expect(reveal).not.toHaveBeenCalled();
+        });
+
+        it('reveals on a tap while hidden and never queues play', () => {
+            jest.useFakeTimers();
+            controlsVisible = false;
+            surface.attachSurface(element);
+            element.dispatchEvent(pointerTypedEvent('click', 'touch'));
+            jest.advanceTimersByTime(300);
+            expect(reveal).toHaveBeenCalledTimes(1);
+            expect(togglePlay).not.toHaveBeenCalled();
+            expect(hideControls).not.toHaveBeenCalled();
+        });
+
+        it('hides on a viewport tap while visible instead of pausing', () => {
+            jest.useFakeTimers();
+            surface.attachSurface(element);
+            element.dispatchEvent(pointerTypedEvent('click', 'touch'));
+            jest.advanceTimersByTime(300);
+            expect(hideControls).toHaveBeenCalledTimes(1);
+            expect(reveal).not.toHaveBeenCalled();
+            expect(togglePlay).not.toHaveBeenCalled();
+        });
+
+        it('dismisses an open menu on a tap instead of hiding the bar', () => {
+            menuOpen = true;
+            surface.attachSurface(element);
+            element.dispatchEvent(pointerTypedEvent('click', 'touch'));
+            expect(closePopovers).toHaveBeenCalledTimes(1);
+            expect(hideControls).not.toHaveBeenCalled();
+        });
+
+        it('re-reveals on taps landing on interactive elements', () => {
+            jest.useFakeTimers();
+            const button = document.createElement('button');
+            element.appendChild(button);
+            surface.attachSurface(element);
+            button.dispatchEvent(pointerTypedEvent('click', 'touch'));
+            jest.advanceTimersByTime(300);
+            expect(reveal).toHaveBeenCalledTimes(1);
+            expect(togglePlay).not.toHaveBeenCalled();
+        });
+
+        it('attributes pointer-typeless events to a recent touch pointerdown', () => {
+            document.dispatchEvent(pointerTypedEvent('pointerdown', 'touch'));
+            expect(surface.wasTouchInteraction(new FocusEvent('focusin'))).toBe(
+                true
+            );
+            expect(surface.wasTouchInteraction(undefined)).toBe(true);
+
+            document.dispatchEvent(pointerTypedEvent('pointerdown', 'mouse'));
+            expect(surface.wasTouchInteraction(new FocusEvent('focusin'))).toBe(
+                false
+            );
+        });
+
+        it('trusts an explicit pointer type over the pointerdown history', () => {
+            document.dispatchEvent(pointerTypedEvent('pointerdown', 'touch'));
+            expect(
+                surface.wasTouchInteraction(
+                    pointerTypedEvent('pointerenter', 'mouse')
+                )
+            ).toBe(false);
+            expect(
+                surface.wasTouchInteraction(pointerTypedEvent('click', 'touch'))
+            ).toBe(true);
+        });
+    });
+
+    describe('pointer-originated focus attribution', () => {
+        let button: HTMLButtonElement;
+        let icon: HTMLElement;
+
+        beforeEach(() => {
+            button = document.createElement('button');
+            icon = document.createElement('span');
+            button.appendChild(icon);
+            element.appendChild(button);
+        });
+
+        const focusOn = (target: EventTarget) => {
+            const event = new FocusEvent('focusin');
+            Object.defineProperty(event, 'target', { value: target });
+            return event;
+        };
+
+        it('attributes focus to a recent press inside the focused element', () => {
+            icon.dispatchEvent(pointerTypedEvent('pointerdown', 'mouse'));
+            expect(surface.wasPointerInteraction(focusOn(button))).toBe(true);
+        });
+
+        it('treats a press on the focused element itself as pointer focus', () => {
+            button.dispatchEvent(pointerTypedEvent('pointerdown', 'pen'));
+            expect(surface.wasPointerInteraction(focusOn(button))).toBe(true);
+        });
+
+        it('reports keyboard focus when no press was recorded', () => {
+            expect(surface.wasPointerInteraction(focusOn(button))).toBe(false);
+        });
+
+        it('reports keyboard focus when the press landed outside the focused element', () => {
+            element.dispatchEvent(pointerTypedEvent('pointerdown', 'mouse'));
+            expect(surface.wasPointerInteraction(focusOn(button))).toBe(false);
+        });
+
+        it('consumes the press on its first matching focus event', () => {
+            icon.dispatchEvent(pointerTypedEvent('pointerdown', 'mouse'));
+            expect(surface.wasPointerInteraction(focusOn(button))).toBe(true);
+            // Shift+Tab away and Tab back within the window: keyboard focus.
+            expect(surface.wasPointerInteraction(focusOn(button))).toBe(false);
+        });
+
+        it('discards the press on the first focus event even without a match', () => {
+            const other = document.createElement('button');
+            element.appendChild(other);
+            icon.dispatchEvent(pointerTypedEvent('pointerdown', 'mouse'));
+            // The press hit an already focused control (no focus event of its
+            // own); the next focus event is keyboard navigation elsewhere...
+            expect(surface.wasPointerInteraction(focusOn(other))).toBe(false);
+            // ...and returning to the pressed control is keyboard navigation.
+            expect(surface.wasPointerInteraction(focusOn(button))).toBe(false);
+        });
+
+        it('discards the press on any key press', () => {
+            icon.dispatchEvent(pointerTypedEvent('pointerdown', 'mouse'));
+            document.dispatchEvent(
+                new KeyboardEvent('keydown', { key: 'Tab', bubbles: true })
+            );
+            expect(surface.wasPointerInteraction(focusOn(button))).toBe(false);
+        });
+
+        it('removes its capture-phase keydown listener on dispose', () => {
+            const remove = jest.spyOn(document, 'removeEventListener');
+            surface.dispose();
+            expect(remove).toHaveBeenCalledWith(
+                'keydown',
+                expect.any(Function),
+                { capture: true }
+            );
+            remove.mockRestore();
+        });
+
+        it('forgets a press after the attribution window', () => {
+            jest.useFakeTimers();
+            jest.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+            icon.dispatchEvent(pointerTypedEvent('pointerdown', 'mouse'));
+            jest.setSystemTime(new Date('2026-01-01T00:00:01.500Z'));
+            expect(surface.wasPointerInteraction(focusOn(button))).toBe(false);
+        });
+
+        it('stops recording presses after dispose', () => {
+            surface.dispose();
+            icon.dispatchEvent(pointerTypedEvent('pointerdown', 'mouse'));
+            expect(surface.wasPointerInteraction(focusOn(button))).toBe(false);
+        });
+    });
+
+    describe('pointer-originated click attribution', () => {
+        let button: HTMLButtonElement;
+        let icon: HTMLElement;
+
+        beforeEach(() => {
+            button = document.createElement('button');
+            icon = document.createElement('span');
+            button.appendChild(icon);
+            element.appendChild(button);
+        });
+
+        /** A click as an engine dispatches it; `pointerType` only when given. */
+        const clickOn = (target: EventTarget, pointerType?: string) => {
+            const event = new MouseEvent('click', { bubbles: true });
+            if (pointerType !== undefined) {
+                Object.defineProperty(event, 'pointerType', {
+                    value: pointerType,
+                });
+            }
+            Object.defineProperty(event, 'target', { value: target });
+            return event;
+        };
+
+        it('trusts a non-empty pointer type on the click', () => {
+            expect(surface.wasPointerClick(clickOn(button, 'mouse'))).toBe(
+                true
+            );
+            expect(surface.wasPointerClick(clickOn(button, 'touch'))).toBe(
+                true
+            );
+            expect(surface.wasPointerClick(clickOn(button, 'pen'))).toBe(true);
+        });
+
+        it('reads an empty pointer type as keyboard or script activation, even after a press', () => {
+            icon.dispatchEvent(pointerTypedEvent('pointerdown', 'mouse'));
+            expect(surface.wasPointerClick(clickOn(button, ''))).toBe(false);
+        });
+
+        it('attributes a legacy click to a recent press inside the clicked element', () => {
+            icon.dispatchEvent(pointerTypedEvent('pointerdown', 'mouse'));
+            expect(surface.wasPointerClick(clickOn(button))).toBe(true);
+        });
+
+        it('reports keyboard activation for a legacy click without a press', () => {
+            expect(surface.wasPointerClick(clickOn(button))).toBe(false);
+        });
+
+        it('reports keyboard activation when the press landed outside the clicked element', () => {
+            element.dispatchEvent(pointerTypedEvent('pointerdown', 'mouse'));
+            expect(surface.wasPointerClick(clickOn(button))).toBe(false);
+        });
+
+        it('consumes the press on the first legacy click it is asked about', () => {
+            icon.dispatchEvent(pointerTypedEvent('pointerdown', 'mouse'));
+            expect(surface.wasPointerClick(clickOn(button))).toBe(true);
+            expect(surface.wasPointerClick(clickOn(button))).toBe(false);
+        });
+
+        it('answers the focus and the click of one press independently', () => {
+            icon.dispatchEvent(pointerTypedEvent('pointerdown', 'mouse'));
+            const focus = new FocusEvent('focusin');
+            Object.defineProperty(focus, 'target', { value: button });
+            expect(surface.wasPointerInteraction(focus)).toBe(true);
+            expect(surface.wasPointerClick(clickOn(button))).toBe(true);
+        });
+
+        it('discards the press on any key press', () => {
+            icon.dispatchEvent(pointerTypedEvent('pointerdown', 'mouse'));
+            document.dispatchEvent(
+                new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })
+            );
+            expect(surface.wasPointerClick(clickOn(button))).toBe(false);
+        });
+
+        it('forgets a press after the attribution window', () => {
+            jest.useFakeTimers();
+            jest.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+            icon.dispatchEvent(pointerTypedEvent('pointerdown', 'mouse'));
+            jest.setSystemTime(new Date('2026-01-01T00:00:01.500Z'));
+            expect(surface.wasPointerClick(clickOn(button))).toBe(false);
+        });
+    });
+
+    describe('pointer focus release', () => {
+        let button: HTMLButtonElement;
+
+        beforeEach(() => {
+            button = document.createElement('button');
+            element.appendChild(button);
+        });
+
+        it('blurs the focused control inside the root and flags its focusout', () => {
+            button.focus();
+            let flagged: boolean | null = null;
+            element.addEventListener('focusout', () => {
+                flagged = surface.wasPointerFocusRelease();
+            });
+
+            expect(surface.releasePointerFocus(element)).toBe(true);
+
+            expect(document.activeElement).not.toBe(button);
+            expect(flagged).toBe(true);
+            expect(surface.wasPointerFocusRelease()).toBe(false);
+        });
+
+        it('releases a focused range slider', () => {
+            const slider = document.createElement('input');
+            slider.type = 'range';
+            element.appendChild(slider);
+            slider.focus();
+
+            expect(surface.releasePointerFocus(element)).toBe(true);
+            expect(document.activeElement).not.toBe(slider);
+        });
+
+        it('leaves focus outside the root alone', () => {
+            const outside = document.createElement('button');
+            document.body.appendChild(outside);
+            outside.focus();
+
+            expect(surface.releasePointerFocus(element)).toBe(false);
+            expect(document.activeElement).toBe(outside);
+            outside.remove();
+        });
+
+        it('does nothing when nothing is focused', () => {
+            expect(surface.releasePointerFocus(element)).toBe(false);
+        });
+
+        it('keeps focus in text entry', () => {
+            const field = document.createElement('input');
+            field.type = 'text';
+            element.appendChild(field);
+            field.focus();
+
+            expect(surface.releasePointerFocus(element)).toBe(false);
+            expect(document.activeElement).toBe(field);
+        });
+    });
+});

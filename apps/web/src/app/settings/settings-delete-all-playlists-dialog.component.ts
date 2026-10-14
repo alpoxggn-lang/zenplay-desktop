@@ -1,0 +1,75 @@
+import { CommonModule } from '@angular/common';
+import {
+    Component,
+    computed,
+    inject,
+    ChangeDetectionStrategy,
+} from '@angular/core';
+import { MatButtonModule } from '@angular/material/button';
+import { MatDialogModule, MAT_DIALOG_DATA } from '@angular/material/dialog';
+import { MatIconModule } from '@angular/material/icon';
+import { TranslateModule } from '@ngx-translate/core';
+import { SOURCE_TYPE_ICONS } from '@iptvnator/shared/interfaces';
+
+export interface SettingsDeleteAllPlaylistsDialogData {
+    summary: {
+        total: number;
+        m3u: number;
+        xtream: number;
+        stalker: number;
+    };
+}
+
+type SettingsDeleteSummaryItem = {
+    count: number;
+    icon: string;
+    id: 'm3u' | 'xtream' | 'stalker';
+    labelKey: string;
+};
+
+@Component({
+    selector: 'app-settings-delete-all-playlists-dialog',
+    templateUrl: './settings-delete-all-playlists-dialog.component.html',
+    styleUrls: ['./settings-delete-all-playlists-dialog.component.scss'],
+    changeDetection: ChangeDetectionStrategy.OnPush,
+    imports: [
+        CommonModule,
+        MatButtonModule,
+        MatDialogModule,
+        MatIconModule,
+        TranslateModule,
+    ],
+})
+export class SettingsDeleteAllPlaylistsDialogComponent {
+    readonly dialogData =
+        inject<SettingsDeleteAllPlaylistsDialogData>(MAT_DIALOG_DATA);
+
+    readonly summaryItems = computed<SettingsDeleteSummaryItem[]>(() => [
+        {
+            id: 'm3u',
+            count: this.dialogData.summary.m3u,
+            icon: SOURCE_TYPE_ICONS.m3u,
+            labelKey: 'HOME.PLAYLIST_TYPES.M3U',
+        },
+        {
+            id: 'xtream',
+            count: this.dialogData.summary.xtream,
+            icon: SOURCE_TYPE_ICONS.xtream,
+            labelKey: 'HOME.PLAYLIST_TYPES.XTREAM',
+        },
+        {
+            id: 'stalker',
+            count: this.dialogData.summary.stalker,
+            icon: SOURCE_TYPE_ICONS.stalker,
+            labelKey: 'HOME.PLAYLIST_TYPES.STALKER',
+        },
+    ]);
+
+    readonly consequenceKeys = [
+        'SETTINGS.REMOVE_DIALOG.CONSEQUENCE_FAVORITES',
+        'SETTINGS.REMOVE_DIALOG.CONSEQUENCE_RECENTLY_VIEWED',
+        'SETTINGS.REMOVE_DIALOG.CONSEQUENCE_PLAYBACK',
+        'SETTINGS.REMOVE_DIALOG.CONSEQUENCE_DOWNLOADS',
+        'SETTINGS.REMOVE_DIALOG.CONSEQUENCE_XTREAM_CACHE',
+    ] as const;
+}

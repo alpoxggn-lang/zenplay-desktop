@@ -1,0 +1,462 @@
+import { isAllowedArchiveAction } from '../epg-program-activation-event';
+import { DatePipe } from '@angular/common';
+import {
+    ChangeDetectionStrategy,
+    Component,
+    DestroyRef,
+    computed,
+    effect,
+    ElementRef,
+    inject,
+    input,
+    linkedSignal,
+    output,
+    signal,
+    untracked,
+    viewChild,
+} from '@angular/core';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
+import { MatIcon } from '@angular/material/icon';
+import { MatTooltip } from '@angular/material/tooltip';
+import { normalizeDateLocale } from '@iptvnator/pipes';
+import { injectTranslationTick } from '@iptvnator/services';
+import { EpgProgram } from '@iptvnator/shared/interfaces';
+import { TranslatePipe, TranslateService } from '@ngx-translate/core';
+import {
+    EpgDateNavigationDirection,
+    getTodayEpgDateKey,
+    parseEpgDateKey,
+    shiftEpgDateKey,
+} from '../epg-date';
+import { EpgItemDialogAction } from '../epg-item-description/epg-item-description.component';
+import type { EpgProgramActivationEvent } from '../epg-program-activation-event';
+import { EpgProgrammeDialogService } from '../epg-programme-dialog.service';
+import {
+    EpgTimelineSummary,
+    formatClockTime,
+    summaryHasTimeRange,
+    summaryHasTitle,
+    summaryMinutesLeft,
+    summaryProgress,
+    summaryTimeMs,
+} from './epg-summary.util';
+import { canCatchUpProgramme, epgDialogActionFor } from './epg-archive.util';
+import {
+    EpgTimelineEmptyReason,
+    EpgTimelineEmptyStateComponent,
+} from './epg-timeline-empty-state.component';
+import { TimelineScrollController } from './epg-timeline-scroll.controller';
+import { TimelineWindowController } from './epg-timeline-window.controller';
+import {
+    TimelineZoomController,
+    timelineZoomLabelKey,
+} from './epg-timeline-zoom.controller';
+import { EpgTimelineTrackComponent } from './epg-timeline-track.component';
+import {
+    buildTimelineAxis,
+    buildTimelineBlocks,
+    buildTimelineDayDividers,
+    buildTimelineRenderItems,
+    buildTimelineTicks,
+    hasProgramsForDateKey,
+    nearestDateKeyWithPrograms,
+    TIMELINE_DEFAULT_SCALE,
+    TIMELINE_GROUP_EXPAND_ZOOM,
+    TIMELINE_GROUP_ZOOM_MAX,
+    TIMELINE_MINUTE_MS,
+    TIMELINE_ZOOM_MAX,
+    TIMELINE_ZOOM_MIN,
+    TimelineBlock,
+    TimelineRenderGroup,
+    timelineTickStepForScale,
+    timelineZoomLevelForScale,
+} from './epg-timeline.utils';
+
+type RenderState = 'loading' | 'ribbon' | EpgTimelineEmptyReason;
+
+export type { EpgTimelineSummary } from './epg-summary.util';
+
+@Component({
+    selector: 'app-epg-timeline',
+    templateUrl: './epg-timeline.component.html',
+    styleUrl: './epg-timeline.component.scss',
+    changeDetection: ChangeDetectionStrategy.OnPush,
+    imports: [
+        DatePipe,
+        EpgTimelineEmptyStateComponent,
+        EpgTimelineTrackComponent,
+        MatIcon,
+        MatTooltip,
+        TranslatePipe,
+    ],
+})
+export class EpgTimelineComponent {
+    readonly programs = input<EpgProgram[]>([]);
+    readonly channelName = input('');
+    readonly channelLogo = input('');
+    readonly sourceLabel = input('Timeline');
+    readonly archivePlaybackAvailable = input(false);
+    /** Source/channel identity captured by programme details, independent of playback. */
+    readonly archiveDownloadAvailable = input(false);
+    readonly archiveContextKey = input<string | null>(null);
+    readonly archiveDays = input(0);
+    readonly activeProgram = input<EpgProgram | null>(null);
+    readonly isLivePlayback = input(true);
+    readonly loading = input(false);
+    readonly emptyReason = input<EpgTimelineEmptyReason>('none');
+    readonly selectedDate = input<string | null>(null);
+    readonly collapsed = input(false);
+    readonly summary = input<EpgTimelineSummary | null>(null);
+    readonly summaryLabelKey = input('EPG.CURRENT_PROGRAM');
+    readonly offsetMinutes = input(0);
+    /** The host can open a multi-channel guide; renders the Guide button. */
+    readonly guideAvailable = input(false);
+
+    readonly programActivated = output<EpgProgramActivationEvent>();
+    readonly returnToLive = output<void>();
+    readonly selectedDateChange = output<string>();
+    readonly openEpgSettings = output<void>();
+    readonly retry = output<void>();
+    readonly collapsedChange = output<boolean>();
+    readonly openGuide = output<void>();
+
+    private readonly destroyRef = inject(DestroyRef);
+    private readonly programmeDialog = inject(EpgProgrammeDialogService);
+    private readonly translate = inject(TranslateService);
+
+    readonly ribbon = viewChild<ElementRef<HTMLElement>>('ribbon');
+    /** px-per-minute zoom (D). */
+    readonly scale = signal(TIMELINE_DEFAULT_SCALE);
+    readonly zoomMin = TIMELINE_ZOOM_MIN;
+    readonly zoomMax = TIMELINE_ZOOM_MAX;
+    readonly skeletonWidths = [120, 170, 150, 200, 140, 180];
+
+    readonly nowMs = signal(Date.now());
+    readonly selectedKey = signal<string | null>(null);
+    /** Day centred in the ribbon, seeded from the controlled `selectedDate` so
+     * a non-today date survives (re)mount and follows host changes. */
+    readonly viewDayKey = linkedSignal(() => {
+        const key = this.selectedDate()?.trim();
+        return key ? key : getTodayEpgDateKey();
+    });
+
+    /** Zoom button + Ctrl/⌘ wheel, anchored so a ribbon minute stays put. */
+    private readonly zoom = new TimelineZoomController({
+        ribbon: () => this.ribbon()?.nativeElement,
+        scale: () => this.scale(),
+        setScale: (scale) => this.scale.set(scale),
+        centreOn: (offsetMin) => this.ribbonWindow.centreOnMinute(offsetMin),
+    });
+
+    /** Ribbon scrolling + channel-select auto-focus, extracted from the view. */
+    private readonly scroll = new TimelineScrollController({
+        ribbon: () => this.ribbon()?.nativeElement,
+        scale: () => this.scale(),
+        axis: () => this.axis(),
+        blocks: () => this.blocks(),
+        nowMs: () => this.nowMs(),
+        viewDayKey: () => this.viewDayKey(),
+        commitDay: (dayKey) => this.commitDay(dayKey),
+        hasProgramsForDay: (dayKey) =>
+            hasProgramsForDateKey(
+                this.programs(),
+                dayKey,
+                this.offsetMinutes()
+            ),
+    });
+
+    private readonly languageTick = injectTranslationTick();
+    readonly currentLocale = computed(() => {
+        this.languageTick();
+        return normalizeDateLocale(
+            this.translate.currentLang || this.translate.defaultLang
+        );
+    });
+
+    readonly axis = computed(() =>
+        buildTimelineAxis(this.programs(), this.nowMs(), this.offsetMinutes())
+    );
+    readonly blocks = computed(() =>
+        buildTimelineBlocks(
+            this.programs(),
+            this.axis(),
+            this.nowMs(),
+            this.offsetMinutes()
+        )
+    );
+    private readonly archiveWindowStartMs = computed(() => {
+        const days = this.archiveDays();
+        return days > 0
+            ? this.nowMs() - days * 24 * 60 * TIMELINE_MINUTE_MS
+            : Number.NEGATIVE_INFINITY;
+    });
+    readonly renderItems = computed(() =>
+        buildTimelineRenderItems(this.blocks(), this.scale(), {
+            allowGroup: this.scale() < TIMELINE_GROUP_ZOOM_MAX,
+            nowMs: this.nowMs(),
+            archivePlaybackAvailable: this.archivePlaybackAvailable(),
+            archiveWindowStartMs: this.archiveWindowStartMs(),
+        })
+    );
+    readonly ticks = computed(() =>
+        buildTimelineTicks(this.axis(), timelineTickStepForScale(this.scale()))
+    );
+    readonly dividers = computed(() => buildTimelineDayDividers(this.axis()));
+    /** Only the ribbon content near the visible range is rendered. */
+    readonly ribbonWindow = new TimelineWindowController(this);
+    readonly trackWidthPx = computed(() => {
+        const axis = this.axis();
+        return (
+            ((axis.endMs - axis.startMs) / TIMELINE_MINUTE_MS) * this.scale()
+        );
+    });
+    readonly playheadLeftPx = computed(() => {
+        const axis = this.axis();
+        return (
+            ((this.nowMs() - axis.startMs) / TIMELINE_MINUTE_MS) * this.scale()
+        );
+    });
+    readonly zoomLevel = computed(() =>
+        timelineZoomLevelForScale(this.scale())
+    );
+    readonly zoomLabelKey = computed(() =>
+        timelineZoomLabelKey(this.zoomLevel())
+    );
+    /** `zoom_out` reads as "overview"; both finer bands share `zoom_in`. */
+    readonly zoomIcon = computed(() =>
+        this.zoomLevel() === 'day' ? 'zoom_out' : 'zoom_in'
+    );
+    readonly nowLabel = computed(() => formatClockTime(this.nowMs()));
+
+    readonly viewDate = computed(() => parseEpgDateKey(this.viewDayKey()));
+    readonly isViewToday = computed(
+        () => this.viewDayKey() === getTodayEpgDateKey()
+    );
+
+    readonly renderState = computed<RenderState>(() => {
+        if (this.loading()) {
+            return 'loading';
+        }
+        const reason = this.emptyReason();
+        if (reason !== 'none') {
+            return reason;
+        }
+        if (this.programs().length === 0) {
+            return 'channel-unmapped';
+        }
+        if (
+            !hasProgramsForDateKey(
+                this.programs(),
+                this.viewDayKey(),
+                this.offsetMinutes()
+            )
+        ) {
+            return 'empty-day';
+        }
+        return 'ribbon';
+    });
+    readonly emptyStateReason = computed<EpgTimelineEmptyReason>(() => {
+        const state = this.renderState();
+        return state === 'loading' || state === 'ribbon' ? 'none' : state;
+    });
+    readonly hasOtherDays = computed(() => this.programs().length > 0);
+
+    /**
+     * "Now" + zoom act on the ribbon, so they only make sense when a ribbon is
+     * rendered. Hidden (not disabled) otherwise — a disabled control implies it
+     * could become usable, but with no programmes for the day there is nothing
+     * to jump to or zoom.
+     */
+    readonly showRibbonControls = computed(
+        () => this.renderState() === 'ribbon'
+    );
+
+    /**
+     * The date stepper navigates between days, which is only meaningful when the
+     * channel has EPG on *some* day: the live ribbon, or `empty-day` (data
+     * exists, just not the viewed day). Hidden for the no-EPG-anywhere states
+     * (`channel-unmapped`, `provider-no-epg`, `m3u-needs-setup`, `error`) and
+     * while loading.
+     */
+    readonly showDateStepper = computed(() => {
+        const state = this.renderState();
+        return state === 'ribbon' || state === 'empty-day';
+    });
+
+    // ── collapsed-summary state ──
+    readonly hasSummary = computed(() => summaryHasTitle(this.summary()));
+    readonly hasTimeRange = computed(() => summaryHasTimeRange(this.summary()));
+    readonly progress = computed(() =>
+        summaryProgress(this.summary(), this.nowMs(), this.offsetMinutes())
+    );
+    readonly minutesLeft = computed(() =>
+        summaryMinutesLeft(this.summary(), this.nowMs(), this.offsetMinutes())
+    );
+    /** Collapsed-header time range in display time (raw summary times shifted). */
+    readonly summaryStartMs = computed(() =>
+        summaryTimeMs(this.summary()?.start, this.offsetMinutes())
+    );
+    readonly summaryStopMs = computed(() =>
+        summaryTimeMs(this.summary()?.stop, this.offsetMinutes())
+    );
+
+    constructor() {
+        effect((onCleanup) => {
+            const intervalId = window.setInterval(
+                () => this.nowMs.set(Date.now()),
+                30_000
+            );
+            onCleanup(() => clearInterval(intervalId));
+        });
+
+        // Auto-focus the current programme whenever a channel's EPG (re)loads
+        // or the ribbon (re)mounts — this is what makes selecting a channel land
+        // on "now" without the user pressing the Now button. Tracked deps are
+        // only `ribbon` + `programs`; the body runs untracked so 30s "now" ticks
+        // and zoom changes never re-trigger a jump.
+        effect(() => {
+            const scroller = this.ribbon()?.nativeElement;
+            const programs = this.programs();
+            untracked(() => this.scroll.maybeAutoFocus(scroller, programs));
+        });
+    }
+
+    toggleCollapsed(): void {
+        this.collapsedChange.emit(!this.collapsed());
+    }
+
+    /** Clamp + apply a scale, keeping the viewport centre stable. */
+    onZoom(value: number): void {
+        this.zoom.zoomTo(value);
+    }
+
+    /** Toolbar zoom button: next preset (day → hours → detail → day). */
+    cycleZoom(): void {
+        this.zoom.cycle();
+    }
+
+    /** Ctrl/⌘ + wheel over the ribbon zooms around the cursor. */
+    onRibbonWheel(event: WheelEvent): void {
+        this.zoom.onWheel(event);
+    }
+
+    onGroupExpand(group: TimelineRenderGroup): void {
+        this.scale.set(TIMELINE_GROUP_EXPAND_ZOOM);
+        const axis = this.axis();
+        const centreMs = (group.startMs + group.stopMs) / 2;
+        const offsetMin = (centreMs - axis.startMs) / TIMELINE_MINUTE_MS;
+        this.ribbonWindow.centreOnMinute(offsetMin);
+        this.scroll.scrollToOffset(offsetMin, 0.5);
+    }
+
+    canCatchUp(block: TimelineBlock): boolean {
+        return canCatchUpProgramme(
+            block.when,
+            block.startMs,
+            this.archivePlaybackAvailable(),
+            this.archiveDays(),
+            this.nowMs()
+        );
+    }
+
+    onBlockClick(block: TimelineBlock): void {
+        this.selectedKey.set(block.key);
+        if (this.canCatchUp(block)) {
+            this.programActivated.emit({
+                program: block.program,
+                type: 'timeshift',
+            });
+            return;
+        }
+        if (block.when === 'now') {
+            this.returnToLive.emit();
+        }
+    }
+
+    onWatch(block: TimelineBlock): void {
+        this.selectedKey.set(block.key);
+        this.programActivated.emit({
+            program: block.program,
+            type: 'timeshift',
+        });
+    }
+
+    openDetails(block: TimelineBlock): void {
+        const canCatchUp = this.canCatchUp(block);
+        const archiveContextKey = this.archiveContextKey();
+        this.programmeDialog
+            .open({
+                ...block.program,
+                channelName: this.channelName(),
+                channelLogo: this.channelLogo(),
+                archiveUrlAvailable: canCatchUp,
+                archiveDownloadAvailable:
+                    this.archiveDownloadAvailable() &&
+                    block.when === 'past' &&
+                    canCatchUp,
+                primaryAction: epgDialogActionFor(block.when, canCatchUp),
+                archiveUnavailableNote:
+                    block.when === 'past' && !this.archivePlaybackAvailable(),
+            })
+            .pipe(takeUntilDestroyed(this.destroyRef))
+            .subscribe((result: EpgItemDialogAction | undefined) => {
+                if (archiveContextKey !== this.archiveContextKey()) return;
+                if (result === 'live') {
+                    this.returnToLive.emit();
+                } else if (
+                    isAllowedArchiveAction(
+                        result,
+                        this.canCatchUp(block),
+                        this.archiveDownloadAvailable() && block.when === 'past'
+                    )
+                ) {
+                    this.programActivated.emit({
+                        program: block.program,
+                        type: result,
+                    });
+                } else if (result === 'timeshift') {
+                    this.selectedKey.set(block.key);
+                    this.programActivated.emit({
+                        program: block.program,
+                        type: 'timeshift',
+                    });
+                }
+            });
+    }
+
+    stepDay(direction: EpgDateNavigationDirection): void {
+        const nextKey = shiftEpgDateKey(this.viewDayKey(), direction);
+        this.commitDay(nextKey);
+        this.scroll.scrollToDateKey(nextKey, 0.5);
+    }
+
+    jumpToNow(): void {
+        this.commitDay(getTodayEpgDateKey());
+        // Deliberate user action → animate so the movement reads.
+        this.scroll.focusCurrentProgram(true);
+    }
+
+    jumpToNearestDay(): void {
+        const nearest = nearestDateKeyWithPrograms(
+            this.programs(),
+            this.nowMs(),
+            this.offsetMinutes()
+        );
+        if (nearest) {
+            this.commitDay(nearest);
+            this.scroll.scrollToDateKey(nearest, 0.5);
+        }
+    }
+
+    onRibbonScroll(): void {
+        this.scroll.onRibbonScroll();
+    }
+
+    private commitDay(dayKey: string): void {
+        if (dayKey === this.viewDayKey()) {
+            return;
+        }
+        this.viewDayKey.set(dayKey);
+        this.selectedDateChange.emit(dayKey);
+    }
+}

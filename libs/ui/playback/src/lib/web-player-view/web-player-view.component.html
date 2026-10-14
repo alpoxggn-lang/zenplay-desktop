@@ -1,0 +1,156 @@
+@for (application of renderedApplications(); track application.token) {
+    @if (application.binding; as binding) {
+        @if (binding.target === 'videojs') {
+            @defer (on immediate) {
+                @if (vjsOptions(); as options) {
+                    <app-vjs-player
+                        [options]="options"
+                        [fullscreenTarget]="fullscreenSurface"
+                        [mediaTitle]="resolvedMediaTitle()"
+                        [upNext]="upNext()"
+                        [timelineSegments]="timelineSegments()"
+                        [volume]="volume()"
+                        [showCaptions]="showCaptions()"
+                        [interactionEnabled]="playbackInteractionEnabled()"
+                        [startTime]="effectiveStartTime()"
+                        [seriesNavigation]="seriesNavigation()"
+                        (timeUpdate)="handleTimeUpdate($event, application)"
+                        (playbackIssue)="handlePlaybackIssue($event, binding)"
+                        (playbackStarted)="handlePlaybackStarted(binding)"
+                        (playbackEnded)="playbackEnded.emit()"
+                        (previousEpisodeRequested)="
+                            previousEpisodeRequested.emit()
+                        "
+                        (nextEpisodeRequested)="nextEpisodeRequested.emit()"
+                    />
+                }
+            } @placeholder {
+                <div
+                    class="web-player-defer-placeholder"
+                    aria-hidden="true"
+                ></div>
+            }
+        } @else if (binding.target === 'html5') {
+            @defer (on immediate) {
+                @if (channel(); as channel) {
+                    <app-html-video-player
+                        [channel]="$any(channel)"
+                        [fullscreenTarget]="fullscreenSurface"
+                        [mediaTitle]="resolvedMediaTitle()"
+                        [upNext]="upNext()"
+                        [timelineSegments]="timelineSegments()"
+                        [volume]="volume()"
+                        [showCaptions]="showCaptions()"
+                        [isLive]="resolvedIsLive()"
+                        [interactionEnabled]="playbackInteractionEnabled()"
+                        [startTime]="effectiveStartTime()"
+                        [seriesNavigation]="seriesNavigation()"
+                        (timeUpdate)="handleTimeUpdate($event, application)"
+                        (playbackIssue)="handlePlaybackIssue($event, binding)"
+                        (playbackStarted)="handlePlaybackStarted(binding)"
+                        (playbackEnded)="playbackEnded.emit()"
+                        (previousEpisodeRequested)="
+                            previousEpisodeRequested.emit()
+                        "
+                        (nextEpisodeRequested)="nextEpisodeRequested.emit()"
+                    />
+                }
+            } @placeholder {
+                <div
+                    class="web-player-defer-placeholder"
+                    aria-hidden="true"
+                ></div>
+            }
+        } @else if (binding.target === 'artplayer') {
+            @defer (on immediate) {
+                @if (channel(); as channel) {
+                    <app-art-player
+                        [channel]="$any(channel)"
+                        [fullscreenTarget]="fullscreenSurface"
+                        [mediaTitle]="resolvedMediaTitle()"
+                        [upNext]="upNext()"
+                        [timelineSegments]="timelineSegments()"
+                        [volume]="volume()"
+                        [showCaptions]="showCaptions()"
+                        [isLive]="resolvedIsLive()"
+                        [interactionEnabled]="playbackInteractionEnabled()"
+                        [startTime]="effectiveStartTime()"
+                        [seriesNavigation]="seriesNavigation()"
+                        (timeUpdate)="handleTimeUpdate($event, application)"
+                        (playbackIssue)="handlePlaybackIssue($event, binding)"
+                        (playbackStarted)="handlePlaybackStarted(binding)"
+                        (playbackEnded)="playbackEnded.emit()"
+                        (previousEpisodeRequested)="
+                            previousEpisodeRequested.emit()
+                        "
+                        (nextEpisodeRequested)="nextEpisodeRequested.emit()"
+                    />
+                }
+            } @placeholder {
+                <div
+                    class="web-player-defer-placeholder"
+                    aria-hidden="true"
+                ></div>
+            }
+        }
+    } @else if (application.embeddedMpv) {
+        <app-embedded-mpv-player
+            #embeddedMpvPlayer
+            [playback]="resolvedPlayback()"
+            [fullscreenTarget]="fullscreenSurface"
+            [mediaTitle]="resolvedMediaTitle()"
+            [upNext]="upNext()"
+            [timelineSegments]="timelineSegments()"
+            [recordingFolder]="recordingFolder()"
+            [recordingMetadata]="recordingMetadata()"
+            [seriesNavigation]="seriesNavigation()"
+            (timeUpdate)="handleTimeUpdate($event, application)"
+            (playbackEnded)="playbackEnded.emit()"
+            (previousEpisodeRequested)="previousEpisodeRequested.emit()"
+            (nextEpisodeRequested)="nextEpisodeRequested.emit()"
+            (recordingStopped)="recordingStopped.emit($event)"
+        />
+    }
+}
+
+@if (adaptivePreparationVisible()) {
+    <div
+        class="web-player-preparation"
+        data-test-id="web-player-adaptive-preparation"
+        role="status"
+        aria-live="polite"
+    >
+        <span class="web-player-preparation__surface">
+            <span
+                class="web-player-preparation__spinner"
+                aria-hidden="true"
+            ></span>
+            <span>Preparando video compatible…</span>
+        </span>
+    </div>
+}
+
+<!-- Sibling of the engine, inside the fullscreen host: survives the engine
+     remount a channel switch causes and stays visible in fullscreen. Off for
+     native-view Embedded MPV, which paints above the DOM. -->
+<app-fullscreen-channel-panel
+    [stage]="fullscreenSurface"
+    [enabled]="channelPanelAvailable()"
+/>
+
+@if (visiblePlaybackDiagnostic(); as issue) {
+    <app-playback-diagnostic-panel
+        [diagnostic]="issue"
+        [recommendations]="recommendations()"
+        [playback]="resolvedPlayback()"
+        [supportsManagedExternalPlayers]="supportsManagedExternalPlayers"
+        [playbackExternallyTransferable]="playbackExternallyTransferable()"
+        [alternativeSources]="alternativeSources()"
+        [externalStates]="externalRecoveryState()"
+        [pending]="recoveryPending()"
+        (retryRequested)="retryPlayback()"
+        (playerRequested)="requestRecommendedPlayer($event)"
+        (alternativeSourceRequested)="alternativeSourceRequested.emit($event)"
+        (sourceCheckRequested)="sourceCheckRequested.emit($event)"
+    />
+}

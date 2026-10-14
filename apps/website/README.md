@@ -1,0 +1,249 @@
+# IPTVnator Website
+
+The website is an Astro static site deployed to GitHub Pages at `https://4gray.github.io/iptvnator/`.
+
+## Blog Comments
+
+Blog posts render Giscus comments from `apps/website/src/components/GiscusComments.astro`.
+Giscus stores comments in GitHub Discussions for `4gray/iptvnator` and maps each page to a discussion by `pathname`, including the GitHub Pages base path such as `/iptvnator/blog/why-external-players-help/`.
+
+The embed is **click-to-load**: the configuration sits as `data-*` attributes on a
+"Show comments" button and the `giscus.app` script is created only when a reader
+presses it, so opening a post requests nothing from giscus.app or github.com.
+Keep it that way — pasting the upstream `<script src="https://giscus.app/client.js">`
+snippet back into the component would contact both for every reader, and
+`tools/testing/website-giscus-comments.test.mjs` fails when that script tag
+appears in the delivered HTML.
+
+The embed is wired to the dedicated `Blog comments` discussion category:
+
+- Repository id: `MDEwOlJlcG9zaXRvcnkyMTMxOTQ3Mzg=`
+- Category id: `DIC_kwDODLUX8s4C9eBJ`
+- Mapping: `pathname`
+- Theme: `transparent_dark`
+
+If the category is recreated, query the new category id:
+
+```bash
+gh api graphql \
+  -f owner=4gray \
+  -f name=iptvnator \
+  -f query='query($owner:String!, $name:String!) { repository(owner:$owner, name:$name) { discussionCategories(first:25) { nodes { id name slug isAnswerable } } } }'
+```
+
+Then update `data-category-id` in `GiscusComments.astro`.
+
+Moderation happens in GitHub Discussions. Maintainers can hide, delete, lock, or move discussions and comments from the repository Discussions UI.
+
+## Fonts And Third-Party Requests
+
+A delivered page must make **no third-party request**. The build is checked
+against this: fonts come from the `@fontsource` packages imported in
+`src/layouts/BaseLayout.astro` and are emitted as `.woff2` beside the site (never
+from a font CDN), the author avatar is `public/author-4gray.jpg` rather than a
+`githubusercontent.com` URL, and comments are click-to-load as described above.
+
+The display family is the **variable** package, which declares itself as
+`Bricolage Grotesque Variable` — that exact name leads the `display` stack in
+`tailwind.config.mjs`, with the static `Bricolage Grotesque` kept behind it as a
+fallback. Adding a weight or style means adding its `@fontsource` import;
+nothing is fetched at runtime.
+
+Before adding any embed (analytics, a video, a widget, a webfont), check what it
+loads. Keeping the page free of outside requests is what keeps it fast and keeps
+the site from needing a consent banner.
+
+## Download Pages
+
+`/download/` plus `/download/windows/`, `/download/macos/`, `/download/linux/`
+and `/download/docker/` (the self-hosted browser version: quick start, variables,
+tags, FAQ, with `docker/README.md` as the reference behind it) are landing pages (`apps/website/src/pages/download/`). They exist for
+search visibility on "IPTVnator <OS> download" style queries and to spare users
+the 27-asset GitHub release page; each carries OS-specific install steps,
+requirements, an FAQ and `SoftwareApplication` / `FAQPage` / `BreadcrumbList`
+structured data. Shared pieces live in `src/components/download/` and reuse the
+blog components (`StepRail`, `Alert`, `FaqAccordion`, `CopyCommand`).
+
+### Latest-release resolution
+
+Direct asset links need the release version, so `src/lib/downloads.ts`
+resolves it at build time:
+
+1. `GET https://api.github.com/repos/4gray/iptvnator/releases/latest` (8 s
+   timeout). The asset list from the *published* release is authoritative:
+   options whose file is missing are dropped, sizes and the publish date come
+   from the API. `deploy-website.yml` passes `GITHUB_TOKEN` to the build so
+   the call is authenticated.
+2. Fallback: the published version pinned in `released-version.json` with
+   the asset naming pattern from `electron-builder.json`. Advance this pin
+   only after that GitHub release is public and its assets are verified, in
+   the follow-up commit that publishes the article. It must stay independent
+   of the root `package.json` development/nightly version. Set
+   `WEBSITE_SKIP_RELEASE_FETCH=1` to force it for offline or reproducible builds.
+
+Both paths produce the same page structure. Adding an artifact means adding a
+`DownloadOption` (matcher + fallback name) in `downloads.ts`; the pages and the
+hub pick it up. The homepage `SoftwareApplication` schema reads the same
+resolved version.
+
+`pnpm nx test website` builds the site and runs
+`tools/testing/website-download-pages.test.mjs`, which checks titles,
+canonicals, direct asset links, JSON-LD, cross-links and sitemap entries
+without depending on a specific version. Resolver regression tests use the real
+Astro build constants and cover offline builds, rate limits and timeouts,
+ensuring each platform keeps links to the pinned published release.
+
+Two of the suites drive the built site in a real browser:
+`tools/testing/website-screenshot-showcase.test.mjs` (the home page channel
+switcher: autoplay, hover/focus pausing, keyboard navigation, deferred frame
+sources) and `tools/testing/website-home-sections.test.mjs` (the hero and
+download panel following the visitor's OS, the copy buttons). They share
+`tools/testing/website-browser-support.mjs`, which serves `dist/apps/website`
+on a loopback port and launches Chromium from the Playwright download or,
+failing that, the system Chrome/Chromium channel. Without any Chromium the
+browser half is **skipped locally** (the structural checks still run) and
+**fails in CI**, so a green local run only proves the interactions when a
+browser was found — run `pnpm exec playwright install chromium` once if the
+skip shows up in your output.
+
+## Guides
+
+`/guides/` is the task-based entry point: Getting started, Live TV & EPG,
+Player & playback, Your library and Updates. `src/lib/guides.ts` owns the
+reading order; titles and descriptions come from the existing blog collection,
+and article URLs stay at `/blog/<slug>/`. Add an article's slug to the matching
+group when it should appear here. Missing slugs fail the build. Drafts follow
+the blog's visibility rule (development mode or `PUBLIC_INCLUDE_DRAFTS=true`),
+and preview entries carry a draft label. Updates also links to the latest
+published release post. The hub emits CollectionPage and BreadcrumbList data
+and is linked from the site header, footer and blog index.
+
+Evergreen how-to posts live in the blog collection next to release notes
+(`xtream-codes-setup-guide.mdx`, `stalker-portal-setup-guide.mdx`,
+`m3u-playlist-epg-setup-guide.mdx`, `offline-downloads-guide.mdx`,
+`alternative-sources-guide.mdx`, `remote-control-guide.mdx` and
+`epg-wrong-program-fix.mdx` in
+`apps/website/src/content/blog/`). Three conventions set them apart:
+
+- **`ContentDisclaimer`.** Every guide opens with
+  `src/components/blog/ContentDisclaimer.astro` right after its intro: the
+  `general` variant states that IPTVnator ships no content, the `offline`
+  variant (downloads, recordings) adds what the feature is for and that keeping
+  a copy is governed by the provider's terms and local law. Reuse it instead of
+  rewriting the notice per post, and keep the surrounding prose to "content you
+  already stream", never "download from your provider".
+
+- **`faq` frontmatter.** An optional list of `{ q, a }` entries. `BlogPost.astro`
+  renders it as an accordion after the body and emits a `FAQPage` JSON-LD block
+  next to the `BlogPosting` one, so the answers can surface as rich results.
+- **Screenshots from the capture script.** Guide frames are captured by
+  `pnpm release:screenshots --group guides` into
+  `apps/website/public/blog/guides/screenshots/<slug>-<theme>.png`; the shots are
+  declared in `tools/release/screenshots.manifest.json` with `"group": "guides"`
+  and never appear in a release run.
+  The download-manager shots need real transfers, so the Xtream mock's
+  `marketing` scenario serves movies and episodes from generated local bytes
+  (`downloadStreamFixture: 'local-media'`) instead of redirecting to the public
+  HLS stub, and the capture stubs Electron's folder dialog so "Change Folder"
+  authorizes a folder inside the isolated data dir rather than the real OS
+  Downloads folder (`installDownloadFolderDialogStub` in
+  `tools/release/capture-app-driver.ts`).
+  The alternative-sources shots seed a second Xtream source from the mock's
+  `marketing2` scenario (identical catalog, "Fictional Xtream Backup"), which is
+  what makes the Sources chip appear; like the Stalker portal it is added only
+  for shots that walk into it, because it adds a card to the dashboard.
+  The remote-control phone view is a `browser` shot: the manifest entry names
+  a loopback URL and a mobile viewport, and the capture frames it in a separate
+  Chromium page instead of the Electron window, behind the same network and
+  content guards (`captureBrowserShot` in
+  `tools/release/capture-release-screenshots.ts`). Its setup selects a live
+  channel and saves the remote-control setting, so the app's own server answers
+  on port 8765 for the duration of the run.
+  The EPG-mapping shots import the mock's XMLTV guide (`/demo/guide.xml`,
+  channel ids that match no playlist `tvg-id` on purpose) into the isolated
+  database through the settings, then right-click a channel of the M3U
+  fixture and search the dialog.
+  The 0.23/0.24 feature articles use the separate `feature-guides` capture
+  group (`pnpm release:screenshots --group feature-guides --theme dark`).
+  Playback shots decode the generated local slate documented in
+  `tools/release/fixtures/README.md`; settings and library shots use the same
+  isolated demo profile. The multi-channel EPG image is the original image
+  attached to the v0.24.0 GitHub release, explicitly selected by the maintainer;
+  its provenance is recorded alongside the assets. It is not a mock capture.
+
+`tools/testing/website-guides.test.mjs` (part of `pnpm nx test website`) checks
+each guide for the FAQPage schema, a link to the download hub and the presence
+of every referenced screenshot in the build output. It also checks the task hub's
+grouping, draft visibility, article links, structured data and navigation at
+phone, tablet and desktop widths. Run the hub checks against a build made with
+`PUBLIC_INCLUDE_DRAFTS=true` using the same environment flag to verify previews.
+
+## Blog Tags
+
+Blog tags are a closed vocabulary in `apps/website/src/lib/blog-tags.ts`
+(`release`, `guide`, `troubleshooting`, `playback`, `m3u`, `xtream-codes`,
+`stalker-portal`, `epg`, `macos`, `security`). The content collection schema
+only accepts those slugs, so a typo in a post's `tags:` fails the build. Every
+tag with at least one published post gets a hub page at `/blog/tag/<tag>/`
+(`src/pages/blog/tag/[tag].astro`, `CollectionPage` + `BreadcrumbList` JSON-LD),
+the blog index and the hubs show a "Topics" rail with post counts
+(`BlogTagRail.astro`), and every chip on a card or a post header links to its
+hub (`BlogTagChip.astro`). The cards are `<article>` elements with the title
+link stretched over the whole card, because a card that is one big `<a>` cannot
+hold chip links.
+
+Add a tag only when it will hold more than one post for good: each tag is an
+indexable page, and a hub with a single post is a thin page. Add the slug to the
+registry with a label and a one-sentence description; nothing else needs to
+change. `tools/testing/website-blog-tags.test.mjs` checks the rail, every hub,
+the chip targets, the sitemap and the absence of nested anchors.
+
+## Feature Pages
+
+`/features/` plus one page per feature (`m3u-player`, `xtream-codes-player`,
+`stalker-portal-player`, `epg`, `remote-control`) live in
+`apps/website/src/pages/features/`. They target "<feature> player" style
+searches, reuse the download-page sections, and each carries
+`SoftwareApplication` (with `featureList`) / `FAQPage` / `BreadcrumbList`
+structured data. The registry in `src/lib/features.ts` drives the hub, the
+per-page switcher, the homepage feature cards and
+`tools/testing/website-feature-pages.test.mjs`; adding a page means adding one
+registry entry and one `.astro` file. Screenshots come only from the
+mock-backed guide and release captures, never from the older homepage
+screenshots that show real channel names.
+
+## Comparison Pages
+
+`/compare/` plus one page per decision the app asks users to make
+(`m3u-vs-xtream-vs-stalker`, `playback-engines`, `desktop-vs-browser`,
+`iptvnator-vs-vlc`, `iptvnator-vs-kodi`, `computer-vs-tv-box`) live in
+`apps/website/src/pages/compare/`; the registry is
+`src/lib/comparisons.ts`. Most of them compare IPTVnator's own options against
+each other, so every claim is checkable against this repository.
+
+Each page opens with a one-paragraph verdict (`CompareHero`), carries at least
+one `ComparisonTable` (cells are `true`, `false` or a qualifying string) and
+emits `WebPage` / `FAQPage` / `BreadcrumbList` JSON-LD from
+`src/lib/comparison-schema.ts` — deliberately not `SoftwareApplication`, since
+these pages are guidance rather than a product listing, and
+`tools/testing/website-compare-pages.test.mjs` asserts that.
+
+### Pages that name other software
+
+Naming another project is a product decision the maintainer makes, not a
+technical one. Where it has been made, the page follows stricter rules, and
+`website-compare-pages.test.mjs` enforces the first two through its
+`NAMES_THIRD_PARTY_SOFTWARE` set:
+
+- a dated `ThirdPartyNote` (`src/components/compare/ThirdPartyNote.astro`)
+  stating that the other project is independent and endorses nothing,
+- claims carrying the month they were checked, because another project can add
+  a feature the day after the page is written,
+- only stable, publicly documented platform and feature facts — never a claim
+  that something is missing unless it was actually checked,
+- no third-party logos, brand styling, download links or affiliate links.
+
+Prefer describing what IPTVnator does and letting the difference speak. The
+comparison that works best is the one where the other project is a partner
+rather than a rival: `iptvnator-vs-vlc` ends on the external-player
+integration, because that is the honest answer.

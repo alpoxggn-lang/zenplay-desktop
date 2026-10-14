@@ -1,0 +1,176 @@
+{
+    "compileOnSave": false,
+    "compilerOptions": {
+        "rootDir": ".",
+        "sourceMap": true,
+        "declaration": false,
+        "moduleResolution": "node",
+        "esModuleInterop": true,
+        "emitDecoratorMetadata": true,
+        "experimentalDecorators": true,
+        "isolatedModules": true,
+        "importHelpers": true,
+        "target": "es2015",
+        "module": "esnext",
+        "lib": ["es2020", "dom"],
+        "skipLibCheck": true,
+        "skipDefaultLibCheck": true,
+        "baseUrl": ".",
+        "paths": {
+            "@iptvnator/portal/catalog/feature": [
+                "libs/portal/catalog/feature/src/index.ts"
+            ],
+            "@iptvnator/portal/downloads/feature": [
+                "libs/portal/downloads/feature/src/index.ts"
+            ],
+            "@iptvnator/portal/shared/ui": [
+                "libs/portal/shared/ui/src/index.ts"
+            ],
+            "@iptvnator/portal/shared/data-access": [
+                "libs/portal/shared/data-access/src/index.ts"
+            ],
+            "@iptvnator/portal/shared/util": [
+                "libs/portal/shared/util/src/index.ts"
+            ],
+            "@iptvnator/portal/shared/util/logger": [
+                "libs/portal/shared/util/src/lib/logger.ts"
+            ],
+            "@iptvnator/portal/shared/util/tokens": [
+                "libs/portal/shared/util/src/tokens.ts"
+            ],
+            "@iptvnator/epg/data-access": ["libs/epg/data-access/src/index.ts"],
+            "@iptvnator/playback/data-access": [
+                "libs/playback/data-access/src/index.ts"
+            ],
+            "@iptvnator/playback/util": ["libs/playback/util/src/index.ts"],
+            "@iptvnator/playlist/shared/ui": [
+                "libs/playlist/shared/ui/src/index.ts"
+            ],
+            "@iptvnator/playlist/shared/ui/stalker-connection-editor": [
+                "libs/playlist/shared/ui/src/lib/recent-playlists/playlist-info/stalker-playlist-connection-editor.token.ts"
+            ],
+            "@iptvnator/playlist/shared/util": [
+                "libs/playlist/shared/util/src/index.ts"
+            ],
+            "@iptvnator/playlist/shared/util/playlist-file-import": [
+                "libs/playlist/shared/util/src/lib/playlist-file-import.service.ts"
+            ],
+            "@iptvnator/ui/epg": ["libs/ui/epg/src/index.ts"],
+            "@iptvnator/ui/epg/date": ["libs/ui/epg/src/lib/epg-date.ts"],
+            "@iptvnator/ui/epg/progress-panel": [
+                "libs/ui/epg/src/lib/epg-progress-panel/epg-progress-panel.component.ts"
+            ],
+            "@iptvnator/ui/playback/external-player-info-dialog": [
+                "libs/ui/playback/src/lib/external-player-info-dialog/external-player-info-dialog.component.ts"
+            ],
+            "@iptvnator/ui/playback/embedded-mpv-player": [
+                "libs/ui/playback/src/lib/embedded-mpv-player/index.ts"
+            ],
+            "@iptvnator/ui/playback": ["libs/ui/playback/src/index.ts"],
+            "@iptvnator/playlist/import/feature": [
+                "libs/playlist/import/feature/src/index.ts"
+            ],
+            "@iptvnator/playlist/m3u/feature-player": [
+                "libs/playlist/m3u/feature-player/src/index.ts"
+            ],
+            "@iptvnator/portal/stalker/feature": [
+                "libs/portal/stalker/feature/src/index.ts"
+            ],
+            "@iptvnator/portal/stalker/data-access": [
+                "libs/portal/stalker/data-access/src/index.ts"
+            ],
+            "@iptvnator/portal/xtream/feature": [
+                "libs/portal/xtream/feature/src/index.ts"
+            ],
+            "@iptvnator/portal/xtream/data-access": [
+                "libs/portal/xtream/data-access/src/index.ts"
+            ],
+            "@iptvnator/workspace/shell/feature": [
+                "libs/workspace/shell/feature/src/index.ts"
+            ],
+            "@iptvnator/workspace/shell/util": [
+                "libs/workspace/shell/util/src/index.ts"
+            ],
+            "@iptvnator/workspace/shell/util/settings-context": [
+                "libs/workspace/shell/util/src/lib/settings-context.service.ts"
+            ],
+            "@iptvnator/workspace/shell/util/settings-search": [
+                "libs/workspace/shell/util/src/lib/settings-search/index.ts"
+            ],
+            "@iptvnator/pipes": ["libs/ui/pipes/src/index.ts"],
+            "@iptvnator/pipes/date-format": [
+                "libs/ui/pipes/src/lib/date-format.util.ts"
+            ],
+            "@iptvnator/ui/components": ["libs/ui/components/src/index.ts"],
+            "@iptvnator/ui/components/confirm-dialog": [
+                "libs/ui/components/src/lib/confirm-dialog/dialog.service.ts"
+            ],
+            "@iptvnator/ui/components/parental-lock-pin-dialog": [
+                "libs/ui/components/src/lib/parental-lock-pin-dialog/parental-lock-pin-dialog.component.ts"
+            ],
+            "@iptvnator/ui/components/password-visibility-toggle": [
+                "libs/ui/components/src/lib/password-visibility-toggle/password-visibility-toggle.directive.ts"
+            ],
+            "@iptvnator/ui/components/window-controls": [
+                "libs/ui/components/src/lib/window-controls/window-controls.component.ts"
+            ],
+            "@iptvnator/m3u-state": ["libs/m3u-state/src/index.ts"],
+            "@iptvnator/shared/m3u-utils": [
+                "libs/shared/m3u-utils/src/index.ts"
+            ],
+            "@iptvnator/shared/testing": ["libs/shared/testing/src/index.ts"],
+            "@iptvnator/shared/logging": ["libs/shared/logging/src/index.ts"],
+            "@iptvnator/shared/host-health": [
+                "libs/shared/host-health/src/index.ts"
+            ],
+            "@iptvnator/services": ["libs/services/src/index.ts"],
+            "@iptvnator/services/playlist-backup": [
+                "libs/services/src/lib/playlist-backup.service.ts"
+            ],
+            "@iptvnator/shared/interfaces": [
+                "libs/shared/interfaces/src/index.ts"
+            ],
+            "@iptvnator/shared/interfaces/ipc-commands": [
+                "libs/shared/interfaces/src/lib/ipc-commands.ts"
+            ],
+            "@iptvnator/shared/interfaces/zoom-level": [
+                "libs/shared/interfaces/src/lib/zoom-level.util.ts"
+            ],
+            "@iptvnator/ui/shared-portals": [
+                "libs/ui/shared-portals/src/index.ts"
+            ],
+            "@iptvnator/ui/remote-control": [
+                "libs/ui/remote-control/src/index.ts"
+            ],
+            "@iptvnator/shared/database": ["libs/shared/database/src/index.ts"],
+            "@iptvnator/shared/database/schema": [
+                "libs/shared/database/src/lib/schema.ts"
+            ],
+            "@iptvnator/shared/database/app-playlist": [
+                "libs/shared/database/src/lib/app-playlist.ts"
+            ],
+            "@iptvnator/shared/database/path-utils": [
+                "libs/shared/database/src/lib/path-utils.ts"
+            ],
+            "@iptvnator/shared/database/connection-observer": [
+                "libs/shared/database/src/lib/connection-observer.ts"
+            ],
+            "@iptvnator/workspace/dashboard/feature": [
+                "libs/workspace/dashboard/feature/src/index.ts"
+            ],
+            "@iptvnator/workspace/dashboard/data-access": [
+                "libs/workspace/dashboard/data-access/src/index.ts"
+            ],
+            "@package": ["./package.json"],
+            "@iptvnator/shared/marketing-fixtures": [
+                "./libs/shared/marketing-fixtures/src/index.ts"
+            ]
+        },
+        "strict": false,
+        "noUncheckedSideEffectImports": false,
+        "types": ["*"],
+        "ignoreDeprecations": "6.0"
+    },
+    "exclude": ["node_modules", "tmp"],
+    "files": ["global.d.ts"]
+}

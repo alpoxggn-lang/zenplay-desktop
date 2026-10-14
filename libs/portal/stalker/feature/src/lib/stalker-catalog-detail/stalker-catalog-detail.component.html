@@ -1,0 +1,42 @@
+@if (contentType() === 'vod') {
+    @if ((selectedItem()?.series?.length ?? 0) > 0) {
+        <app-stalker-series-view
+            [vodWithSeries]="selectedItem()"
+            [providerOnly]="providerOnly()"
+        />
+    } @else if (isSeriesDetail()) {
+        <app-stalker-series-view [providerOnly]="providerOnly()" />
+    } @else if (vodDetailsItem()) {
+        <app-vod-details
+            [playbackSessionKey]="playbackSessionKey()"
+            [item]="vodDetailsItem()!"
+            [isFavorite]="isSelectedVodFavorite()"
+            [playbackPosition]="selectedVodPlaybackPosition()"
+            [playbackDurationSeconds]="selectedVodPlaybackDuration()"
+            [sourceLabel]="sourceLabel()"
+            [inlinePlayback]="inlinePlayback()"
+            [externalPlayback]="externalPlayback.activeSession()"
+            [providerOnly]="providerOnly()"
+            [isWatched]="watchedToggle.isWatched()"
+            [watchedToggleBusy]="watchedToggle.busy()"
+            [watchedToggleReady]="positionLoaded()"
+            [playbackStartPending]="playbackStartPending()"
+            (playClicked)="onVodPlay($event)"
+            (resumeClicked)="onVodPlay($event.item, $event.positionSeconds)"
+            (favoriteToggled)="onVodFavoriteToggled($event)"
+            (watchedToggled)="onVodWatchedToggled($event)"
+            (downloadRequested)="vodDetailActions.download($event)"
+            (backClicked)="onVodBack()"
+            (inlineTimeUpdated)="handleInlineTimeUpdate($event)"
+            (inlinePlaybackClosed)="closeInlinePlayer()"
+            (streamUrlCopied)="vodDetailActions.notifyCopied()"
+            (inlineExternalFallbackRequested)="
+                vodDetailActions.handleExternalFallback($event)
+            "
+            (externalPlayRequested)="vodDetailActions.openExternal($event)"
+            (resetProgressRequested)="vodDetailActions.resetProgress($event)"
+        />
+    }
+} @else if (contentType() === 'series') {
+    <app-stalker-series-view [providerOnly]="providerOnly()" />
+}

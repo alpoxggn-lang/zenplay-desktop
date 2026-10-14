@@ -1,0 +1,409 @@
+<ng-template #vodActions>
+    @let playableItem = playableVodItem();
+    @if (playableItem || isDownloaded()) {
+        @let primary = hero.primaryAction();
+        <app-detail-action-button
+            [label]="primary.label"
+            [meta]="primary.meta"
+            [icon]="primary.icon"
+            [state]="primary.state"
+            [disabled]="startBlocked()"
+            testId="vod-primary-action"
+            (pressed)="onPrimaryAction(playableItem)"
+        />
+        @if (trailerEmbedUrl()) {
+            <app-detail-action-button
+                variant="secondary"
+                icon="smart_display"
+                [label]="'PORTALS.DETAIL.TRAILER' | translate"
+                testId="vod-trailer"
+                (pressed)="openTrailer()"
+            />
+        }
+        @if (playableItem) {
+            <app-detail-icon-button
+                [label]="
+                    (isFavorite()
+                        ? 'PORTALS.REMOVE_FROM_FAVORITES'
+                        : 'PORTALS.ADD_TO_FAVORITES'
+                    ) | translate
+                "
+                [icon]="isFavorite() ? 'favorite' : 'favorite_border'"
+                tone="favorite"
+                [active]="isFavorite()"
+                [pulsing]="favoritePulse()"
+                [pressedState]="isFavorite()"
+                testId="vod-favorite-toggle"
+                (pressed)="toggleFavorite()"
+            />
+            <app-detail-icon-button
+                [label]="
+                    (isWatched()
+                        ? 'XTREAM.MARK_UNWATCHED'
+                        : 'XTREAM.MARK_WATCHED'
+                    ) | translate
+                "
+                [icon]="isWatched() ? 'check_circle' : 'check_circle_outline'"
+                tone="watched"
+                [active]="isWatched()"
+                [pressedState]="isWatched()"
+                [disabled]="!canToggleWatched()"
+                testId="vod-watched-toggle"
+                (pressed)="toggleWatched(playableItem)"
+            />
+            @if (isElectron() && !providerOnly()) {
+                @if (isDownloaded()) {
+                    <app-detail-icon-button
+                        [label]="'DOWNLOADS.DOWNLOADED_REVEAL' | translate"
+                        icon="check_circle"
+                        tone="done"
+                        testId="vod-download-done"
+                        (pressed)="revealDownloadedFile()"
+                    />
+                    <!-- The primary button plays the local file once a movie
+                         is downloaded, and the sources panel only exists
+                         when another playlist also carries the film. Without
+                         this, a downloaded movie in a single-playlist library
+                         offers no way to stream the provider's copy at all. -->
+                    @if (externalPrimaryButtonState() === 'idle') {
+                        <app-detail-icon-button
+                            [label]="
+                                'PORTALS.MULTI_SOURCE.PLAY_FROM_SOURCE'
+                                    | translate
+                            "
+                            icon="play_arrow"
+                            [disabled]="startBlocked()"
+                            testId="vod-play-provider"
+                            (pressed)="playFromProviderSource(playableItem)"
+                        />
+                    }
+                } @else if (isDownloading()) {
+                    <!-- Covers downloading, queued and paused: the ring holds
+                         the real percent, spins when the size is unknown, and
+                         pauses behind a resume glyph. -->
+                    @let downloadLabel =
+                        isPausedDownload()
+                            ? ('DOWNLOADS.RESUME' | translate)
+                            : downloadPercent() !== null
+                              ? ('DOWNLOADS.DOWNLOADING_PERCENT'
+                                | translate: { percent: downloadPercent() })
+                              : ('DOWNLOADS.STATUS.DOWNLOADING' | translate);
+                    <app-detail-icon-button
+                        class="icon-action-btn--progress"
+                        [label]="downloadLabel"
+                        testId="vod-download-progress"
+                        (pressed)="
+                            isPausedDownload()
+                                ? resumePausedDownload()
+                                : promptCancelDownload()
+                        "
+                    >
+                        <span glyph class="download-glyph">
+                            <svg
+                                class="download-ring"
+                                [class.download-ring--indeterminate]="
+                                    downloadPercent() === null &&
+                                    !isPausedDownload()
+                                "
+                                viewBox="0 0 36 36"
+                                aria-hidden="true"
+                            >
+                                <circle
+                                    class="download-ring__track"
+                                    cx="18"
+                                    cy="18"
+                                    r="15.5"
+                                />
+                                <circle
+                                    class="download-ring__value"
+                                    cx="18"
+                                    cy="18"
+                                    r="15.5"
+                                    [style.stroke-dasharray]="
+                                        downloadRingCircumference
+                                    "
+                                    [style.stroke-dashoffset]="
+                                        downloadRingOffset()
+                                    "
+                                />
+                            </svg>
+                            @if (isPausedDownload()) {
+                                <mat-icon class="download-glyph__center"
+                                    >play_arrow</mat-icon
+                                >
+                            }
+                        </span>
+                    </app-detail-icon-button>
+                } @else {
+                    <app-detail-icon-button
+                        [label]="'DOWNLOADS.DOWNLOAD' | translate"
+                        icon="download"
+                        testId="vod-download-start"
+                        (pressed)="downloadVod(playableItem)"
+                    />
+                }
+            }
+
+            <app-vod-more-menu
+                [sections]="menu.sections()"
+                [label]="'PORTALS.DETAIL.MORE_ACTIONS' | translate"
+                testId="vod-more-menu"
+                [sources]="multiSource.sources()"
+                [sourcesTitle]="multiSourceTitle()"
+                [matchKind]="multiSource.matchKind()"
+                [autoFailoverEnabled]="multiSource.autoFailoverEnabled()"
+                [autoFailoverSupported]="autoFailoverSupported()"
+                [playbackLive]="playbackLive()"
+                (selected)="menu.run($event)"
+                (sourcePlayRequested)="playFromSource($event)"
+                (sourcePinRequested)="pinSource($event)"
+                (sourceCheckRequested)="checkSource($event)"
+                (autoFailoverToggled)="setAutoFailover($event)"
+            />
+        }
+    }
+    <app-view-in-portal-action />
+</ng-template>
+
+<ng-template #vodCredits>
+    @if (activeSourceCaption(); as caption) {
+        <p class="source-caption">
+            <span class="source-caption__label">
+                {{ 'PORTALS.MULTI_SOURCE.PLAYING_FROM' | translate }}
+            </span>
+            <span class="source-caption__source">{{ caption.source }}</span>
+            @if (multiSource.hasAlternatives()) {
+                <span class="source-caption__extra">
+                    @if (caption.alternativeCount === 1) {
+                        {{
+                            'PORTALS.MULTI_SOURCE.ALSO_FOUND_IN_ONE' | translate
+                        }}
+                    } @else {
+                        {{
+                            'PORTALS.MULTI_SOURCE.ALSO_FOUND_IN_OTHER'
+                                | translate: { count: caption.alternativeCount }
+                        }}
+                    }
+                </span>
+            }
+        </p>
+    }
+    <app-detail-credits
+        [cast]="hero.castNames()"
+        [directors]="hero.directorNames()"
+        (moreRequested)="scrollToCast()"
+    />
+    @if (selectedVodInfo()?.rating_kinopoisk; as kinopoisk) {
+        <div class="details__meta-item">
+            <span class="label">{{
+                'XTREAM.KINOPOISK_RATING' | translate
+            }}</span>
+            <span class="value">{{ kinopoisk }}</span>
+        </div>
+    }
+</ng-template>
+
+<ng-template #inlinePlayer>
+    @if (playableVodItem()) {
+        @if (inlinePlayback(); as playback) {
+            <app-portal-inline-player
+                [playbackSessionKey]="playbackSessionKey()"
+                [playback]="playback"
+                [alternativeSources]="multiSource.alternatives()"
+                [allSources]="multiSource.sources()"
+                [sourcesMatchKind]="multiSource.matchKind()"
+                [sourcesAutoFailoverEnabled]="multiSource.autoFailoverEnabled()"
+                [sourcesAutoFailoverSupported]="autoFailoverSupported()"
+                [sourcesPlaybackLive]="playbackLive()"
+                (sourcesAutoFailoverToggled)="setAutoFailover($event)"
+                (alternativeSourceRequested)="playFromSource($event)"
+                (sourcePinRequested)="pinSource($event)"
+                (sourceCheckRequested)="checkSource($event)"
+                (playbackFailed)="onPlaybackFailed()"
+                (timeUpdate)="handleInlineTimeUpdate($event)"
+                (closed)="closeInlinePlayer()"
+                (streamUrlCopied)="showCopyNotification()"
+                (externalFallbackRequested)="
+                    handleExternalFallbackRequest($event)
+                "
+            />
+        }
+    }
+</ng-template>
+
+@let item = selectedItem();
+@if (selectedVodInfo(); as info) {
+    <app-portal-detail-shell
+        [title]="info.name || item?.movie_data?.name"
+        [kindLabel]="hero.kindLabel()"
+        [description]="info.description || info.plot"
+        [posterUrl]="info.movie_image || info.cover_big"
+        [backdropUrl]="getBackdropUrl(info)"
+        [progress]="hero.progress()"
+        [trailerBackdropUrl]="trailerBackdropUrl()"
+        [contentKey]="contentKey()"
+        [playbackActive]="!!inlinePlayback()"
+        (backClicked)="goBack()"
+        (closePlayerRequested)="closeInlinePlayer()"
+    >
+        <ng-template appDetailTags>
+            @if (info.releasedate) {
+                <app-meta-chip>
+                    @if (discover.canOpenYear(info.releasedate)) {
+                        <button
+                            type="button"
+                            class="meta-chip__facet"
+                            (click)="discover.openYear(info.releasedate)"
+                        >
+                            {{ discover.yearLabel(info.releasedate) }}
+                        </button>
+                    } @else {
+                        {{
+                            discover.yearLabel(info.releasedate) ??
+                                (info.releasedate | slice: 0 : 4)
+                        }}
+                    }
+                </app-meta-chip>
+            }
+            @if (hero.durationLabel(); as duration) {
+                <app-meta-chip>{{ duration }}</app-meta-chip>
+            }
+            @if (hero.genreChips().length) {
+                <app-meta-chip>
+                    @for (genre of hero.genreChips(); track genre.label) {
+                        @if (!$first) {
+                            <span class="meta-chip__sep" aria-hidden="true"
+                                >·</span
+                            >
+                        }
+                        @if (genre.facet; as facet) {
+                            <button
+                                type="button"
+                                class="meta-chip__facet"
+                                (click)="discover.openGenre(facet)"
+                            >
+                                {{ genre.label }}
+                            </button>
+                        } @else {
+                            {{ genre.label }}
+                        }
+                    }
+                </app-meta-chip>
+            }
+            @for (country of hero.countryChips(); track country.label) {
+                <app-meta-chip>
+                    @if (country.facet; as facet) {
+                        <button
+                            type="button"
+                            class="meta-chip__facet"
+                            (click)="discover.openCountry(facet)"
+                        >
+                            {{ country.label }}
+                        </button>
+                    } @else {
+                        {{ country.label }}
+                    }
+                </app-meta-chip>
+            }
+            @if (info.rating_imdb) {
+                <app-meta-chip variant="rating"
+                    >★ {{ info.rating_imdb }}</app-meta-chip
+                >
+            }
+            @if (isDownloaded()) {
+                <app-meta-chip variant="status">
+                    {{ 'DOWNLOADS.OFFLINE' | translate }}
+                </app-meta-chip>
+            }
+        </ng-template>
+
+        <ng-template appDetailMeta>
+            <ng-container [ngTemplateOutlet]="vodCredits" />
+        </ng-template>
+
+        <ng-template appDetailActions>
+            <ng-container [ngTemplateOutlet]="vodActions" />
+        </ng-template>
+        <ng-container detail-player [ngTemplateOutlet]="inlinePlayer" />
+
+        <div detail-extras>
+            <app-similar-rail
+                [title]="'XTREAM.SIMILAR' | translate"
+                [items]="hero.similarRailItems()"
+                (selected)="openSimilarRailItem($event)"
+            />
+            <app-cast-crew-row
+                [cast]="hero.castMembers()"
+                [directors]="hero.directorMembers()"
+                (personSelected)="openActor($event)"
+            />
+        </div>
+    </app-portal-detail-shell>
+} @else if (fallbackView(); as fallback) {
+    <app-portal-detail-shell
+        [title]="fallback.title"
+        [kindLabel]="hero.kindLabel()"
+        [posterUrl]="fallback.posterUrl"
+        [playbackActive]="!!inlinePlayback()"
+        (backClicked)="goBack()"
+        (closePlayerRequested)="closeInlinePlayer()"
+    >
+        <ng-template appDetailTags>
+            <app-meta-chip
+                variant="status"
+                data-testid="xtream-vod-fallback-status"
+            >
+                {{ 'XTREAM.DETAIL_FALLBACK.STATUS' | translate }}
+            </app-meta-chip>
+            @if (fallback.year) {
+                <app-meta-chip>{{ fallback.year }}</app-meta-chip>
+            }
+            @if (fallback.rating) {
+                <app-meta-chip variant="rating"
+                    >★ {{ fallback.rating }}</app-meta-chip
+                >
+            }
+            @if (fallback.added) {
+                <app-meta-chip>{{ fallback.added }}</app-meta-chip>
+            }
+            @if (fallback.format) {
+                <app-meta-chip>{{ fallback.format }}</app-meta-chip>
+            }
+            @if (isDownloaded()) {
+                <app-meta-chip variant="status">
+                    {{ 'DOWNLOADS.OFFLINE' | translate }}
+                </app-meta-chip>
+            }
+        </ng-template>
+
+        <ng-template appDetailMeta>
+            <div
+                class="details__fallback-note"
+                data-testid="xtream-vod-fallback"
+            >
+                {{ 'XTREAM.DETAIL_FALLBACK.NOTE' | translate }}
+            </div>
+
+            @for (fact of fallback.facts; track fact.labelKey) {
+                <div class="details__meta-item details__meta-item--fallback">
+                    <span class="label">{{ fact.labelKey | translate }}</span>
+                    <span class="value" [class.value--mono]="fact.monospace">
+                        {{ fact.value }}
+                    </span>
+                </div>
+            }
+        </ng-template>
+
+        <ng-template appDetailActions>
+            <ng-container [ngTemplateOutlet]="vodActions" />
+        </ng-template>
+        <ng-container detail-player [ngTemplateOutlet]="inlinePlayer" />
+    </app-portal-detail-shell>
+} @else if (detailsError()) {
+    <app-portal-detail-shell
+        [errorMessage]="detailsError() ?? undefined"
+        (backClicked)="goBack()"
+    />
+} @else {
+    <app-portal-detail-shell [isLoading]="true" (backClicked)="goBack()" />
+}

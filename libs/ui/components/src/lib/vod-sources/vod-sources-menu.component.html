@@ -1,0 +1,191 @@
+<div class="sources-menu">
+    <div class="sources-menu__header">
+        <h3 class="sources-menu__title">
+            @if (title()) {
+                {{
+                    'PORTALS.MULTI_SOURCE.SOURCES_FOR'
+                        | translate: { title: title() }
+                }}
+            } @else {
+                {{ 'PORTALS.MULTI_SOURCE.SOURCE' | translate }}
+            }
+        </h3>
+        <span class="sources-menu__hint">
+            @if (resumeLabel(); as resume) {
+                {{ resume }}
+            } @else {
+                {{ matchKindLabelKey() | translate }}
+            }
+        </span>
+    </div>
+
+    @if (showFilter() || uncheckedCount() > 0) {
+        <div class="sources-menu__toolbar">
+            @if (showFilter()) {
+                <div class="sources-menu__filter">
+                    <mat-icon class="sources-menu__filter-icon"
+                        >search</mat-icon
+                    >
+                    <input
+                        type="text"
+                        class="sources-menu__filter-input"
+                        [ngModel]="filter()"
+                        (ngModelChange)="filter.set($event)"
+                        [attr.aria-label]="
+                            'PORTALS.MULTI_SOURCE.FILTER_PLACEHOLDER'
+                                | translate
+                        "
+                        [placeholder]="
+                            'PORTALS.MULTI_SOURCE.FILTER_PLACEHOLDER'
+                                | translate
+                        "
+                    />
+                </div>
+            }
+            @if (uncheckedCount() > 0) {
+                <button
+                    type="button"
+                    class="sources-menu__check-all"
+                    (click)="checkAllVisible()"
+                >
+                    <mat-icon>refresh</mat-icon>
+                    <span>{{
+                        'PORTALS.MULTI_SOURCE.CHECK_ALL' | translate
+                    }}</span>
+                </button>
+            }
+        </div>
+    }
+
+    <div class="sources-menu__chips">
+        <button
+            type="button"
+            class="filter-chip"
+            [class.filter-chip--on]="!filtersActive()"
+            (click)="clearFilters()"
+        >
+            <span>{{ 'PORTALS.MULTI_SOURCE.FILTER_ALL' | translate }}</span>
+            <b class="filter-chip__count">{{ totalCount() }}</b>
+        </button>
+        <button
+            type="button"
+            class="filter-chip"
+            [class.filter-chip--on]="filters().availableOnly"
+            [attr.aria-pressed]="filters().availableOnly"
+            (click)="toggleAvailableFilter()"
+        >
+            <mat-icon class="filter-chip__icon">check</mat-icon>
+            <span>{{
+                'PORTALS.MULTI_SOURCE.FILTER_AVAILABLE' | translate
+            }}</span>
+        </button>
+        <button
+            type="button"
+            class="filter-chip"
+            [class.filter-chip--on]="filters().hdOnly"
+            [attr.aria-pressed]="filters().hdOnly"
+            (click)="toggleHdFilter()"
+        >
+            <span>{{ 'PORTALS.MULTI_SOURCE.FILTER_HD' | translate }}</span>
+        </button>
+
+        @if (showReducedCount()) {
+            <span class="sources-menu__reduced">{{
+                'PORTALS.MULTI_SOURCE.SHOWING_OF_TOTAL'
+                    | translate
+                        : { visible: visibleCount(), total: totalCount() }
+            }}</span>
+        }
+
+        @if (languages().length > 0) {
+            <select
+                class="sources-menu__lang"
+                [ngModel]="filters().language"
+                (ngModelChange)="setLanguageFilter($event)"
+                [attr.aria-label]="
+                    'PORTALS.MULTI_SOURCE.ALL_LANGUAGES' | translate
+                "
+            >
+                <option [ngValue]="null">
+                    {{ 'PORTALS.MULTI_SOURCE.ALL_LANGUAGES' | translate }}
+                </option>
+                @for (lang of languages(); track lang) {
+                    <option [ngValue]="lang">{{ lang }}</option>
+                }
+            </select>
+        }
+    </div>
+
+    <div class="sources-menu__list">
+        @for (group of groups(); track group.key) {
+            <div class="sources-menu__group">
+                <app-vod-source-row
+                    [source]="group.primary"
+                    [showPin]="showPin()"
+                    [playbackLive]="playbackLive()"
+                    (playRequested)="playRequested.emit($event)"
+                    (pinRequested)="pinRequested.emit($event)"
+                    (checkRequested)="checkRequested.emit($event)"
+                />
+
+                @if (group.count > 1) {
+                    <button
+                        type="button"
+                        class="sources-menu__variants-toggle"
+                        [class.is-open]="isExpanded(group.key)"
+                        [attr.aria-expanded]="isExpanded(group.key)"
+                        (click)="toggleGroup(group.key)"
+                    >
+                        <mat-icon>{{
+                            isExpanded(group.key)
+                                ? 'expand_less'
+                                : 'expand_more'
+                        }}</mat-icon>
+                        <span>{{
+                            'PORTALS.MULTI_SOURCE.COPIES'
+                                | translate: { count: group.count }
+                        }}</span>
+                    </button>
+
+                    @if (isExpanded(group.key)) {
+                        <div class="sources-menu__copies">
+                            @for (copy of group.sources; track copy.id) {
+                                <app-vod-source-copy-row
+                                    [source]="copy"
+                                    [primary]="group.primary"
+                                    [playbackLive]="playbackLive()"
+                                    (playRequested)="playRequested.emit($event)"
+                                    (checkRequested)="
+                                        checkRequested.emit($event)
+                                    "
+                                />
+                            }
+                        </div>
+                    }
+                }
+            </div>
+        }
+        @if (visibleSources().length === 0) {
+            <p class="sources-menu__empty">
+                {{ 'PORTALS.MULTI_SOURCE.NO_MATCHES' | translate }}
+            </p>
+        }
+    </div>
+
+    @if (autoFailoverSupported()) {
+        <div class="sources-menu__footer">
+            <span class="sources-menu__footer-label">{{
+                'PORTALS.MULTI_SOURCE.AUTO_FAILOVER' | translate
+            }}</span>
+            <mat-slide-toggle
+                class="sources-menu__toggle"
+                [checked]="autoFailoverEnabled()"
+                (change)="onAutoFailoverChange($event)"
+                (click)="$event.stopPropagation()"
+                [attr.aria-label]="
+                    'PORTALS.MULTI_SOURCE.AUTO_FAILOVER' | translate
+                "
+            />
+        </div>
+    }
+</div>

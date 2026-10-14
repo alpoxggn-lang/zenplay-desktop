@@ -1,0 +1,1213 @@
+import { readFileSync } from 'fs';
+import path from 'path';
+
+// Checkouts with core.autocrlf=true materialize these sources with CRLF
+// line endings; normalize so the multi-line assertions below match the
+// LF-based expectations on every host.
+function readSource(relativePath: string): string {
+    return readFileSync(path.resolve(__dirname, relativePath), 'utf8').replace(
+        /\r\n/g,
+        '\n'
+    );
+}
+
+describe('Embedded MPV native source recording invariants', () => {
+    const nativeSource = readSource('../../../native/src/embedded_mpv.mm');
+    const widCommonSource = readSource(
+        '../../../native/src/embedded_mpv_wid_common.h'
+    );
+    const win32Source = readSource('../../../native/src/embedded_mpv_win32.cc');
+    const linuxSource = readSource('../../../native/src/embedded_mpv_linux.cc');
+    const buildScriptSource = readSource('../../../build-embedded-mpv.js');
+    const buildAndMakeWorkflowSource = readSource(
+        '../../../../../.github/workflows/build-and-make.yaml'
+    );
+    const electronBuilderConfig = JSON.parse(
+        readSource('../../../../../electron-builder.json')
+    ) as {
+        snap?: {
+            plugs?: unknown;
+        };
+    };
+    const stageRuntimeSource = readSource(
+        '../../../../../tools/embedded-mpv/stage-runtime.mjs'
+    );
+    const frameHelperRenderSource = readFileSync(
+        path.resolve(__dirname, '../../../native/helper/frame_helper_render.h'),
+        'utf8'
+    );
+    const frameHelperSource = readFileSync(
+        path.resolve(__dirname, '../../../native/helper/mpv_frame_helper.cpp'),
+        'utf8'
+    );
+    const frameHelperGlSource = readFileSync(
+        path.resolve(__dirname, '../../../native/helper/frame_helper_gl.h'),
+        'utf8'
+    );
+    const frameShmSource = readFileSync(
+        path.resolve(__dirname, '../../../native/helper/frame_shm.h'),
+        'utf8'
+    );
+    const linuxFrameHelperGlSource = frameHelperGlSource.slice(
+        frameHelperGlSource.indexOf('inline void* eglWrapGetProcAddress')
+    );
+    const windowsFrameHelperGlSource = frameHelperGlSource.slice(
+        frameHelperGlSource.indexOf('#define FRAME_HELPER_WGL_ENTRY_POINTS')
+    );
+
+    function functionBody(name: string): string {
+        return sourceFunctionBody(nativeSource, `Napi::Value ${name}(`, name);
+    }
+
+    function sourceFunctionBody(
+        source: string,
+        signature: string,
+        name: string
+    ): string {
+        const start = source.indexOf(signature);
+        expect(start).toBeGreaterThanOrEqual(0);
+
+        const bodyStart = source.indexOf('{', start);
+        expect(bodyStart).toBeGreaterThanOrEqual(0);
+
+        let depth = 0;
+        for (let index = bodyStart; index < source.length; index += 1) {
+            if (source[index] === '{') {
+                depth += 1;
+            }
+            if (source[index] === '}') {
+                depth -= 1;
+            }
+            if (depth === 0) {
+                return source.slice(bodyStart, index + 1);
+            }
+        }
+
+        throw new Error(`Unable to read ${name} body.`);
+    }
+
+    function eventCase(
+        source: string,
+        eventName: string,
+        nextEventName: string
+    ): string {
+        const eventLoopBodyStart = source.indexOf('void runEventLoop(');
+        expect(eventLoopBodyStart).toBeGreaterThanOrEqual(0);
+        const eventCaseStart = source.indexOf(
+            `case ${eventName}`,
+            eventLoopBodyStart
+        );
+        expect(eventCaseStart).toBeGreaterThanOrEqual(0);
+        const nextCaseStart = source.indexOf(
+            `case ${nextEventName}`,
+            eventCaseStart
+        );
+        expect(nextCaseStart).toBeGreaterThan(eventCaseStart);
+
+        return source.slice(eventCaseStart, nextCaseStart);
+    }
+
+    it('tracks LoadPlayback recording auto-stop replies through the reconciler', () => {
+        const body = functionBody('LoadPlayback');
+
+        expect(body).toContain(
+            'const uint64_t stopRecordingRequestId = nextAsyncRequestId();'
+        );
+        expect(body).toContain(
+            'session->pendingRecordingStopRequestId = stopRecordingRequestId;'
+        );
+        expect(body).toContain(
+            'session->pendingRecordingStopStartedAt =\n' +
+                '                session->snapshot.recordingStartedAt;'
+        );
+        expect(body).toContain('stopRecordingRequestId,');
+    });
+
+    it('maps successful MPV end-file events to an ended session status', () => {
+        expect(nativeSource).toContain('Ended,');
+        expect(nativeSource).toContain('case SessionStatus::Ended:');
+        expect(widCommonSource).toContain('Ended,');
+        expect(widCommonSource).toContain('case SessionStatus::Ended:');
+
+        const endFileCase = eventCase(
+            nativeSource,
+            'MPV_EVENT_END_FILE',
+            'MPV_EVENT_PROPERTY_CHANGE'
+        );
+        expect(endFileCase).toContain('SessionStatus::Ended');
+        expect(endFileCase).toContain('MPV_END_FILE_REASON_EOF');
+
+        const widEndFileCase = eventCase(
+            widCommonSource,
+            'MPV_EVENT_END_FILE',
+            'MPV_EVENT_PROPERTY_CHANGE'
+        );
+        expect(widEndFileCase).toContain('SessionStatus::Ended');
+        expect(widEndFileCase).toContain('MPV_END_FILE_REASON_EOF');
+    });
+
+    it('keeps MPV redirect end-file events in loading state', () => {
+        for (const endFileCase of [
+            eventCase(
+                nativeSource,
+                'MPV_EVENT_END_FILE',
+                'MPV_EVENT_PROPERTY_CHANGE'
+            ),
+            eventCase(
+                widCommonSource,
+                'MPV_EVENT_END_FILE',
+                'MPV_EVENT_PROPERTY_CHANGE'
+            ),
+        ]) {
+            const redirectBranchStart = endFileCase.indexOf(
+                'MPV_END_FILE_REASON_REDIRECT'
+            );
+            expect(redirectBranchStart).toBeGreaterThanOrEqual(0);
+            const idleFallbackStart = endFileCase.indexOf(
+                'SessionStatus::Idle',
+                redirectBranchStart
+            );
+            expect(idleFallbackStart).toBeGreaterThan(redirectBranchStart);
+
+            const redirectBranch = endFileCase.slice(
+                redirectBranchStart,
+                idleFallbackStart
+            );
+            expect(redirectBranch).toContain('SessionStatus::Loading');
+            expect(redirectBranch).toContain(
+                'session->snapshot.error.clear();'
+            );
+        }
+    });
+
+    it('observes the stream-stats properties on every embedded engine', () => {
+        // The info popover renders whatever the engine reports, so a backend
+        // that stops observing one of these silently loses a row. Source-text
+        // assertions are the only guard the C++ has in CI.
+        const observedProperties = [
+            'estimated-vf-fps',
+            'video-bitrate',
+            'audio-bitrate',
+            'video-format',
+            'audio-codec-name',
+            'file-format',
+            'demuxer-cache-duration',
+            'frame-drop-count',
+            'decoder-frame-drop-count',
+            'audio-params/channels',
+            'audio-params/samplerate',
+        ];
+
+        for (const property of observedProperties) {
+            expect(nativeSource).toContain(`"${property}"`);
+            expect(widCommonSource).toContain(`"${property}"`);
+            expect(frameHelperSource).toContain(`"${property}"`);
+        }
+
+        // Observing is push-based and free, which is the only reason the
+        // native-view backends carry these fields at all: their legacy dock
+        // cannot render them. The Linux backend has no observe mechanism —
+        // it would have to poll each property over the JSON IPC socket on
+        // the same pass that publishes position, pause and EOF — so it must
+        // not collect them at all.
+        for (const property of observedProperties) {
+            expect(widCommonSource).not.toContain(`socketPath, "${property}"`);
+        }
+    });
+
+    it('serializes stream stats as an optional snapshot object', () => {
+        // An absent value must omit its key: the renderer treats a missing
+        // field as "unknown" and a zero as a real measurement.
+        // Both native-view backends serialize through the same named helper
+        // so the two can be read side by side while porting.
+        for (const source of [nativeSource, widCommonSource]) {
+            expect(source).toContain('void writeStreamStats(');
+            expect(source).toContain('result.Set("stats", stats);');
+            expect(source).toContain(
+                'writeStreamStats(env, result, snapshot);'
+            );
+        }
+        expect(frameHelperSource).toContain('composeStatsJsonLocked');
+        // Unconditional on the frame-copy path: its snapshots are merged, so
+        // an omitted key would keep the previous stream's numbers.
+        expect(frameHelperSource).toContain(
+            'writer.raw("stats", composeStatsJsonLocked());'
+        );
+    });
+
+    it('clears stream stats when a new file starts so rows never go stale', () => {
+        // One reset per backend that collects stats, invoked wherever a new
+        // file begins. The wid backend has a single call site: its Linux half
+        // polls nothing, so there is nothing there to go stale.
+        for (const source of [
+            nativeSource,
+            widCommonSource,
+            frameHelperSource,
+        ]) {
+            expect(source).toContain('void clearStreamStats()');
+        }
+        expect(nativeSource).toContain('session->snapshot.clearStreamStats();');
+        expect(
+            widCommonSource.match(/snapshot\.clearStreamStats\(\);/g)
+        ).toHaveLength(1);
+        expect(frameHelperSource).toContain('s.clearStreamStats();');
+    });
+
+    it('clears frame-copy dimensions and publishes the reset through merged snapshots', () => {
+        const reset = sourceFunctionBody(
+            frameHelperSource,
+            'void clearStreamStats()',
+            'reset'
+        );
+        expect(reset).toContain('videoWidth = 0;');
+        expect(reset).toContain('videoHeight = 0;');
+        const snapshot = sourceFunctionBody(
+            frameHelperSource,
+            'std::string composeSnapshotLocked()',
+            'snapshot'
+        );
+        expect(snapshot).toContain(
+            'writer.num("videoWidth", (double)s.videoWidth);'
+        );
+        expect(snapshot).toContain(
+            'writer.num("videoHeight", (double)s.videoHeight);'
+        );
+        expect(snapshot).not.toContain('if (s.videoWidth > 0');
+    });
+
+    it('restores unknown sentinels when observed diagnostics become unavailable', () => {
+        const fields = [
+            ['estimated-vf-fps', 'fps = 0'],
+            ['video-bitrate', 'videoBitrate = 0'],
+            ['audio-bitrate', 'audioBitrate = 0'],
+            ['video-format', 'videoCodec.clear()'],
+            ['audio-codec-name', 'audioCodec.clear()'],
+            ['audio-params/channels', 'audioChannels.clear()'],
+            ['audio-params/samplerate', 'audioSampleRate = 0'],
+            ['file-format', 'container.clear()'],
+            ['demuxer-cache-duration', 'cacheDuration = -1'],
+            ['frame-drop-count', 'droppedFrames = -1'],
+            ['decoder-frame-drop-count', 'decoderDroppedFrames = -1'],
+        ];
+        for (const source of [
+            nativeSource,
+            widCommonSource,
+            frameHelperSource,
+        ]) {
+            const reset = sourceFunctionBody(
+                source,
+                'bool clearUnavailableStreamProperty(',
+                'unavailable property'
+            );
+            for (const [property, assignment] of fields) {
+                expect(reset).toContain(
+                    `name == "${property}") { ${assignment}; }`
+                );
+            }
+            const event = source.indexOf('MPV_EVENT_PROPERTY_CHANGE');
+            const handler =
+                source === frameHelperSource
+                    ? sourceFunctionBody(
+                          source,
+                          'void handlePropertyChange(',
+                          'property handler'
+                      )
+                    : source.slice(
+                          event,
+                          source.indexOf('case MPV_EVENT_', event + 5)
+                      );
+            expect(handler).toContain('MPV_FORMAT_NONE');
+            expect(handler).toContain('clearUnavailableStreamProperty(');
+            const dataGuard = handler.indexOf('!property->data');
+            if (dataGuard >= 0) {
+                expect(handler.indexOf('MPV_FORMAT_NONE')).toBeLessThan(
+                    dataGuard
+                );
+            }
+        }
+    });
+
+    it('maps keep-open eof-reached property changes to an ended session status', () => {
+        expect(nativeSource).toContain(
+            'mpv_observe_property(session->handle, 11, "eof-reached", MPV_FORMAT_FLAG);'
+        );
+        expect(widCommonSource).toContain(
+            'mpv_observe_property(session->handle, 11, "eof-reached", MPV_FORMAT_FLAG);'
+        );
+
+        const nativeEofBranchStart = nativeSource.indexOf(
+            'propertyName == "eof-reached"'
+        );
+        expect(nativeEofBranchStart).toBeGreaterThanOrEqual(0);
+        const nativeVolumeBranchStart = nativeSource.indexOf(
+            'propertyName == "volume"',
+            nativeEofBranchStart
+        );
+        expect(nativeVolumeBranchStart).toBeGreaterThan(nativeEofBranchStart);
+        const nativeEofBranch = nativeSource.slice(
+            nativeEofBranchStart,
+            nativeVolumeBranchStart
+        );
+        expect(nativeEofBranch).toContain('SessionStatus::Ended');
+        expect(nativeEofBranch).toContain('session->loadedPath');
+
+        const widEofBranchStart = widCommonSource.indexOf(
+            'name == "eof-reached"'
+        );
+        expect(widEofBranchStart).toBeGreaterThanOrEqual(0);
+        const widVolumeBranchStart = widCommonSource.indexOf(
+            'name == "volume"',
+            widEofBranchStart
+        );
+        expect(widVolumeBranchStart).toBeGreaterThan(widEofBranchStart);
+        const widEofBranch = widCommonSource.slice(
+            widEofBranchStart,
+            widVolumeBranchStart
+        );
+        expect(widEofBranch).toContain('SessionStatus::Ended');
+    });
+
+    it('keeps Windows/Linux non-load async MPV command failures non-fatal', () => {
+        expect(widCommonSource).toContain('pendingPlaybackLoadRequestId');
+        expect(widCommonSource).toContain('reconcilePlaybackLoadReply');
+        expect(widCommonSource).toContain(
+            'session->snapshot.error = mpv_error_string(event->error);'
+        );
+        expect(widCommonSource).not.toContain(
+            'if (event->error < 0) {\n' +
+                '                    session->snapshot.status = SessionStatus::Error;'
+        );
+    });
+
+    it('keeps macOS non-load async MPV command failures non-fatal', () => {
+        expect(nativeSource).toContain('pendingPlaybackLoadRequestId');
+        expect(nativeSource).toContain('reconcilePlaybackLoadReply');
+
+        // Only the loadfile/recording reconcilers may flip the session
+        // status; a rejected seek/aid/speed reply on a live stream must not
+        // surface the error UI while playback keeps running.
+        const commandReplyCase = eventCase(
+            nativeSource,
+            'MPV_EVENT_COMMAND_REPLY',
+            'MPV_EVENT_SHUTDOWN'
+        );
+        expect(commandReplyCase).toContain('reconcilePlaybackLoadReply');
+        expect(commandReplyCase).toContain('reconcileRecordingPropertyReply');
+        expect(commandReplyCase).not.toContain('SessionStatus::Error');
+    });
+
+    it('populates the Linux audio track menu from scalar track-list sub-properties', () => {
+        expect(widCommonSource).toContain(
+            'queryLinuxMpvInteger(socketPath, "track-list/count")'
+        );
+        expect(widCommonSource).toContain(
+            '"track-list/" + std::to_string(index) + "/"'
+        );
+        expect(widCommonSource).toContain('queryLinuxMpvAudioTracks');
+        expect(widCommonSource).toContain(
+            'queryLinuxMpvInteger(socketPath, "aid")'
+        );
+        // Full track walks only happen when the track count changes; the
+        // per-tick cost stays at two extra scalar queries.
+        expect(widCommonSource).toContain(
+            'if (trackCount && *trackCount != cachedTrackCount) {'
+        );
+        expect(widCommonSource).toContain('session->mpvTrackListCount = -1;');
+    });
+
+    it('clears transient Windows/Linux MPV operation errors after healthy playback states', () => {
+        const fileLoadedCaseStart = widCommonSource.indexOf(
+            'case MPV_EVENT_FILE_LOADED:'
+        );
+        expect(fileLoadedCaseStart).toBeGreaterThanOrEqual(0);
+        const endFileCaseStart = widCommonSource.indexOf(
+            'case MPV_EVENT_END_FILE:',
+            fileLoadedCaseStart
+        );
+        expect(endFileCaseStart).toBeGreaterThan(fileLoadedCaseStart);
+        const fileLoadedCase = widCommonSource.slice(
+            fileLoadedCaseStart,
+            endFileCaseStart
+        );
+
+        expect(fileLoadedCase).toContain('session->snapshot.error.clear();');
+
+        const pausePropertyStart = widCommonSource.indexOf(
+            'const bool paused = *static_cast<int*>(property->data) != 0;'
+        );
+        expect(pausePropertyStart).toBeGreaterThanOrEqual(0);
+        const volumePropertyStart = widCommonSource.indexOf(
+            '} else if (name == "volume"',
+            pausePropertyStart
+        );
+        expect(volumePropertyStart).toBeGreaterThan(pausePropertyStart);
+        const pausePropertyBranch = widCommonSource.slice(
+            pausePropertyStart,
+            volumePropertyStart
+        );
+
+        expect(pausePropertyBranch).toContain(
+            'session->snapshot.error.clear();'
+        );
+    });
+
+    it('copies Windows runtime DLLs next to the addon for Windows loader lookup', () => {
+        expect(buildScriptSource).toContain("'libmpv-2.dll',");
+        expect(buildScriptSource).toContain(
+            'path.join(outputDir, windowsDllName)'
+        );
+        expect(buildScriptSource).toContain("fileName.endsWith('.dll')");
+        expect(buildScriptSource).toContain('path.join(outputDir, fileName)');
+        expect(stageRuntimeSource).toContain(
+            "win32: ['mpv-2.dll', 'libmpv-2.dll', 'mpv.dll', 'libmpv.dll']"
+        );
+    });
+
+    it('checks Win32 window class registration failures explicitly', () => {
+        expect(win32Source).toContain(
+            'const ATOM classAtom = RegisterClassExW'
+        );
+        expect(win32Source).toContain('ERROR_CLASS_ALREADY_EXISTS');
+        expect(win32Source).toContain(
+            'Failed to register embedded MPV child window class.'
+        );
+    });
+
+    it('drains Linux X11 events after resizing the embedded window', () => {
+        expect(linuxSource).toContain('void drainEvents()');
+        expect(linuxSource).toContain('XPending(display_)');
+        expect(linuxSource).toContain('XNextEvent(display_, &event)');
+        expect(linuxSource).toContain('drainEvents();');
+    });
+
+    it('defers Linux X11 create failure cleanup until after the error trap scope closes', () => {
+        const trapStart = linuxSource.indexOf(
+            'ScopedX11ErrorTrap x11Errors(display_);'
+        );
+        expect(trapStart).toBeGreaterThanOrEqual(0);
+        const deferredCleanupStart = linuxSource.indexOf(
+            'if (createWindowFailed) {',
+            trapStart
+        );
+        expect(deferredCleanupStart).toBeGreaterThan(trapStart);
+
+        const trappedCreateBlock = linuxSource.slice(
+            trapStart,
+            deferredCleanupStart
+        );
+        const nextWindowGuardStart = linuxSource.indexOf(
+            'if (!window_) {',
+            deferredCleanupStart
+        );
+        expect(nextWindowGuardStart).toBeGreaterThan(deferredCleanupStart);
+        const deferredCleanupBlock = linuxSource.slice(
+            deferredCleanupStart,
+            nextWindowGuardStart
+        );
+
+        expect(trappedCreateBlock).toContain('createWindowFailed = true;');
+        expect(trappedCreateBlock).not.toContain('destroy();');
+        expect(deferredCleanupBlock).toContain('destroy();');
+    });
+
+    it('keeps Linux mpv child processes isolated from Wayland and inherited Electron descriptors', () => {
+        expect(widCommonSource).toContain(
+            'if (hasEnvPrefix(entry, "WAYLAND_DISPLAY="))'
+        );
+        expect(widCommonSource).toContain(
+            'environment.push_back("XDG_SESSION_TYPE=x11");'
+        );
+        expect(widCommonSource).toContain(
+            'arguments.push_back("--vo=gpu,x11");'
+        );
+        expect(widCommonSource).toContain(
+            'arguments.push_back("--gpu-context=x11egl");'
+        );
+        expect(widCommonSource).toContain(
+            'void closeInheritedFileDescriptors()'
+        );
+        expect(widCommonSource).toContain('opendir("/proc/self/fd")');
+        expect(widCommonSource).toContain('readdir(directory)');
+        expect(widCommonSource).toContain(
+            'fcntl(descriptor, F_SETFD, flags | FD_CLOEXEC)'
+        );
+        expect(widCommonSource).toContain('closeInheritedFileDescriptors();');
+        expect(widCommonSource).not.toContain('inheritedFileDescriptorLimit()');
+        expect(widCommonSource).not.toContain(
+            'closeInheritedFileDescriptors(fileDescriptorLimit);'
+        );
+    });
+
+    it('drives Linux out-of-process MPV state and controls over JSON IPC', () => {
+        expect(widCommonSource).toContain('mpvIpcSocketPath');
+        expect(widCommonSource).toContain(
+            'arguments.push_back("--input-ipc-server=" + ipcSocketPath);'
+        );
+        expect(widCommonSource).toContain('refreshLinuxMpvSnapshot(session);');
+        expect(widCommonSource).toContain(
+            'queryLinuxMpvNumber(socketPath, "time-pos")'
+        );
+        expect(widCommonSource).toContain(
+            'queryLinuxMpvNumber(socketPath, "duration")'
+        );
+        expect(widCommonSource).toContain(
+            'std::string("{\\"command\\":[\\"set_property\\",\\"pause\\",")'
+        );
+        expect(widCommonSource).toContain(
+            '"{\\"command\\":[\\"seek\\"," + seconds + ",\\"absolute\\"]}\\n"'
+        );
+    });
+
+    it('keeps Linux MPV IPC volume readback in mpv percent units', () => {
+        const refreshBody = sourceFunctionBody(
+            widCommonSource,
+            'void refreshLinuxMpvSnapshot(',
+            'refreshLinuxMpvSnapshot'
+        );
+        expect(refreshBody).toContain(
+            'queryLinuxMpvNumber(socketPath, "volume")'
+        );
+        expect(refreshBody).toContain(
+            'session->snapshot.volumePercent =\n' +
+                '            std::max(0.0, std::min(100.0, *volume));'
+        );
+        expect(refreshBody).not.toContain('clampVolumePercent(*volume)');
+    });
+
+    it('only marks open file descriptors close-on-exec before Linux MPV exec', () => {
+        const closeDescriptorsBody = sourceFunctionBody(
+            widCommonSource,
+            'void closeInheritedFileDescriptors(',
+            'closeInheritedFileDescriptors'
+        );
+        expect(closeDescriptorsBody).toContain('opendir("/proc/self/fd")');
+        expect(closeDescriptorsBody).toContain('readdir(directory)');
+        expect(closeDescriptorsBody).toContain('fcntl(descriptor, F_GETFD)');
+        expect(closeDescriptorsBody).toContain(
+            'fcntl(descriptor, F_SETFD, flags | FD_CLOEXEC)'
+        );
+        expect(widCommonSource).not.toContain('sysconf(_SC_OPEN_MAX)');
+        expect(widCommonSource).not.toContain(
+            'fileDescriptor < fileDescriptorLimit'
+        );
+
+        const spawnBody = sourceFunctionBody(
+            widCommonSource,
+            'pid_t spawnLinuxMpvProcess(',
+            'spawnLinuxMpvProcess'
+        );
+        expect(spawnBody).toContain('closeInheritedFileDescriptors();');
+        expect(spawnBody).not.toContain('inheritedFileDescriptorLimit()');
+    });
+
+    it('formats MPV floating-point values independently from the user locale', () => {
+        const formatterBody = sourceFunctionBody(
+            widCommonSource,
+            'std::string formatInvariantDouble(',
+            'formatInvariantDouble'
+        );
+        expect(formatterBody).toContain('std::to_chars(');
+        expect(formatterBody).toContain('std::chars_format::general');
+        expect(formatterBody).not.toContain('std::locale::classic()');
+        expect(formatterBody).not.toContain('std::ostringstream');
+
+        const linuxArgumentsBody = sourceFunctionBody(
+            widCommonSource,
+            'std::vector<std::string> buildLinuxMpvArguments(',
+            'buildLinuxMpvArguments'
+        );
+        expect(linuxArgumentsBody).toContain(
+            '"--volume=" +\n' +
+                '                formatInvariantDouble(session->snapshot.volumePercent)'
+        );
+        expect(linuxArgumentsBody).toContain(
+            'appendLinuxMpvOption(\n' +
+                '            arguments,\n' +
+                '            "start",\n' +
+                '            formatInvariantDouble(startTime)\n' +
+                '        );'
+        );
+
+        const seekBody = sourceFunctionBody(
+            widCommonSource,
+            'Napi::Value Seek(',
+            'Seek'
+        );
+        expect(seekBody).toContain('formatInvariantDouble(');
+        expect(seekBody).not.toContain('std::to_string(info[1]');
+
+        const setVolumeBody = sourceFunctionBody(
+            widCommonSource,
+            'Napi::Value SetVolume(',
+            'SetVolume'
+        );
+        expect(setVolumeBody).toContain('formatInvariantDouble(volume)');
+        expect(setVolumeBody).not.toContain('std::to_string(volume)');
+    });
+
+    it('keeps Linux MPV snapshot IPC off the NAPI snapshot read path', () => {
+        const getSnapshotBody = sourceFunctionBody(
+            widCommonSource,
+            'Napi::Value GetSessionSnapshot(',
+            'GetSessionSnapshot'
+        );
+        expect(getSnapshotBody).not.toContain('refreshLinuxMpvSnapshot');
+        expect(widCommonSource).toContain('void runLinuxProcessPollLoop');
+        expect(widCommonSource).toContain('refreshLinuxMpvSnapshot(session);');
+        expect(widCommonSource).toContain('startLinuxProcessPolling(session)');
+        expect(widCommonSource).toContain(
+            'session->eventThread = std::thread(runLinuxProcessPollLoop, session);'
+        );
+    });
+
+    it('terminates Linux MPV processes away from the NAPI teardown path', () => {
+        const destroyBody = sourceFunctionBody(
+            widCommonSource,
+            'void destroySession(',
+            'destroySession'
+        );
+        expect(destroyBody).toContain(
+            'terminateLinuxMpvProcessAsync(session);'
+        );
+        expect(destroyBody).toContain('session->eventThread.detach();');
+        expect(destroyBody).not.toContain('std::this_thread::sleep_for');
+        expect(destroyBody).not.toContain('SIGKILL');
+
+        const asyncTerminationBody = sourceFunctionBody(
+            widCommonSource,
+            'void terminateLinuxMpvProcessAsync(',
+            'terminateLinuxMpvProcessAsync'
+        );
+        expect(asyncTerminationBody).toContain(
+            'kill(process.processId, SIGTERM);'
+        );
+        expect(asyncTerminationBody).toContain('std::thread(');
+        expect(asyncTerminationBody).toContain('waitForLinuxMpvProcessExit');
+    });
+
+    it('uses generation-unique Linux MPV IPC socket paths', () => {
+        expect(widCommonSource).toContain('gNextLinuxIpcSocketId');
+        expect(widCommonSource).toContain(
+            'std::to_string(gNextLinuxIpcSocketId.fetch_add(1))'
+        );
+    });
+
+    it('keeps dynamic libmpv symbol declarations compatible with distro headers', () => {
+        expect(widCommonSource).not.toContain('MPV_CPLUGIN_DYNAMIC_SYM');
+        expect(widCommonSource).toContain('#ifdef IPTVNATOR_DYNAMIC_LIBMPV');
+        expect(widCommonSource).toContain('#ifdef MPV_SELECTANY');
+        expect(widCommonSource).toContain(
+            '#define IPTVNATOR_MPV_SELECTANY MPV_SELECTANY'
+        );
+        expect(widCommonSource).toContain(
+            'IPTVNATOR_MPV_SELECTANY decltype(&name) pfn_##name = nullptr;'
+        );
+        expect(widCommonSource).toContain(
+            'IPTVNATOR_DECLARE_MPV_DYNAMIC_SYMBOL(mpv_command_async)'
+        );
+        expect(widCommonSource).toContain(
+            '#define mpv_command_async pfn_mpv_command_async'
+        );
+        expect(widCommonSource).not.toContain('mpvLibraryCandidates');
+        expect(widCommonSource).not.toContain('ensureMpvApiLoaded');
+        expect(widCommonSource).not.toContain('"libmpv.so"');
+        expect(buildScriptSource).toContain('cleanNativeBuildIntermediates();');
+    });
+
+    it('validates and copies only the staged Linux shared-library closure', () => {
+        expect(buildScriptSource).toContain(
+            "require('../../tools/embedded-mpv/linux-runtime-manifest.cjs')"
+        );
+        expect(buildScriptSource).toContain(
+            'validateLinuxRuntimeManifest(sourceRuntimeManifest)'
+        );
+        expect(buildScriptSource).toContain(
+            'validateLinuxSystemBuildInputManifest(sourceRuntimeManifest)'
+        );
+        expect(buildScriptSource).toContain(
+            'copyLinuxRuntimeClosureToNativeBuild(runtime)'
+        );
+        expect(buildScriptSource).toContain(
+            'runtime.sourceRuntimeManifest.runtimeFiles'
+        );
+        expect(buildScriptSource).toContain(
+            'SHA-256 mismatch for staged Linux runtime file'
+        );
+        expect(buildScriptSource).toContain(
+            'resolveLinuxFrameCopyLinkageInputs({'
+        );
+        expect(buildScriptSource).toContain(
+            'LINUX_VERIFIED_RUNTIME_LIBRARY_DIR:\n' +
+                '                          linuxLinkageInputs.linkerLibraryDir'
+        );
+        expect(buildScriptSource).toContain(
+            'expectedLibmpvSoname: linuxLinkageInputs.expectedLibmpvSoname'
+        );
+        expect(buildScriptSource).not.toContain(
+            'process.env.LINUX_NATIVE_LIBRARY_DIR || runtime.libDir'
+        );
+        expect(buildScriptSource).not.toContain(
+            'LINUX_NATIVE_LIBRARY_DIR: runtime.libDir'
+        );
+    });
+
+    it('writes a profile-neutral Linux frame-copy build manifest', () => {
+        expect(buildScriptSource).toContain(
+            "const LINUX_PACKAGE_RUNTIME_MODES = Object.freeze(['system', 'bundled']);"
+        );
+        expect(buildScriptSource).toContain("origin: 'linux-frame-copy-build'");
+        expect(buildScriptSource).toContain(
+            'allowedPackageRuntimeModes: [...LINUX_PACKAGE_RUNTIME_MODES]'
+        );
+        expect(buildScriptSource).toContain(
+            'buildInputMode: runtime.buildInputMode'
+        );
+        expect(buildScriptSource).toContain(
+            'sourceRuntime: runtime.sourceRuntimeManifest'
+        );
+        expect(buildScriptSource).toContain('runtimeFiles: copiedRuntimeFiles');
+        expect(buildScriptSource).not.toContain(
+            'writeLinuxProcessRuntimeManifest'
+        );
+    });
+
+    it('requires a validated bundled source runtime for required Linux builds', () => {
+        expect(buildScriptSource).toContain(
+            "sourceRuntimeValidated: buildInputMode === 'bundled-runtime'"
+        );
+        expect(buildScriptSource).toContain(
+            'assertRequiredLinuxFrameCopyRuntime(runtime);'
+        );
+        expect(buildScriptSource).toContain(
+            "runtime.buildInputMode !== 'bundled-runtime' ||"
+        );
+        expect(buildScriptSource).toContain(
+            'runtime.sourceRuntimeValidated !== true'
+        );
+        expect(buildScriptSource).toContain("runtimeFile.name === 'libmpv.so'");
+        expect(buildScriptSource).toContain(
+            'Required Linux builds must use the validated bundled source runtime containing staged libmpv.'
+        );
+    });
+
+    it('derives packaged Linux libmpv identity from validated closure SONAME metadata', () => {
+        expect(buildScriptSource).toContain('resolveVerifiedLinuxLibMpvSoname');
+        expect(buildScriptSource).toContain(
+            'runtime.sourceRuntimeManifest.runtimeDependencyClosure'
+        );
+        expect(buildScriptSource).toContain('libmpvSoname,');
+        expect(buildScriptSource).not.toContain(
+            'VERSIONED_LINUX_LIBMPV_PATTERN'
+        );
+        expect(buildScriptSource).not.toContain("libmpvSoname: 'libmpv.so.2'");
+    });
+
+    it('marks both package modes available only for a validated bundled build', () => {
+        expect(buildScriptSource).toContain(
+            'runtime.sourceRuntimeValidated === true &&\n' +
+                "        runtime.buildInputMode === 'bundled-runtime' &&\n" +
+                '        copiedRuntimeFiles.length > 0 &&\n' +
+                '        libmpvSoname !== null'
+        );
+        expect(buildScriptSource).toContain('system: packageRuntimeAvailable');
+        expect(buildScriptSource).toContain('bundled: packageRuntimeAvailable');
+    });
+
+    it('validates Linux post-link isolation before marking the build available', () => {
+        const postLinkValidation = buildScriptSource.indexOf(
+            'validateLinuxFrameCopyLinkage({'
+        );
+        const availabilityMarkerRemoval = buildScriptSource.lastIndexOf(
+            'fs.rmSync(unavailableMarkerFile'
+        );
+
+        expect(buildScriptSource).toContain(
+            "spawnSync('readelf', ['-d', filePath]"
+        );
+        expect(postLinkValidation).toBeGreaterThanOrEqual(0);
+        expect(availabilityMarkerRemoval).toBeGreaterThan(postLinkValidation);
+        expect(buildScriptSource).toContain(
+            'runWithCleanup(buildNativeArtifacts, cleanOutput)'
+        );
+    });
+
+    it('uses platform-specific embedded MPV runtime cache key inputs in CI', () => {
+        expect(buildAndMakeWorkflowSource).toContain(
+            "const targetPlatform = '${{ matrix.embedded_mpv_platform }}';"
+        );
+        expect(buildAndMakeWorkflowSource).toContain(
+            "if (targetPlatform === 'darwin')"
+        );
+        expect(buildAndMakeWorkflowSource).toContain(
+            "'tools/embedded-mpv/build-macos-runtime.mjs'"
+        );
+        expect(buildAndMakeWorkflowSource).toContain(
+            "'tools/embedded-mpv/stage-runtime.mjs'"
+        );
+        expect(buildAndMakeWorkflowSource).not.toContain(
+            '`macos${safeDeploymentTarget}`,\n' +
+                '                    `xcode${xcodeHash}`,'
+        );
+    });
+
+    it('requires the pinned Linux source runtime artifact and validates process isolation in CI', () => {
+        expect(buildAndMakeWorkflowSource).toContain(
+            'Build and stage pinned LGPL Linux runtime'
+        );
+        expect(buildAndMakeWorkflowSource).toContain(
+            'node tools/embedded-mpv/build-linux-runtime.mjs "${RUNTIME_PREFIX}"'
+        );
+        expect(buildAndMakeWorkflowSource).toContain(
+            'node tools/embedded-mpv/stage-runtime.mjs linux x64 "${RUNTIME_PREFIX}"'
+        );
+        expect(buildAndMakeWorkflowSource).toContain(
+            'name: linux-embedded-mpv-runtime'
+        );
+        expect(buildAndMakeWorkflowSource).toContain(
+            'path: vendor/embedded-mpv/linux-x64'
+        );
+        expect(buildAndMakeWorkflowSource).toContain(
+            'Download pinned Linux Embedded MPV runtime'
+        );
+        expect(buildAndMakeWorkflowSource).not.toContain('libopengl-dev');
+        expect(buildAndMakeWorkflowSource).not.toContain(
+            'Stage Linux embedded MPV build inputs'
+        );
+        expect(buildAndMakeWorkflowSource).toContain("matrix.os == 'linux'");
+        expect(buildAndMakeWorkflowSource).toContain(
+            "manifest.origin !== 'linux-frame-copy-build' || manifest.sourceRuntimeValidated !== true"
+        );
+        expect(buildAndMakeWorkflowSource).toContain(
+            'Linux embedded MPV addon must not link directly to libmpv'
+        );
+        expect(buildAndMakeWorkflowSource).toContain(
+            'test -f dist/apps/electron-backend/native/iptvnator_mpv_helper'
+        );
+        expect(buildAndMakeWorkflowSource).toContain(
+            'Linux frame-copy helper must need libmpv.so.2'
+        );
+    });
+
+    it('keeps optional Linux system development separate from required staged inputs', () => {
+        expect(buildScriptSource).toContain(
+            "const systemIncludeDir =\n            process.env.LIBMPV_INCLUDE_DIR || '/usr/include';"
+        );
+        expect(buildScriptSource).toContain(
+            'process.env.LINUX_NATIVE_LIBRARY_DIR ||\n                    defaultLinuxSystemLibDir()'
+        );
+        expect(buildScriptSource).toContain("arm: 'arm-linux-gnueabihf'");
+        expect(buildScriptSource).toContain("arm64: 'aarch64-linux-gnu'");
+        expect(buildScriptSource).toContain("x64: 'x86_64-linux-gnu'");
+        expect(buildScriptSource).toContain(
+            "if (!embeddedMpvRequired && runtime.origin === 'system-dev')"
+        );
+        expect(buildScriptSource).toContain(
+            'Required Linux builds must use the validated bundled source runtime containing staged libmpv.'
+        );
+        expect(buildScriptSource).toContain(
+            'removeStaleFrameCopyArtifacts(outputDir);'
+        );
+    });
+
+    it('forces the current frame into a rebuilt shm generation after a paused resize', () => {
+        const runLoop = sourceFunctionBody(
+            frameHelperRenderSource,
+            'inline void RenderPipeline::runLoop()',
+            'RenderPipeline::runLoop'
+        );
+
+        expect(runLoop).toContain('bool targetsRebuilt = false;');
+        expect(runLoop).toContain('targetsRebuilt = true;');
+        expect(runLoop).toContain(
+            'if (targetsRebuilt || (flags & MPV_RENDER_UPDATE_FRAME))'
+        );
+    });
+
+    it('keeps Electron Builder defaults and exact Snap runtime plugs', () => {
+        expect(electronBuilderConfig.snap?.plugs).toEqual([
+            'default',
+            {
+                'graphics-core22': {
+                    interface: 'content',
+                    target: '$SNAP/graphics',
+                    'default-provider': 'mesa-core22',
+                },
+            },
+            {
+                'shared-memory': {
+                    interface: 'shared-memory',
+                    private: true,
+                },
+            },
+        ]);
+    });
+
+    it('runs the helper runtime probe through shared memory without media or command loops', () => {
+        const runtimeProbe = sourceFunctionBody(
+            frameHelperSource,
+            'int runRuntimeProbe(',
+            'runRuntimeProbe'
+        );
+        const runtimeProbeShmName = sourceFunctionBody(
+            frameHelperSource,
+            'std::string runtimeProbeShmName(',
+            'runtimeProbeShmName'
+        );
+        const main = sourceFunctionBody(frameHelperSource, 'int main(', 'main');
+        const runtimeProbeFailure = sourceFunctionBody(
+            frameHelperSource,
+            'int runtimeProbeFailure(',
+            'runtimeProbeFailure'
+        );
+
+        expect(main).toContain('if (args.runtimeProbe) {');
+        expect(main).toContain('return runRuntimeProbe();');
+        expect(runtimeProbe).toContain('mpv_create()');
+        expect(runtimeProbe).toContain('"idle", "yes"');
+        expect(runtimeProbe).toContain('"vo", "libmpv"');
+        expect(runtimeProbe).toContain('mpv_initialize(mpv)');
+        expect(runtimeProbe).toContain('GlContext gl;');
+        expect(runtimeProbe).toContain('gl.create(error)');
+        expect(runtimeProbe).toContain('gl.makeCurrent(error)');
+        expect(runtimeProbe).toContain('mpv_render_context_create(');
+        expect(runtimeProbe).toContain('mpv_render_context_free(');
+        expect(runtimeProbe).toContain('gl.destroy()');
+        expect(runtimeProbe).toContain('mpv_terminate_destroy(mpv)');
+        expect(runtimeProbe).toContain(
+            'frame_helper::ShmRing runtimeProbeRing;'
+        );
+        expect(runtimeProbe).toContain(
+            'const std::string shmName = runtimeProbeShmName();'
+        );
+        expect(runtimeProbe).toContain(
+            'runtimeProbeRing.create(shmName, 16, 16, 1)'
+        );
+        expect(runtimeProbe).toContain(
+            'runtimeProbeRing.header->magic == FRAME_SHM_MAGIC'
+        );
+        expect(runtimeProbe).toContain('runtimeProbeRing.destroy();');
+        expect(runtimeProbe).toContain('"shared-memory-create-failed"');
+        expect(runtimeProbe).toContain('"shared-memory-initialize-failed"');
+        expect(runtimeProbeShmName).toContain('"/impv-fc-runtime-probe-"');
+        expect(runtimeProbeShmName).toContain('getpid()');
+        expect(runtimeProbeShmName).toContain('GetCurrentProcessId()');
+        expect(runtimeProbeShmName).toContain('std::to_string(processId)');
+        expect(runtimeProbe).toContain('.num("protocol", 1)');
+        expect(runtimeProbe).toContain('.boolean("usable", true)');
+        expect(runtimeProbe).toContain('.str("libmpv",');
+        expect(runtimeProbe).toContain('.str("renderApi", gl.renderApiName())');
+        expect(runtimeProbe).not.toContain('pipeline');
+        expect(runtimeProbe).not.toContain('runStdinLoop');
+        expect(runtimeProbe).not.toContain('runMpvEventLoop');
+        expect(runtimeProbe).not.toContain('loadfile');
+        expect(runtimeProbe.match(/emitLine\(/g)).toHaveLength(1);
+        expect(runtimeProbeFailure).toContain('.num("protocol", 1)');
+        expect(runtimeProbeFailure).toContain('.boolean("usable", false)');
+        expect(runtimeProbeFailure).toContain('.str("reason", reason)');
+        expect(runtimeProbeFailure.match(/emitLine\(/g)).toHaveLength(1);
+        expect(runtimeProbeFailure).toContain('return 1;');
+    });
+
+    it('identifies the Linux helper runtime probe render API as EGL', () => {
+        const renderApiName = sourceFunctionBody(
+            linuxFrameHelperGlSource,
+            'const char* renderApiName() const',
+            'GlContext::renderApiName'
+        );
+
+        expect(renderApiName).toContain('return "egl";');
+    });
+
+    it('validates complete EGL candidates and keeps software rendering as the final fallback', () => {
+        const tryCandidate = sourceFunctionBody(
+            linuxFrameHelperGlSource,
+            'bool tryCandidate(',
+            'GlContext::tryCandidate'
+        );
+        const create = sourceFunctionBody(
+            linuxFrameHelperGlSource,
+            'bool create(std::string& errorOut)',
+            'GlContext::create'
+        );
+
+        for (const requiredStep of [
+            'eglInitialize(',
+            'eglBindAPI(EGL_OPENGL_API)',
+            'chooseConfig(',
+            'eglCreateContext(',
+            'eglMakeCurrent(',
+            'glGetString(GL_RENDERER)',
+        ]) {
+            expect(tryCandidate).toContain(requiredStep);
+        }
+        expect(create).toContain('softwareFallback');
+        expect(create).toContain('candidate.softwareRenderer');
+        expect(create.indexOf('DisplayTier::SurfacelessMesa')).toBeLessThan(
+            create.indexOf('DisplayTier::Default')
+        );
+        expect(create.indexOf('DisplayTier::Default')).toBeLessThan(
+            create.indexOf('DisplayTier::Gbm')
+        );
+    });
+
+    it('binds the desktop GL API on the render thread and releases it before EGL teardown', () => {
+        const makeCurrent = sourceFunctionBody(
+            linuxFrameHelperGlSource,
+            'bool makeCurrent(std::string& errorOut)',
+            'GlContext::makeCurrent'
+        );
+        const destroy = sourceFunctionBody(
+            linuxFrameHelperGlSource,
+            'void destroy()',
+            'GlContext::destroy'
+        );
+
+        expect(makeCurrent).toContain('eglBindAPI(EGL_OPENGL_API)');
+        expect(makeCurrent).toContain('eglMakeCurrent(');
+        expect(makeCurrent).toContain('return false;');
+
+        const bindIndex = destroy.indexOf('eglBindAPI(EGL_OPENGL_API)');
+        const unbindIndex = destroy.indexOf('eglMakeCurrent(');
+        const releaseIndex = destroy.indexOf('eglReleaseThread()');
+        const destroySurfaceIndex = destroy.indexOf('eglDestroySurface(');
+        expect(bindIndex).toBeGreaterThanOrEqual(0);
+        expect(unbindIndex).toBeGreaterThan(bindIndex);
+        expect(releaseIndex).toBeGreaterThan(unbindIndex);
+        expect(destroySurfaceIndex).toBeGreaterThan(releaseIndex);
+
+        const setupGl = sourceFunctionBody(
+            frameHelperRenderSource,
+            'inline bool RenderPipeline::setupGl(std::string& errorOut)',
+            'RenderPipeline::setupGl'
+        );
+        expect(setupGl).toContain(
+            'if (!gl_.makeCurrent(errorOut)) return false;'
+        );
+    });
+
+    it('checks WGL context handoff and never deletes a context after failed unbind', () => {
+        const create = sourceFunctionBody(
+            windowsFrameHelperGlSource,
+            'bool create(std::string& errorOut)',
+            'WGL GlContext::create'
+        );
+        const makeCurrent = sourceFunctionBody(
+            windowsFrameHelperGlSource,
+            'bool makeCurrent(std::string& errorOut)',
+            'WGL GlContext::makeCurrent'
+        );
+        const destroy = sourceFunctionBody(
+            windowsFrameHelperGlSource,
+            'void destroy()',
+            'WGL GlContext::destroy'
+        );
+
+        expect(create).toContain('wglMakeCurrent(dc_, core) != TRUE');
+        expect(create).toContain('wglMakeCurrent(nullptr, nullptr) != TRUE');
+        expect(create).toContain('wglLoaderGetProcAddress(opengl32_,');
+        expect(create).toContain('"wglCreateContextAttribsARB")');
+        expect(create).not.toContain(
+            'wglGetProcAddress("wglCreateContextAttribsARB")'
+        );
+        expect(makeCurrent).toContain('wglMakeCurrent(dc_, context_) != TRUE');
+        expect(makeCurrent).toContain('return false;');
+
+        const unbindIndex = destroy.indexOf(
+            'wglMakeCurrent(nullptr, nullptr) != TRUE'
+        );
+        const deleteIndex = destroy.indexOf(
+            'wglDeleteContext(context_) != TRUE'
+        );
+        expect(unbindIndex).toBeGreaterThanOrEqual(0);
+        expect(deleteIndex).toBeGreaterThan(unbindIndex);
+        expect(destroy.slice(0, deleteIndex)).toContain('return;');
+    });
+
+    it('initializes the Windows QPC frequency without a cross-thread data race', () => {
+        const nowNs = sourceFunctionBody(
+            frameShmSource,
+            'static inline uint64_t frame_shm_now_ns(void)',
+            'frame_shm_now_ns'
+        );
+
+        expect(nowNs).toContain(
+            'static const uint64_t frequency = []() -> uint64_t'
+        );
+        expect(nowNs).not.toContain('static uint64_t frequency;');
+    });
+
+    it('resolves linked core GL symbols before falling back to EGL extension lookup', () => {
+        const dlsymIndex = linuxFrameHelperGlSource.indexOf(
+            'dlsym(RTLD_DEFAULT, name)'
+        );
+        const eglIndex = linuxFrameHelperGlSource.indexOf(
+            'eglGetProcAddress(name)'
+        );
+
+        expect(dlsymIndex).toBeGreaterThanOrEqual(0);
+        expect(eglIndex).toBeGreaterThan(dlsymIndex);
+    });
+});
+
+describe('Embedded MPV native build configuration', () => {
+    const bindingGyp = JSON.parse(
+        readFileSync(
+            path.resolve(__dirname, '../../../native/binding.gyp'),
+            'utf8'
+        )
+    );
+    const target = bindingGyp.targets.find(
+        (candidate: { target_name?: string }) =>
+            candidate.target_name === 'embedded_mpv'
+    );
+    const helperTarget = bindingGyp.targets.find(
+        (candidate: { target_name?: string }) =>
+            candidate.target_name === 'iptvnator_mpv_helper'
+    );
+
+    it('declares platform-specific native sources for macOS, Windows, and Linux', () => {
+        expect(target).toBeDefined();
+        expect(JSON.stringify(target)).toContain('src/embedded_mpv.mm');
+        expect(JSON.stringify(target)).toContain('src/embedded_mpv_win32.cc');
+        expect(JSON.stringify(target)).toContain('src/embedded_mpv_linux.cc');
+    });
+
+    it('links libmpv and headless GL only into the Linux helper process', () => {
+        const linuxAddonConfig = target.conditions.find(
+            ([condition]: [string]) => condition === 'OS=="linux"'
+        )?.[1];
+        const linuxHelperConfig = helperTarget.conditions.find(
+            ([condition]: [string]) => condition === 'OS=="linux"'
+        )?.[1];
+
+        expect(linuxAddonConfig?.libraries).not.toContain('-lmpv');
+        expect(JSON.stringify(linuxAddonConfig)).not.toContain('-lmpv');
+        expect(linuxHelperConfig?.libraries).toEqual(
+            expect.arrayContaining(['-lEGL', '-lGL', '-lgbm', '-ldl'])
+        );
+        expect(linuxHelperConfig?.libraries).not.toContain('-lOpenGL');
+        expect(linuxHelperConfig?.libraries).not.toContain('-lmpv');
+        expect(
+            linuxHelperConfig?.libraries.find((library: string) =>
+                library.includes("path.join(dir, 'libmpv.so')")
+            )
+        ).toContain('LINUX_VERIFIED_RUNTIME_LIBRARY_DIR');
+        expect(JSON.stringify(linuxHelperConfig)).not.toContain(
+            "LINUX_VERIFIED_RUNTIME_LIBRARY_DIR || '/usr/lib'"
+        );
+        expect(JSON.stringify(linuxHelperConfig)).toContain(
+            'Missing LINUX_VERIFIED_RUNTIME_LIBRARY_DIR'
+        );
+
+        const runtimeLinkerFlags = linuxHelperConfig?.ldflags.filter(
+            (flag: string) => flag.startsWith('-Wl,')
+        );
+        expect(runtimeLinkerFlags).toEqual([
+            '-Wl,--enable-new-dtags',
+            "-Wl,-rpath,'$$ORIGIN/lib'",
+        ]);
+        expect(JSON.stringify(runtimeLinkerFlags)).not.toContain(
+            'LINUX_NATIVE_LIBRARY_DIR'
+        );
+    });
+});

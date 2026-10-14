@@ -1,0 +1,1277 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import { createRequire } from 'node:module';
+import os from 'node:os';
+import { dirname, join } from 'node:path';
+import test from 'node:test';
+import { fileURLToPath } from 'node:url';
+import { readWindowsRuntimePin } from '../embedded-mpv/windows-runtime-pin.mjs';
+
+const currentDir = dirname(fileURLToPath(import.meta.url));
+const require = createRequire(import.meta.url);
+const packageMetadata = JSON.parse(
+    fs.readFileSync(join(currentDir, '..', '..', 'package.json'), 'utf8')
+);
+const buildAndMakeWorkflow = fs.readFileSync(
+    join(currentDir, '..', '..', '.github', 'workflows', 'build-and-make.yaml'),
+    'utf8'
+);
+const windowsRuntimeRefreshWorkflow = fs.readFileSync(
+    join(
+        currentDir,
+        '..',
+        '..',
+        '.github',
+        'workflows',
+        'refresh-windows-embedded-mpv-runtime.yaml'
+    ),
+    'utf8'
+);
+const windowsRuntimePin = readWindowsRuntimePin();
+const electronBuilderConfig = JSON.parse(
+    fs.readFileSync(
+        join(currentDir, '..', '..', 'electron-builder.json'),
+        'utf8'
+    )
+);
+const zenPlayWindowsIconPath = join(
+    currentDir,
+    '..',
+    '..',
+    'apps',
+    'web',
+    'src',
+    'assets',
+    'branding',
+    'zenplay.ico'
+);
+const electronProjectConfig = JSON.parse(
+    fs.readFileSync(
+        join(
+            currentDir,
+            '..',
+            '..',
+            'apps',
+            'electron-backend',
+            'project.json'
+        ),
+        'utf8'
+    )
+);
+const makerOptions = JSON.parse(
+    fs.readFileSync(
+        join(
+            currentDir,
+            '..',
+            '..',
+            'apps',
+            'electron-backend',
+            'src',
+            'app',
+            'options',
+            'maker.options.json'
+        ),
+        'utf8'
+    )
+);
+const generatedMetadataConfigPath =
+    'apps/electron-backend/src/app/options/electron-builder.metadata.generated.json';
+const packageLayoutVerifier = fs.readFileSync(
+    join(currentDir, 'verify-electron-package-layout.mjs'),
+    'utf8'
+);
+const flatpakLauncherValidationSource = fs.readFileSync(
+    join(currentDir, 'flatpak-launcher-validation.cjs'),
+    'utf8'
+);
+const electronAfterPackSource = fs.readFileSync(
+    join(currentDir, 'electron-after-pack.cjs'),
+    'utf8'
+);
+const frameCopyFilesModulePath = join(
+    currentDir,
+    'embedded-mpv-frame-copy-files.cjs'
+);
+const embeddedMpvPackagingSource = fs.readFileSync(
+    join(currentDir, 'embedded-mpv-packaging.cjs'),
+    'utf8'
+);
+const embeddedMpvBuildSource = fs.readFileSync(
+    join(
+        currentDir,
+        '..',
+        '..',
+        'apps',
+        'electron-backend',
+        'build-embedded-mpv.js'
+    ),
+    'utf8'
+);
+const embeddedMpvStageRuntimeSource = fs.readFileSync(
+    join(currentDir, '..', 'embedded-mpv', 'stage-runtime.mjs'),
+    'utf8'
+);
+const embeddedMpvWindowsArchiveStageSource = fs.readFileSync(
+    join(currentDir, '..', 'embedded-mpv', 'stage-windows-runtime-archive.mjs'),
+    'utf8'
+);
+const embeddedMpvWin32Source = fs.readFileSync(
+    join(
+        currentDir,
+        '..',
+        '..',
+        'apps',
+        'electron-backend',
+        'native',
+        'src',
+        'embedded_mpv_win32.cc'
+    ),
+    'utf8'
+);
+const { validatePackagedEmbeddedMpv } = require('./embedded-mpv-packaging.cjs');
+
+function writeWindowsHelperFixture(helperPath, importedDllName) {
+    const peOffset = 0x80;
+    const optionalHeaderOffset = peOffset + 24;
+    const optionalHeaderSize = 0xf0;
+    const sectionTableOffset = optionalHeaderOffset + optionalHeaderSize;
+    const importRva = 0x1000;
+    const importRawOffset = 0x200;
+    const importNameOffset = 0x30;
+    const image = Buffer.alloc(0x400);
+
+    image.write('MZ', 0, 'ascii');
+    image.writeUInt32LE(peOffset, 0x3c);
+    image.write('PE\0\0', peOffset, 'ascii');
+    image.writeUInt16LE(0x8664, peOffset + 4);
+    image.writeUInt16LE(1, peOffset + 6);
+    image.writeUInt16LE(optionalHeaderSize, peOffset + 20);
+    image.writeUInt16LE(0x20b, optionalHeaderOffset);
+    image.writeUInt32LE(0x200, optionalHeaderOffset + 60);
+    image.writeUInt32LE(16, optionalHeaderOffset + 108);
+    image.writeUInt32LE(importRva, optionalHeaderOffset + 120);
+    image.writeUInt32LE(40, optionalHeaderOffset + 124);
+    image.write('.idata\0\0', sectionTableOffset, 'ascii');
+    image.writeUInt32LE(0x200, sectionTableOffset + 8);
+    image.writeUInt32LE(importRva, sectionTableOffset + 12);
+    image.writeUInt32LE(0x200, sectionTableOffset + 16);
+    image.writeUInt32LE(importRawOffset, sectionTableOffset + 20);
+    image.writeUInt32LE(importRva + importNameOffset, importRawOffset + 12);
+    image.write(`${importedDllName}\0`, importRawOffset + importNameOffset);
+    fs.writeFileSync(helperPath, image);
+}
+
+test('public package identity is ZenPlay while internal names stay compatible', () => {
+    assert.equal(electronBuilderConfig.appId, 'com.zenplay.app');
+    assert.equal(electronBuilderConfig.productName, 'ZenPlay');
+    assert.equal(
+        electronBuilderConfig.artifactName,
+        'ZenPlay-${version}-${os}-${arch}.${ext}'
+    );
+    assert.equal(electronBuilderConfig.extraMetadata?.name, 'iptvnator');
+    assert.equal(electronBuilderConfig.extraMetadata?.productName, 'ZenPlay');
+    assert.equal(electronBuilderConfig.linux?.executableName, 'iptvnator');
+    assert.equal(electronBuilderConfig.extraMetadata?.desktopName, 'iptvnator');
+    assert.equal(
+        electronBuilderConfig.win?.artifactName,
+        'ZenPlay-${version}-windows-${arch}-setup.${ext}'
+    );
+    assert.equal(
+        electronBuilderConfig.nsis?.artifactName,
+        'ZenPlay-${version}-windows-${arch}-setup.${ext}'
+    );
+    assert.deepEqual(electronBuilderConfig.win?.target, [
+        { target: 'nsis', arch: ['x64'] },
+    ]);
+    assert.equal(
+        electronBuilderConfig.mac?.icon,
+        'apps/web/src/assets/branding/zenplay-logo.png'
+    );
+    assert.equal(electronBuilderConfig.mac?.minimumSystemVersion, '12.0');
+    const macIcon = fs.readFileSync(
+        join(currentDir, '..', '..', electronBuilderConfig.mac.icon)
+    );
+    assert.equal(macIcon.subarray(1, 4).toString('ascii'), 'PNG');
+    assert.equal(macIcon.readUInt32BE(16), 1254);
+    assert.equal(macIcon.readUInt32BE(20), 1254);
+    assert.equal(
+        electronBuilderConfig.win?.icon,
+        'apps/web/src/assets/branding/zenplay.ico'
+    );
+    const windowsIcon = fs.readFileSync(zenPlayWindowsIconPath);
+    assert.equal(windowsIcon.readUInt16LE(0), 0);
+    assert.equal(windowsIcon.readUInt16LE(2), 1);
+    assert.equal(windowsIcon.readUInt16LE(4), 7);
+    assert.ok(
+        electronBuilderConfig.linux?.executableArgs?.includes(
+            '--ozone-platform=x11'
+        )
+    );
+});
+
+test('Windows packages the pinned HTTPS trust bundle and verifies its layout', () => {
+    assert.deepEqual(electronBuilderConfig.win?.extraResources, [
+        {
+            from: 'vendor/certs',
+            to: 'certs',
+            filter: [
+                'cacert.pem',
+                'LICENSE-MPL-2.0.txt',
+                'NOTICE.md',
+                'source.json',
+            ],
+        },
+    ]);
+    assert.match(
+        packageLayoutVerifier,
+        /platform === 'windows'[\s\S]*?validateWindowsCertificateBundle\(\s*resourceDir,\s*windowsCertificateSourceDir/
+    );
+});
+
+test('AppImage desktop metadata keeps version and package isolation', async () => {
+    // Exercise the installed builder: target-specific desktop fields must merge
+    // with Linux defaults, and the builder must keep generating the version.
+    const builderRequire = createRequire(require.resolve('electron-builder'));
+    const { default: AppImageTarget } = builderRequire(
+        'app-builder-lib/out/targets/appimage/AppImageTarget'
+    );
+    const { LinuxTargetHelper } = builderRequire(
+        'app-builder-lib/out/targets/LinuxTargetHelper'
+    );
+    for (const version of [
+        packageMetadata.version,
+        '0.24.1',
+        '0.25.0-beta.1',
+    ]) {
+        const config = structuredClone(electronBuilderConfig);
+        const packager = {
+            config,
+            platformSpecificBuildOptions: config.linux,
+            executableName: config.linux.executableName,
+            fileAssociations: config.fileAssociations,
+            info: { metadata: { ...packageMetadata, ...config.extraMetadata } },
+            appInfo: {
+                productName: config.productName,
+                description: packageMetadata.description,
+                buildVersion: version,
+            },
+        };
+        const helper = new LinuxTargetHelper(packager);
+        const target = new AppImageTarget(
+            'AppImage',
+            packager,
+            helper,
+            os.tmpdir()
+        );
+        const desktop = await target.desktopEntry.value;
+        const fields = Object.fromEntries(
+            desktop
+                .split('\n')
+                .filter((line) => line.includes('='))
+                .map((line) => {
+                    const separator = line.indexOf('=');
+                    return [
+                        line.slice(0, separator),
+                        line.slice(separator + 1),
+                    ];
+                })
+        );
+        assert.equal(fields['X-AppImage-Name'], 'ZenPlay');
+        assert.equal(fields['X-AppImage-Version'], version);
+        assert.equal(fields['X-AppImage-Homepage'], undefined);
+        assert.equal(fields['X-AppImage-UpdateURL'], undefined);
+        assert.equal(fields.StartupWMClass, 'iptvnator');
+        assert.equal(fields.Exec, 'AppRun --ozone-platform=x11 %U');
+        assert.equal(
+            fields.MimeType,
+            'audio/x-mpegurl;application/vnd.apple.mpegurl;'
+        );
+        // A runner-wide architecture override would mislabel the ARM builds.
+        assert.equal(fields['X-AppImage-Arch'], undefined);
+        const otherDesktop = await helper.computeDesktopEntry(
+            config.linux,
+            'iptvnator %U'
+        );
+        assert.doesNotMatch(otherDesktop, /^X-AppImage-/m);
+        assert.match(otherDesktop, /^StartupWMClass=iptvnator$/m);
+        assert.equal(helper.getDesktopFileName(), 'iptvnator');
+    }
+});
+
+test('playlist file associations are registered with the operating system', () => {
+    // Without these the OS never offers ZenPlay as a handler, so every
+    // runtime path for an OS-supplied playlist is unreachable by double-click.
+    assert.deepEqual(electronBuilderConfig.fileAssociations, [
+        {
+            ext: 'm3u',
+            name: 'M3U Playlist',
+            description: 'IPTV playlist',
+            mimeType: 'audio/x-mpegurl',
+            role: 'Viewer',
+        },
+        {
+            ext: 'm3u8',
+            name: 'M3U8 Playlist',
+            description: 'IPTV playlist',
+            mimeType: 'application/vnd.apple.mpegurl',
+            role: 'Viewer',
+        },
+    ]);
+
+    // Electron Builder derives the Linux desktop entry's MimeType from these
+    // `mimeType` fields, and assigns it *after* spreading `linux.desktop.entry`
+    // — so declaring MimeType there instead would be silently overwritten.
+    assert.equal(
+        electronBuilderConfig.linux?.desktop?.entry?.MimeType,
+        undefined
+    );
+
+    // Each association needs its own extension: Electron Builder derives the
+    // per-extension NSIS registry entries and the Linux `<glob>` in
+    // /usr/share/mime from `ext`, one mimeType per association.
+    const extensions = electronBuilderConfig.fileAssociations.map(
+        (association) => association.ext
+    );
+    assert.equal(new Set(extensions).size, extensions.length);
+});
+
+test('ZenPlay release metadata targets only its dedicated GitHub repository', () => {
+    // \r?\n keeps this host-agnostic: Windows checkouts with autocrlf see
+    // CRLF in the workflow file.
+    const releaseFiles = buildAndMakeWorkflow.match(
+        /files: \|\r?\n([\s\S]*?)\r?\n\s+env:/
+    )?.[1];
+
+    assert.ok(releaseFiles, 'release upload files block must exist');
+    assert.ok(
+        packageMetadata.dependencies?.['electron-updater'],
+        'electron-updater must be a runtime dependency because the packaged app imports it'
+    );
+    assert.deepEqual(electronBuilderConfig.publish, [
+        {
+            provider: 'github',
+            owner: 'alpoxggn-lang',
+            repo: 'zenplay-desktop',
+        },
+    ]);
+    assert.match(
+        buildAndMakeWorkflow,
+        /github\.repository == 'alpoxggn-lang\/zenplay-desktop'/
+    );
+    assert.match(
+        buildAndMakeWorkflow,
+        /NIGHTLY_REPOSITORY: alpoxggn-lang\/zenplay-desktop-nightly/
+    );
+    assert.doesNotMatch(
+        buildAndMakeWorkflow,
+        /github\.repository == '4gray\/iptvnator'/
+    );
+    assert.deepEqual(electronBuilderConfig.mac?.target, [
+        {
+            target: 'dmg',
+            arch: ['x64', 'arm64'],
+        },
+        {
+            target: 'zip',
+            arch: ['x64', 'arm64'],
+        },
+    ]);
+    assert.match(buildAndMakeWorkflow, /dist\/executables\/\*\*\/latest\.yml/);
+    assert.match(
+        buildAndMakeWorkflow,
+        /dist\/executables\/\*\*\/latest-mac\.yml/
+    );
+    assert.match(
+        buildAndMakeWorkflow,
+        /dist\/executables\/\*\*\/latest-linux\*\.yml/
+    );
+    assert.match(buildAndMakeWorkflow, /dist\/executables\/\*\*\/\*\.blockmap/);
+    assert.match(buildAndMakeWorkflow, /Merge macOS updater metadata/);
+    assert.match(buildAndMakeWorkflow, /artifacts\/latest-mac\.yml/);
+    assert.doesNotMatch(
+        releaseFiles,
+        /artifacts\/macos-(?:x64|arm64)-artifacts\/latest-mac\.yml/
+    );
+    assert.match(
+        buildAndMakeWorkflow,
+        /artifacts\/linux-portable-artifacts\/latest-linux\*\.yml/
+    );
+    assert.match(
+        buildAndMakeWorkflow,
+        /artifacts\/windows-artifacts\/latest\.yml/
+    );
+
+    const makeCommands = [
+        ...buildAndMakeWorkflow.matchAll(/run: (pnpm run make:app[^\n]*)/g),
+    ].map((match) => match[1].trim());
+    assert.ok(makeCommands.length >= 2, 'workflow must package Electron apps');
+    assert.deepEqual(
+        [...new Set(makeCommands)],
+        ['pnpm run make:app -- --publishPolicy=never']
+    );
+});
+
+test('macOS CI builds native Intel and Apple Silicon artifacts with explicit signing policy', () => {
+    assert.equal(electronBuilderConfig.mac?.forceCodeSigning, true);
+    assert.equal(electronBuilderConfig.mac?.notarize, true);
+    assert.equal(electronBuilderConfig.mac?.hardenedRuntime, true);
+    assert.equal(
+        electronBuilderConfig.mac?.entitlements,
+        'apps/electron-backend/macos/entitlements.mac.plist'
+    );
+    assert.equal(
+        electronBuilderConfig.mac?.entitlementsInherit,
+        'apps/electron-backend/macos/entitlements.mac.inherit.plist'
+    );
+
+    assert.match(buildAndMakeWorkflow, /runner: macos-15-intel\r?\n\s+arch: x64/);
+    assert.match(buildAndMakeWorkflow, /runner: macos-15\r?\n\s+arch: arm64/);
+    assert.match(buildAndMakeWorkflow, /sign_macos:\r?\n[\s\S]*?default: false/);
+    assert.match(
+        buildAndMakeWorkflow,
+        /name: Configure unsigned macOS development artifacts[\s\S]*?config\.mac\.forceCodeSigning = false;[\s\S]*?config\.mac\.notarize = false;[\s\S]*?config\.mac\.identity = null;[\s\S]*?config\.mac\.hardenedRuntime = false;/
+    );
+    assert.match(
+        buildAndMakeWorkflow,
+        /name: Make unsigned Electron app \(macOS development\)[\s\S]*?CSC_IDENTITY_AUTO_DISCOVERY: 'false'[\s\S]*?IPTVNATOR_REQUIRE_EMBEDDED_MPV: '1'/
+    );
+    assert.match(
+        buildAndMakeWorkflow,
+        /name: Validate macOS signing configuration[\s\S]*?inputs\.sign_macos == true[\s\S]*?name: Make Electron app \(macOS\)[\s\S]*?IPTVNATOR_REQUIRE_EMBEDDED_MPV: '1'/
+    );
+    assert.match(
+        buildAndMakeWorkflow,
+        /name: Verify signed macOS app[\s\S]*?codesign --verify --deep --strict[\s\S]*?spctl -a -vvv --type execute[\s\S]*?xcrun stapler validate/
+    );
+});
+
+test('generated Electron package metadata mirrors the root package identity', async () => {
+    const { buildElectronBuilderMetadata, buildElectronPackageMetadata } =
+        await import('./generate-electron-builder-metadata.mjs');
+    const generatedElectronPackage = buildElectronPackageMetadata(
+        packageMetadata,
+        electronBuilderConfig,
+        {
+            name: 'electron-backend',
+            version: '0.0.1',
+            dependencies: {
+                'better-sqlite3': '12.5.0',
+            },
+        }
+    );
+
+    assert.deepEqual(
+        buildElectronBuilderMetadata(packageMetadata, electronBuilderConfig)
+            .extraMetadata,
+        {
+            name: packageMetadata.name,
+            productName: electronBuilderConfig.productName,
+            version: packageMetadata.version,
+            description: packageMetadata.description,
+            author: packageMetadata.author,
+            homepage: packageMetadata.homepage,
+            license: packageMetadata.license,
+            main: electronBuilderConfig.extraMetadata.main,
+        }
+    );
+    assert.deepEqual(generatedElectronPackage, {
+        name: packageMetadata.name,
+        productName: electronBuilderConfig.productName,
+        version: packageMetadata.version,
+        description: packageMetadata.description,
+        author: packageMetadata.author,
+        homepage: packageMetadata.homepage,
+        license: packageMetadata.license,
+        main: electronBuilderConfig.extraMetadata.main,
+        dependencies: {
+            'better-sqlite3': '12.5.0',
+        },
+    });
+});
+
+test('nx-electron packaging prepares metadata before make/package', () => {
+    assert.equal(makerOptions.extends, generatedMetadataConfigPath);
+    assert.deepEqual(
+        electronProjectConfig.targets['generate-builder-metadata'].dependsOn,
+        ['electron-backend:build']
+    );
+    assert.deepEqual(
+        electronProjectConfig.targets['generate-builder-metadata'].outputs,
+        [
+            `{workspaceRoot}/${generatedMetadataConfigPath}`,
+            '{workspaceRoot}/dist/apps/electron-backend/package.json',
+        ]
+    );
+    assert.ok(
+        electronProjectConfig.targets.make.dependsOn.includes(
+            'electron-backend:generate-builder-metadata'
+        )
+    );
+    assert.ok(
+        electronProjectConfig.targets.package.dependsOn.includes(
+            'electron-backend:generate-builder-metadata'
+        )
+    );
+});
+
+test('package layout verifier uses canonical helpers and direct dependencies', () => {
+    assert.ok(packageMetadata.devDependencies?.['@electron/asar']);
+    assert.match(packageLayoutVerifier, /require\(['"]@electron\/asar['"]\)/);
+    assert.doesNotMatch(packageLayoutVerifier, /electronBuilderRequire/);
+    assert.match(
+        packageLayoutVerifier,
+        /buildElectronBuilderMetadata\(\s*packageMetadata,\s*electronBuilderConfig\s*\)\.extraMetadata/s
+    );
+    assert.doesNotMatch(
+        packageLayoutVerifier,
+        /const packagedPackageMetadata = \{\s*name:/s
+    );
+    assert.doesNotMatch(
+        packageLayoutVerifier,
+        /builderEffectiveConfigPath && fileExists\(builderEffectiveConfigPath\)/
+    );
+    assert.match(packageLayoutVerifier, /IPTVNATOR_LINUX_FRAME_COPY_PROFILE/);
+    assert.match(packageLayoutVerifier, /profile:\s*linuxFrameCopyProfile/);
+    assert.match(packageLayoutVerifier, /targetNames:\s*linuxTargetNames/);
+    assert.match(
+        packageLayoutVerifier,
+        /validateLinuxProfileTargets\(\s*linuxFrameCopyProfile,\s*linuxTargetNames\s*\)/s
+    );
+    assert.match(packageLayoutVerifier, /dirArch !== 'x64'/);
+    assert.doesNotMatch(packageLayoutVerifier, /getEmbeddedMpvAddonArch/);
+    assert.match(electronAfterPackSource, /targetArch !== 'x64'/);
+    assert.match(
+        packageLayoutVerifier,
+        /const\s*{\s*resolveLinuxLauncherLayout\s*}\s*=\s*require\(['"]\.\/linux-launcher-layout\.cjs['"]\)/
+    );
+    assert.match(
+        packageLayoutVerifier,
+        /const\s*{\s*validateFlatpakLauncher\s*,?\s*}\s*=\s*require\(['"]\.\/flatpak-launcher-validation\.cjs['"]\)/
+    );
+    assert.match(
+        packageLayoutVerifier,
+        /function verifyLinuxLauncher\(\s*resourceDir,\s*targetNames,\s*errors\s*\)/
+    );
+    assert.match(
+        packageLayoutVerifier,
+        /resolveLinuxLauncherLayout\(\s*targetNames,\s*linuxExecutableName\s*\)/
+    );
+    assert.match(
+        packageLayoutVerifier,
+        /verifyLinuxLauncher\(\s*resourceDir,\s*linuxTargetNames,\s*errors\s*\)/
+    );
+
+    const launcherVerifier = packageLayoutVerifier.match(
+        /function verifyLinuxLauncher\([\s\S]*?\r?\n}\r?\n\r?\nfunction verifyFlatpakPermissions/
+    )?.[0];
+    assert.ok(launcherVerifier);
+    assert.ok(
+        launcherVerifier.indexOf('resolveLinuxLauncherLayout(') <
+            launcherVerifier.indexOf('const launcherBinaryPath')
+    );
+    assert.match(
+        launcherVerifier,
+        /if \(!launcherLayout\.wrapperRequired\) \{\s*errors\.push\(\s*\.\.\.validateFlatpakLauncher\(\s*appDir,\s*linuxExecutableName\s*\)\s*\);\s*return;\s*\}\s*const launcherBinaryPath[\s\S]*?fs\.readFileSync\(launcherPath,\s*['"]utf8['"]\)/
+    );
+});
+
+test('Flatpak launcher validation locks descriptor-based ELF inspection', () => {
+    assert.match(
+        flatpakLauncherValidationSource,
+        /const expectedElfMagic = Buffer\.from\(\[\s*0x7f,\s*0x45,\s*0x4c,\s*0x46,?\s*\]\)/
+    );
+    assert.match(
+        flatpakLauncherValidationSource,
+        /descriptor = fs\.openSync\(\s*launcherPath,\s*fs\.constants\.O_RDONLY\s*\|\s*fs\.constants\.O_NOFOLLOW\s*\)/
+    );
+    assert.match(
+        flatpakLauncherValidationSource,
+        /launcherStat = fs\.fstatSync\(descriptor\)/
+    );
+    assert.match(
+        flatpakLauncherValidationSource,
+        /const elfMagic = Buffer\.alloc\(expectedElfMagic\.length\)/
+    );
+    assert.match(
+        flatpakLauncherValidationSource,
+        /bytesRead = fs\.readSync\(\s*descriptor,\s*elfMagic,\s*0,\s*elfMagic\.length,\s*0\s*\)/
+    );
+    assert.match(
+        flatpakLauncherValidationSource,
+        /bytesRead !== expectedElfMagic\.length/
+    );
+    assert.match(
+        flatpakLauncherValidationSource,
+        /finally\s*{\s*try\s*{\s*fs\.closeSync\(descriptor\)/
+    );
+
+    const openOffset = flatpakLauncherValidationSource.indexOf(
+        'descriptor = fs.openSync('
+    );
+    const statOffset = flatpakLauncherValidationSource.indexOf(
+        'launcherStat = fs.fstatSync(descriptor)'
+    );
+    const readOffset = flatpakLauncherValidationSource.indexOf(
+        'bytesRead = fs.readSync('
+    );
+    const finallyOffset = flatpakLauncherValidationSource.indexOf(
+        '} finally {',
+        readOffset
+    );
+    const closeOffset = flatpakLauncherValidationSource.indexOf(
+        'fs.closeSync(descriptor)',
+        finallyOffset
+    );
+    assert.ok(
+        openOffset < statOffset &&
+            statOffset < readOffset &&
+            readOffset < finallyOffset &&
+            finallyOffset < closeOffset
+    );
+});
+
+test('nx-electron executors load against the installed Nx exports', () => {
+    const { executors } = require('nx-electron/executors.json');
+
+    for (const [name, { implementation }] of Object.entries(executors)) {
+        const executor = require(
+            `nx-electron/${implementation.replace(/^\.\//, '')}`
+        );
+        assert.equal(typeof executor.default, 'function', `${name} must load`);
+    }
+});
+
+test('nx-electron packaging does not copy duplicate root package metadata', () => {
+    const nxElectronExecutorPath =
+        require.resolve('nx-electron/src/executors/package/executor.js');
+    const nxElectronExecutor = fs.readFileSync(nxElectronExecutorPath, 'utf8');
+
+    assert.doesNotMatch(nxElectronExecutor, /['"]\.\/package\.json['"]/);
+    assert.match(
+        nxElectronExecutor,
+        /filter:\s*\[['"]index\.js['"],\s*['"]package\.json['"]\]/
+    );
+});
+
+test('embedded MPV runtime binaries are unpacked on every supported desktop platform', () => {
+    const asarUnpack = electronBuilderConfig.asarUnpack ?? [];
+
+    for (const requiredPattern of [
+        '**/*.node',
+        '**/*.dylib',
+        '**/*.dll',
+        '**/*.so',
+        '**/*.so.*',
+        '**/embedded-mpv-runtime.json',
+    ]) {
+        assert.ok(
+            asarUnpack.includes(requiredPattern),
+            `electron-builder asarUnpack must include ${requiredPattern}`
+        );
+    }
+});
+
+test('embedded MPV native payload is owned exclusively by afterPack outside app.asar', () => {
+    assert.ok(
+        electronBuilderConfig.files.includes(
+            '!electron-backend/native{,/**/*}'
+        ),
+        'electron-builder files must exclude the entire pre-afterPack native payload from app.asar'
+    );
+    assert.match(
+        packageLayoutVerifier,
+        /collectEmbeddedMpvNativeArchiveEntries/
+    );
+});
+
+test('embedded MPV package validation accepts Windows runtime files and Linux process isolation', () => {
+    const tempDir = fs.mkdtempSync(join(os.tmpdir(), 'iptvnator-mpv-package-'));
+
+    try {
+        for (const [platform, runtimeFile] of [
+            ['windows', 'mpv-2.dll'],
+            ['windows', 'libmpv-2.dll'],
+            ['windows', 'mpv.dll'],
+            ['windows', 'libmpv.dll'],
+        ]) {
+            // One fixture dir per runtime-file scenario: the frame-copy
+            // artifacts written below must not leak into the next
+            // iteration's missing-artifact assertions.
+            const resourceDir = join(
+                tempDir,
+                `${platform}-${runtimeFile.replace(/[\\/]/g, '_')}`
+            );
+            const nativeDir = join(
+                resourceDir,
+                'app.asar.unpacked',
+                'electron-backend',
+                'native'
+            );
+            fs.mkdirSync(join(nativeDir, 'lib'), { recursive: true });
+            fs.writeFileSync(join(nativeDir, 'embedded_mpv.node'), '');
+            fs.writeFileSync(
+                join(nativeDir, 'embedded-mpv-runtime.json'),
+                JSON.stringify({ origin: 'vendored-lgpl' })
+            );
+            fs.writeFileSync(join(nativeDir, runtimeFile), '');
+
+            // Windows packages that ship the addon must also ship the
+            // frame-copy engine artifacts built by the same binding.gyp run.
+            const missingWindowsFrameCopyErrors = validatePackagedEmbeddedMpv(
+                resourceDir,
+                { platform, required: true }
+            );
+            assert.ok(
+                missingWindowsFrameCopyErrors.some((error) =>
+                    error.includes('iptvnator_mpv_helper.exe')
+                )
+            );
+            assert.ok(
+                missingWindowsFrameCopyErrors.some((error) =>
+                    error.includes('embedded_mpv_frame_reader.node')
+                )
+            );
+
+            writeWindowsHelperFixture(
+                join(nativeDir, 'iptvnator_mpv_helper.exe'),
+                runtimeFile
+            );
+            fs.writeFileSync(
+                join(nativeDir, 'embedded_mpv_frame_reader.node'),
+                ''
+            );
+
+            assert.deepEqual(
+                validatePackagedEmbeddedMpv(resourceDir, {
+                    platform,
+                    required: true,
+                }),
+                []
+            );
+        }
+
+        const darwinResourceDir = join(tempDir, 'darwin');
+        const darwinNativeDir = join(
+            darwinResourceDir,
+            'app.asar.unpacked',
+            'electron-backend',
+            'native'
+        );
+        fs.mkdirSync(join(darwinNativeDir, 'lib'), { recursive: true });
+        fs.writeFileSync(join(darwinNativeDir, 'embedded_mpv.node'), '');
+        fs.writeFileSync(
+            join(darwinNativeDir, 'embedded-mpv-runtime.json'),
+            JSON.stringify({ origin: 'vendored-lgpl' })
+        );
+        fs.writeFileSync(join(darwinNativeDir, 'lib', 'libmpv.2.dylib'), '');
+
+        // macOS packages that ship the addon must also ship the frame-copy
+        // engine artifacts built by the same binding.gyp run.
+        const missingFrameCopyErrors = validatePackagedEmbeddedMpv(
+            darwinResourceDir,
+            { platform: 'darwin', required: true }
+        );
+        assert.ok(
+            missingFrameCopyErrors.some((error) =>
+                error.includes('iptvnator_mpv_helper')
+            )
+        );
+        assert.ok(
+            missingFrameCopyErrors.some((error) =>
+                error.includes('embedded_mpv_frame_reader.node')
+            )
+        );
+
+        fs.writeFileSync(join(darwinNativeDir, 'iptvnator_mpv_helper'), '');
+        fs.writeFileSync(
+            join(darwinNativeDir, 'embedded_mpv_frame_reader.node'),
+            ''
+        );
+        // Host-agnostic assertion: on non-macOS hosts the validator also
+        // reports that link validation needs a macOS host, so only the
+        // frame-copy artifact requirement is asserted here.
+        const remainingErrors = validatePackagedEmbeddedMpv(darwinResourceDir, {
+            platform: 'darwin',
+            required: true,
+        });
+        assert.ok(
+            !remainingErrors.some((error) =>
+                error.includes('frame-copy artifact')
+            ),
+            `unexpected frame-copy errors: ${remainingErrors.join('; ')}`
+        );
+
+        const linuxResourceDir = join(tempDir, 'linux');
+        const linuxNativeDir = join(
+            linuxResourceDir,
+            'app.asar.unpacked',
+            'electron-backend',
+            'native'
+        );
+        fs.mkdirSync(linuxNativeDir, { recursive: true });
+        fs.writeFileSync(join(linuxNativeDir, 'embedded_mpv.node'), '');
+        fs.writeFileSync(
+            join(linuxNativeDir, 'embedded-mpv-runtime.json'),
+            JSON.stringify({
+                schemaVersion: 1,
+                origin: 'external-mpv-process',
+                platform: 'linux',
+                arch: 'x64',
+                runtimeMode: 'native-view-only',
+                frameCopyAvailable: false,
+                artifacts: {
+                    addon: 'embedded_mpv.node',
+                },
+                nativeViewFallback: 'process-isolated mpv --wid',
+            })
+        );
+
+        assert.deepEqual(
+            validatePackagedEmbeddedMpv(linuxResourceDir, {
+                platform: 'linux',
+                required: false,
+            }),
+            []
+        );
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
+test('Windows frame-copy packages reject an mpv DLL that exists only under native/lib', () => {
+    const tempDir = fs.mkdtempSync(join(os.tmpdir(), 'iptvnator-mpv-package-'));
+
+    try {
+        for (const runtimeFile of [
+            'mpv-2.dll',
+            'libmpv-2.dll',
+            'mpv.dll',
+            'libmpv.dll',
+        ]) {
+            const resourceDir = join(tempDir, runtimeFile);
+            const nativeDir = join(
+                resourceDir,
+                'app.asar.unpacked',
+                'electron-backend',
+                'native'
+            );
+            fs.mkdirSync(join(nativeDir, 'lib'), { recursive: true });
+            fs.writeFileSync(join(nativeDir, 'embedded_mpv.node'), '');
+            fs.writeFileSync(
+                join(nativeDir, 'embedded-mpv-runtime.json'),
+                JSON.stringify({ origin: 'vendored-lgpl' })
+            );
+            writeWindowsHelperFixture(
+                join(nativeDir, 'iptvnator_mpv_helper.exe'),
+                runtimeFile
+            );
+            fs.writeFileSync(
+                join(nativeDir, 'embedded_mpv_frame_reader.node'),
+                ''
+            );
+            fs.writeFileSync(join(nativeDir, 'lib', runtimeFile), '');
+
+            const errors = validatePackagedEmbeddedMpv(resourceDir, {
+                platform: 'windows',
+                required: true,
+            });
+
+            assert.ok(
+                errors.some(
+                    (error) =>
+                        error.includes(
+                            'beside the Windows frame-copy helper'
+                        ) && error.includes(nativeDir)
+                ),
+                `${runtimeFile} under native/lib must not satisfy the helper DLL requirement: ${errors.join('; ')}`
+            );
+        }
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
+test('Windows frame-copy packages require the DLL imported by the helper', () => {
+    const tempDir = fs.mkdtempSync(join(os.tmpdir(), 'iptvnator-mpv-package-'));
+
+    try {
+        const nativeDir = join(
+            tempDir,
+            'app.asar.unpacked',
+            'electron-backend',
+            'native'
+        );
+        fs.mkdirSync(nativeDir, { recursive: true });
+        fs.writeFileSync(join(nativeDir, 'embedded_mpv.node'), '');
+        fs.writeFileSync(
+            join(nativeDir, 'embedded-mpv-runtime.json'),
+            JSON.stringify({ origin: 'vendored-lgpl' })
+        );
+        writeWindowsHelperFixture(
+            join(nativeDir, 'iptvnator_mpv_helper.exe'),
+            'mpv-2.dll'
+        );
+        fs.writeFileSync(join(nativeDir, 'embedded_mpv_frame_reader.node'), '');
+        fs.writeFileSync(join(nativeDir, 'libmpv.dll'), '');
+
+        const errors = validatePackagedEmbeddedMpv(tempDir, {
+            platform: 'windows',
+            required: true,
+        });
+
+        assert.ok(
+            errors.some(
+                (error) =>
+                    error.includes('imports mpv-2.dll') &&
+                    error.includes(join(nativeDir, 'mpv-2.dll'))
+            ),
+            `a different accepted DLL must not satisfy the helper import: ${errors.join('; ')}`
+        );
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
+test('Windows frame-copy package validation fails closed for a malformed helper', () => {
+    const tempDir = fs.mkdtempSync(join(os.tmpdir(), 'iptvnator-mpv-package-'));
+
+    try {
+        const nativeDir = join(
+            tempDir,
+            'app.asar.unpacked',
+            'electron-backend',
+            'native'
+        );
+        fs.mkdirSync(nativeDir, { recursive: true });
+        fs.writeFileSync(join(nativeDir, 'embedded_mpv.node'), '');
+        fs.writeFileSync(
+            join(nativeDir, 'embedded-mpv-runtime.json'),
+            JSON.stringify({ origin: 'vendored-lgpl' })
+        );
+        fs.writeFileSync(join(nativeDir, 'iptvnator_mpv_helper.exe'), 'MZ');
+        fs.writeFileSync(join(nativeDir, 'embedded_mpv_frame_reader.node'), '');
+        fs.writeFileSync(join(nativeDir, 'mpv-2.dll'), '');
+
+        const errors = validatePackagedEmbeddedMpv(tempDir, {
+            platform: 'windows',
+            required: true,
+        });
+
+        assert.ok(
+            errors.some((error) =>
+                error.includes(
+                    'Unable to inspect Windows frame-copy helper imports'
+                )
+            ),
+            `malformed helper must fail package validation: ${errors.join('; ')}`
+        );
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
+test('Windows embedded MPV staging preserves import-library DLL basenames', () => {
+    assert.match(
+        embeddedMpvStageRuntimeSource,
+        /win32:\s*\[\s*'mpv-2\.dll',\s*'libmpv-2\.dll',\s*'mpv\.dll',\s*'libmpv\.dll'\s*\]/
+    );
+    assert.match(
+        embeddedMpvWindowsArchiveStageSource,
+        /path\.join\(normalizedPrefix,\s*'bin',\s*path\.basename\(runtimeDll\)\)/
+    );
+    assert.doesNotMatch(
+        embeddedMpvWindowsArchiveStageSource,
+        /normalizedWindowsDllName/
+    );
+    assert.match(embeddedMpvBuildSource, /'libmpv-2\.dll'/);
+    assert.match(embeddedMpvPackagingSource, /libmpv-2\.dll/);
+});
+
+test('Windows embedded MPV archive staging keeps CI downloads bounded and quiet', () => {
+    assert.match(
+        embeddedMpvWindowsArchiveStageSource,
+        /parsedUrl\.protocol === 'https:'/
+    );
+    assert.doesNotMatch(
+        embeddedMpvWindowsArchiveStageSource,
+        /parsedUrl\.protocol === 'http:'/
+    );
+    assert.match(
+        embeddedMpvWindowsArchiveStageSource,
+        /fs\.createReadStream\(filePath\)/
+    );
+    assert.doesNotMatch(
+        embeddedMpvWindowsArchiveStageSource,
+        /hash\.update\(fs\.readFileSync\(filePath\)\)/
+    );
+    assert.match(
+        embeddedMpvWindowsArchiveStageSource,
+        /runResult\(\s*'tar',\s*\['-xf', archivePath, '-C', extractRoot\],\s*\{\s*stdio: 'pipe',\s*\}\s*\)/s
+    );
+});
+
+test('embedded MPV packaging helpers use a cross-platform module name', () => {
+    assert.match(
+        electronAfterPackSource,
+        /require\(['"]\.\/embedded-mpv-packaging\.cjs['"]\)/
+    );
+    assert.match(
+        packageLayoutVerifier,
+        /require\(['"]\.\/embedded-mpv-packaging\.cjs['"]\)/
+    );
+});
+
+test('frame-copy packaging file operations enforce modes and remove stale artifacts', () => {
+    assert.ok(
+        fs.existsSync(frameCopyFilesModulePath),
+        'shared frame-copy packaging file helper must exist'
+    );
+    const {
+        preparePackagedFrameCopyArtifacts,
+        removeStaleFrameCopyArtifacts,
+    } = require(frameCopyFilesModulePath);
+    const tempDir = fs.mkdtempSync(join(os.tmpdir(), 'impv-fc-files-'));
+
+    try {
+        const helperPath = join(tempDir, 'iptvnator_mpv_helper');
+        const windowsHelperPath = join(tempDir, 'iptvnator_mpv_helper.exe');
+        const readerPath = join(tempDir, 'embedded_mpv_frame_reader.node');
+        fs.writeFileSync(helperPath, '#!/bin/sh\n');
+        fs.chmodSync(helperPath, 0o644);
+        fs.writeFileSync(windowsHelperPath, 'exe');
+        fs.writeFileSync(readerPath, 'reader');
+
+        if (process.platform !== 'win32') {
+            preparePackagedFrameCopyArtifacts(tempDir, 'darwin');
+            assert.notEqual(
+                fs.statSync(helperPath).mode & 0o111,
+                0,
+                'macOS helper must be executable after packaging'
+            );
+        }
+
+        preparePackagedFrameCopyArtifacts(tempDir, 'linux');
+        assert.equal(
+            fs.existsSync(helperPath),
+            false,
+            'Linux packages must omit the unsupported frame-copy helper'
+        );
+        assert.equal(
+            fs.existsSync(windowsHelperPath),
+            false,
+            'Linux packages must omit stale Windows frame-copy helpers too'
+        );
+
+        fs.writeFileSync(helperPath, '#!/bin/sh\n');
+        removeStaleFrameCopyArtifacts(tempDir);
+        assert.equal(fs.existsSync(helperPath), false);
+        assert.equal(fs.existsSync(windowsHelperPath), false);
+        assert.equal(fs.existsSync(readerPath), false);
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
+test('Windows CI packages embedded MPV from a staged x64 runtime', () => {
+    const requireEmbeddedMpvLines = buildAndMakeWorkflow
+        .split(/\r?\n/)
+        .filter((line) => line.includes('IPTVNATOR_REQUIRE_EMBEDDED_MPV:'));
+
+    assert.equal(
+        packageMetadata.scripts?.['embedded-mpv:stage-runtime:windows-archive'],
+        'node tools/embedded-mpv/stage-windows-runtime-archive.mjs'
+    );
+    assert.match(
+        buildAndMakeWorkflow,
+        /name:\s+Stage Windows embedded MPV runtime archive/
+    );
+    assert.match(buildAndMakeWorkflow, /runner:\s+windows-2022/);
+    assert.match(
+        buildAndMakeWorkflow,
+        /name:\s+Resolve pinned Windows Embedded MPV runtime/
+    );
+    assert.match(
+        buildAndMakeWorkflow,
+        /node tools\/embedded-mpv\/windows-runtime-pin\.mjs --github-output/
+    );
+    assert.match(
+        buildAndMakeWorkflow,
+        /WINDOWS_RUNTIME_URL:\s+\$\{\{ steps\.windows-embedded-mpv-runtime-pin\.outputs\.url \}\}/
+    );
+    assert.match(
+        buildAndMakeWorkflow,
+        /WINDOWS_RUNTIME_SHA256:\s+\$\{\{ steps\.windows-embedded-mpv-runtime-pin\.outputs\.sha256 \}\}/
+    );
+    assert.doesNotMatch(
+        buildAndMakeWorkflow,
+        /(?:vars|secrets)\.IPTVNATOR_WINDOWS_EMBEDDED_MPV_RUNTIME/
+    );
+    assert.doesNotMatch(buildAndMakeWorkflow, /zhongfly\/mpv-winbuild/);
+    assert.equal(windowsRuntimePin.repository, 'zhongfly/mpv-winbuild');
+    assert.match(windowsRuntimePin.asset.name, /^mpv-dev-lgpl-x86_64-/);
+    assert.match(windowsRuntimePin.asset.sha256, /^[a-f0-9]{64}$/);
+    assert.match(
+        windowsRuntimePin.upstream.licenseClaim,
+        /checksum and archive layout, not the complete transitive license closure/
+    );
+    assert.match(
+        windowsRuntimeRefreshWorkflow,
+        /node tools\/embedded-mpv\/update-windows-runtime-pin\.mjs/
+    );
+    assert.match(
+        windowsRuntimeRefreshWorkflow,
+        /node --test\s+tools\/embedded-mpv\/windows-runtime-pin\.test\.mjs/
+    );
+    assert.doesNotMatch(
+        windowsRuntimeRefreshWorkflow,
+        /electron-package-identity\.test\.mjs/
+    );
+    assert.match(
+        windowsRuntimeRefreshWorkflow,
+        /automation\/windows-embedded-mpv-runtime-pin/
+    );
+    assert.match(
+        windowsRuntimeRefreshWorkflow,
+        /github\.repository == 'alpoxggn-lang\/zenplay-desktop'/
+    );
+    assert.doesNotMatch(
+        windowsRuntimeRefreshWorkflow,
+        /github\.repository == '4gray\/iptvnator'/
+    );
+    assert.match(windowsRuntimeRefreshWorkflow, /secrets\.PAT/);
+    assert.match(
+        windowsRuntimeRefreshWorkflow,
+        /actions\/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1/
+    );
+    assert.match(
+        windowsRuntimeRefreshWorkflow,
+        /actions\/setup-node@820762786026740c76f36085b0efc47a31fe5020/
+    );
+    assert.doesNotMatch(
+        windowsRuntimeRefreshWorkflow,
+        /actions\/(?:checkout|setup-node)@v\d+/
+    );
+    assert.match(
+        buildAndMakeWorkflow,
+        /name:\s+Override Windows arch in electron-builder\.json/
+    );
+    assert.match(
+        buildAndMakeWorkflow,
+        /IPTVNATOR_REQUIRE_EMBEDDED_MPV:\s+\$\{\{\s*\(matrix\.os == 'linux' \|\| matrix\.os == 'windows'/
+    );
+    assert.match(embeddedMpvStageRuntimeSource, /\.dll\.a/);
+    assert.match(embeddedMpvBuildSource, /\.dll\.a/);
+    assert.match(
+        embeddedMpvWindowsArchiveStageSource,
+        /checksum-and-layout-only/
+    );
+    assert.match(
+        embeddedMpvWindowsArchiveStageSource,
+        /not-independently-verified/
+    );
+    assert.ok(requireEmbeddedMpvLines.length > 0);
+    for (const line of requireEmbeddedMpvLines) {
+        assert.doesNotMatch(line, /cache-hit/);
+    }
+});
+
+test('Windows embedded MPV native build uses wide Win32 cursor resources', () => {
+    assert.match(
+        embeddedMpvWin32Source,
+        /LoadCursorW\(nullptr,\s*MAKEINTRESOURCEW\(32512\)\)/
+    );
+    assert.doesNotMatch(
+        embeddedMpvWin32Source,
+        /LoadCursorW\(nullptr,\s*IDC_ARROW\)/
+    );
+});
+
+test('embedded MPV package validation rejects missing required Windows runtime', () => {
+    const tempDir = fs.mkdtempSync(join(os.tmpdir(), 'iptvnator-mpv-package-'));
+
+    try {
+        const nativeDir = join(
+            tempDir,
+            'app.asar.unpacked',
+            'electron-backend',
+            'native'
+        );
+        fs.mkdirSync(join(nativeDir, 'lib'), { recursive: true });
+        fs.writeFileSync(join(nativeDir, 'embedded_mpv.node'), '');
+        fs.writeFileSync(
+            join(nativeDir, 'embedded-mpv-runtime.json'),
+            JSON.stringify({ origin: 'vendored-lgpl' })
+        );
+
+        const errors = validatePackagedEmbeddedMpv(tempDir, {
+            platform: 'windows',
+            required: true,
+        });
+
+        assert.match(errors.join('\n'), /Missing bundled embedded MPV runtime/);
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
+test('embedded MPV package validation rejects bundled Linux libmpv', () => {
+    const tempDir = fs.mkdtempSync(join(os.tmpdir(), 'iptvnator-mpv-package-'));
+
+    try {
+        const nativeDir = join(
+            tempDir,
+            'app.asar.unpacked',
+            'electron-backend',
+            'native'
+        );
+        fs.mkdirSync(join(nativeDir, 'lib'), { recursive: true });
+        fs.writeFileSync(join(nativeDir, 'embedded_mpv.node'), '');
+        fs.writeFileSync(
+            join(nativeDir, 'embedded-mpv-runtime.json'),
+            JSON.stringify({ origin: 'external-mpv-process' })
+        );
+        fs.writeFileSync(join(nativeDir, 'lib', 'libmpv.so'), '');
+
+        const errors = validatePackagedEmbeddedMpv(tempDir, {
+            platform: 'linux',
+            required: true,
+        });
+
+        assert.match(errors.join('\n'), /must not bundle libmpv/);
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
+test('embedded MPV package validation rejects frame-copy helpers in Linux packages', () => {
+    const tempDir = fs.mkdtempSync(join(os.tmpdir(), 'iptvnator-mpv-package-'));
+
+    try {
+        const nativeDir = join(
+            tempDir,
+            'app.asar.unpacked',
+            'electron-backend',
+            'native'
+        );
+        fs.mkdirSync(nativeDir, { recursive: true });
+        fs.writeFileSync(join(nativeDir, 'embedded_mpv.node'), '');
+        fs.writeFileSync(
+            join(nativeDir, 'embedded-mpv-runtime.json'),
+            JSON.stringify({ origin: 'external-mpv-process' })
+        );
+        fs.writeFileSync(join(nativeDir, 'iptvnator_mpv_helper'), '');
+        fs.writeFileSync(join(nativeDir, 'iptvnator_mpv_helper.exe'), '');
+
+        const errors = validatePackagedEmbeddedMpv(tempDir, {
+            platform: 'linux',
+            required: true,
+        });
+
+        const message = errors.join('\n');
+        assert.match(message, /must not ship frame-copy helpers/);
+        assert.match(message, /iptvnator_mpv_helper\n/);
+        assert.match(message, /iptvnator_mpv_helper\.exe/);
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});

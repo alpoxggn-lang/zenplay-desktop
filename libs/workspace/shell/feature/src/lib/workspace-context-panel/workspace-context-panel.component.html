@@ -1,0 +1,250 @@
+<div class="context-column">
+    <header class="context-header">
+        <div class="context-header__top">
+            <h2>{{ title() | translate }}</h2>
+            <div class="context-header__actions">
+                <!-- Rendered disabled while the categories load, so the
+                     row has its final width before they arrive. -->
+                @if (showCategoryListActions()) {
+                    <button
+                        #firstHeaderAction
+                        type="button"
+                        mat-icon-button
+                        class="context-header__action"
+                        [disabled]="!canSearchCategories()"
+                        [class.context-header__action--active]="isSearchOpen()"
+                        (click)="toggleCategorySearch()"
+                        [matTooltip]="'WORKSPACE.CONTEXT.SEARCH' | translate"
+                        [attr.aria-label]="
+                            'WORKSPACE.CONTEXT.SEARCH' | translate
+                        "
+                    >
+                        <mat-icon>search</mat-icon>
+                    </button>
+                }
+                @if (showCategoryListActions()) {
+                    <button
+                        type="button"
+                        mat-icon-button
+                        class="context-header__action"
+                        [disabled]="!canSearchCategories()"
+                        [class.context-header__action--active]="
+                            categorySortMode() !== 'server'
+                        "
+                        [matMenuTriggerFor]="categorySortMenu"
+                        [matTooltip]="
+                            ('WORKSPACE.SORT_LABEL' | translate) +
+                            (categorySortLabelKey() | translate)
+                        "
+                        [attr.aria-label]="
+                            'WORKSPACE.CATEGORY_SORT_ARIA' | translate
+                        "
+                    >
+                        <mat-icon>{{ categorySortIcon() }}</mat-icon>
+                    </button>
+                    <mat-menu #categorySortMenu="matMenu">
+                        @for (
+                            option of categorySortOptions;
+                            track option.mode
+                        ) {
+                            <button
+                                mat-menu-item
+                                [appMenuItemRadio]="
+                                    categorySortMode() === option.mode
+                                "
+                                (click)="setCategorySortMode(option.mode)"
+                            >
+                                <mat-icon appMenuItemRadioCheck>check</mat-icon>
+                                <mat-icon>{{ option.icon }}</mat-icon>
+                                <span>{{
+                                    option.translationKey | translate
+                                }}</span>
+                            </button>
+                        }
+                    </mat-menu>
+                }
+                @if (isXtreamCategories()) {
+                    <button
+                        type="button"
+                        mat-icon-button
+                        class="context-header__action"
+                        data-test-id="context-manage-categories"
+                        (click)="openManageCategories()"
+                        [disabled]="!canManageXtreamCategories()"
+                        [matTooltip]="
+                            'WORKSPACE.CONTEXT.MANAGE_CATEGORIES' | translate
+                        "
+                        [attr.aria-label]="
+                            'WORKSPACE.CONTEXT.MANAGE_CATEGORIES' | translate
+                        "
+                    >
+                        <mat-icon>tune</mat-icon>
+                    </button>
+                }
+                @if (canManageStalkerCategories()) {
+                    <button
+                        type="button"
+                        mat-icon-button
+                        class="context-header__action"
+                        data-test-id="context-manage-categories"
+                        (click)="openManageStalkerCategories()"
+                        [matTooltip]="
+                            'WORKSPACE.CONTEXT.MANAGE_CATEGORIES' | translate
+                        "
+                        [attr.aria-label]="
+                            'WORKSPACE.CONTEXT.MANAGE_CATEGORIES' | translate
+                        "
+                    >
+                        <mat-icon>tune</mat-icon>
+                    </button>
+                }
+                @if (canHideCategories()) {
+                    <button
+                        #hideCategoriesButton
+                        type="button"
+                        mat-icon-button
+                        class="context-header__action"
+                        data-test-id="context-hide-categories"
+                        (click)="hideCategories()"
+                        [matTooltip]="'LAYOUT.HIDE_CATEGORIES' | translate"
+                        [attr.aria-label]="'LAYOUT.HIDE_CATEGORIES' | translate"
+                    >
+                        <mat-icon>chevron_left</mat-icon>
+                    </button>
+                }
+            </div>
+        </div>
+        <!-- @if (subtitle(); as text) {
+            <span class="context-header__badge">{{ text }}</span>
+        } -->
+    </header>
+
+    @if (isSearchOpen()) {
+        <label class="context-search">
+            <mat-icon class="context-search__icon">search</mat-icon>
+            <input
+                #searchInput
+                type="search"
+                spellcheck="false"
+                [value]="categorySearchTerm()"
+                (input)="onSearchInput($event)"
+                [placeholder]="
+                    'WORKSPACE.CONTEXT.SEARCH_CATEGORIES' | translate
+                "
+                [attr.aria-label]="
+                    'WORKSPACE.CONTEXT.SEARCH_CATEGORIES' | translate
+                "
+            />
+            @if (categorySearchTerm()) {
+                <button
+                    type="button"
+                    mat-icon-button
+                    class="context-search__clear"
+                    [attr.aria-label]="
+                        'EMBEDDED_MPV.PLAYER.CLEAR_SEARCH' | translate
+                    "
+                    (click)="clearCategorySearch()"
+                >
+                    <mat-icon>close</mat-icon>
+                </button>
+            }
+        </label>
+    } @else {
+        <div class="context-divider"></div>
+    }
+
+    @if (isXtreamCategories()) {
+        @if (isXtreamCategoryLoading()) {
+            <div class="context-skeleton" aria-hidden="true">
+                @for (row of skeletonRows; track row) {
+                    <div class="context-skeleton__row">
+                        <span class="context-skeleton__dot"></span>
+                        <span
+                            class="context-skeleton__label"
+                            [style.width.%]="skeletonLabelWidths[row]"
+                        ></span>
+                        <span class="context-skeleton__count"></span>
+                    </div>
+                }
+            </div>
+        } @else {
+            <app-workspace-context-category-view
+                [columnHandoff]="presentation() === 'sidebar'"
+                [items]="filteredXtreamCategories()"
+                [selectedCategoryId]="xtreamSelectedCategoryId()"
+                [itemCounts]="xtreamCategoryItemCounts()"
+                [showCounts]="true"
+                [countDisplayMode]="xtreamCountDisplayMode()"
+                [interactionEnabled]="isXtreamCategoryInteractionEnabled()"
+                [statusText]="xtreamStatusText()"
+                (categoryClicked)="onXtreamCategoryClicked($event)"
+                (categoryContextMenuRequested)="
+                    onCategoryContextMenu('xtreams', $event)
+                "
+            />
+        }
+    } @else if (isStalkerCategories()) {
+        @if (isStalkerCategoryLoading()) {
+            <div class="context-skeleton" aria-hidden="true">
+                @for (row of skeletonRows; track row) {
+                    <div class="context-skeleton__row">
+                        <span class="context-skeleton__dot"></span>
+                        <span
+                            class="context-skeleton__label"
+                            [style.width.%]="skeletonLabelWidths[row]"
+                        ></span>
+                        <span class="context-skeleton__count"></span>
+                    </div>
+                }
+            </div>
+        } @else if (isStalkerCategoryFailed()) {
+            <app-workspace-context-error-view
+                [title]="'WORKSPACE.CONTEXT.LOAD_CATEGORIES_ERROR' | translate"
+                [description]="stalkerCategoryErrorDescription()"
+                [showActionButtons]="false"
+            />
+        } @else {
+            <app-workspace-context-category-view
+                [columnHandoff]="presentation() === 'sidebar'"
+                [items]="filteredStalkerCategories()"
+                [selectedCategoryId]="$any(stalkerSelectedCategoryId())"
+                [itemCounts]="stalkerCategoryItemCounts()"
+                [showCounts]="stalkerShowCounts()"
+                [countDisplayMode]="stalkerCountDisplayMode()"
+                [omitMissingCounts]="true"
+                (categoryClicked)="onStalkerCategoryClicked($any($event))"
+                (categoryContextMenuRequested)="
+                    onCategoryContextMenu('stalker', $event)
+                "
+            />
+        }
+    }
+
+    @if (withheldCategoryCount() > 0 || withholdsAllCategories()) {
+        <button
+            type="button"
+            class="context-locked-row"
+            data-test-id="context-locked-categories"
+            (click)="requestParentalUnlock()"
+            [attr.aria-label]="'PARENTAL_LOCK.UNLOCK_TO_SHOW' | translate"
+        >
+            <mat-icon>lock</mat-icon>
+            <span class="context-locked-row__label">
+                {{
+                    withholdsAllCategories()
+                        ? ('PARENTAL_LOCK.LOCKED_COUNT' | translate)
+                        : ('PARENTAL_LOCK.LOCKED_CATEGORIES_ROW'
+                          | translate: { count: withheldCategoryCount() })
+                }}
+            </span>
+            <span class="context-locked-row__hint">
+                {{ 'PARENTAL_LOCK.UNLOCK_TO_SHOW' | translate }}
+            </span>
+        </button>
+    }
+</div>
+
+<app-category-lock-menu
+    #categoryLockMenu
+    (toggleRequested)="onCategoryLockToggle($event)"
+/>

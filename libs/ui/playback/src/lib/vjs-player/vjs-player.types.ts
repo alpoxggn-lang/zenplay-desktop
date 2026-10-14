@@ -1,0 +1,160 @@
+import type videoJs from 'video.js';
+import type { NativePlaybackErrorInput } from '@iptvnator/playback/util';
+import { collectPlaybackCodecs } from '@iptvnator/playback/util';
+
+export type VideoPlayerSource = {
+    src: string;
+    type?: string;
+};
+
+export type VideoPlayerOptions = Record<string, unknown> & {
+    autoplay?: boolean;
+    controls?: boolean;
+    isLive?: boolean;
+    reloadToken?: number;
+    sources?: VideoPlayerSource[];
+    spatialNavigation?: Record<string, unknown> & {
+        enabled?: boolean;
+    };
+    userActions?: Record<string, unknown> & {
+        click?: boolean;
+        doubleClick?: boolean;
+        hotkeys?: boolean;
+    };
+};
+
+export type VideoJsAudioTrack = {
+    label?: string;
+    language?: string;
+    enabled?: boolean;
+    kind?: string;
+};
+
+export type VideoJsTextTrack = {
+    label?: string;
+    language?: string;
+    kind?: string;
+    mode: TextTrackMode;
+};
+
+export type VideoJsTrackList<TTrack> = {
+    length: number;
+    [index: number]: TTrack;
+    addEventListener?: (
+        type: string,
+        listener: EventListenerOrEventListenerObject
+    ) => void;
+    removeEventListener?: (
+        type: string,
+        listener: EventListenerOrEventListenerObject
+    ) => void;
+};
+
+export type VideoJsAudioTrackList = VideoJsTrackList<VideoJsAudioTrack>;
+export type VideoJsTextTrackList = VideoJsTrackList<VideoJsTextTrack>;
+
+/** One rendition from videojs-contrib-quality-levels. */
+export type VideoJsQualityLevel = {
+    id?: string;
+    width?: number;
+    height?: number;
+    bitrate?: number;
+    /** Property accessor: assigning false excludes the level from ABR. */
+    enabled: boolean;
+};
+
+export type VideoJsQualityLevelList = VideoJsTrackList<VideoJsQualityLevel> & {
+    selectedIndex?: number;
+};
+
+export type VideoJsTech = {
+    el?: () => Element | null;
+    vhs?: {
+        representations?: () => {
+            codecs?: { audio?: unknown; video?: unknown };
+        }[];
+        playlists?: {
+            main?: { mediaGroups?: { AUDIO?: Record<string, unknown> } };
+            master?: { mediaGroups?: { AUDIO?: Record<string, unknown> } };
+            media?: () => { endList?: boolean } | null;
+        };
+    };
+};
+
+export type VideoJsControlChild = {
+    getChild?: (name: string) => VideoJsControlChild | null;
+    addChild?: (
+        name: string,
+        options?: Record<string, unknown>
+    ) => VideoJsControlChild | null;
+    show?: () => void;
+    update?: () => void;
+};
+
+export type VideoJsPlayer = Omit<
+    ReturnType<typeof videoJs>,
+    'audioTracks' | 'textTracks' | 'tech' | 'getChild' | 'error'
+> & {
+    qualitySelectorHls?: (options?: {
+        displayCurrentQuality?: boolean;
+    }) => void;
+    /** Registered by the videojs-contrib-quality-levels plugin import. */
+    qualityLevels?: () => VideoJsQualityLevelList | null;
+    aspectRatioPanel?: () => void;
+    audioTracks: () => VideoJsAudioTrackList | null;
+    textTracks: () => VideoJsTextTrackList | null;
+    tech: (options?: unknown) => VideoJsTech | null;
+    getChild: (name: string) => VideoJsControlChild | null;
+    error: () => NativePlaybackErrorInput | null;
+};
+
+export function getVideoJsTechVideo(
+    player: Pick<VideoJsPlayer, 'tech'>
+): HTMLVideoElement | null {
+    try {
+        const element = player.tech({ IWillNotUseThisInPlugins: true })?.el?.();
+        return element instanceof HTMLVideoElement ? element : null;
+    } catch {
+        return null;
+    }
+}
+
+export function hasActiveVhsSourceHandler(
+    player: Pick<VideoJsPlayer, 'tech'>
+): boolean {
+    try {
+        const vhs = player.tech({ IWillNotUseThisInPlugins: true })?.vhs;
+        return typeof vhs === 'object' && vhs !== null;
+    } catch {
+        return false;
+    }
+}
+
+export function getVideoJsVhsEndList(
+    player: Pick<VideoJsPlayer, 'tech'>
+): boolean | undefined {
+    try {
+        return player
+            .tech({ IWillNotUseThisInPlugins: true })
+            ?.vhs?.playlists?.media?.()?.endList;
+    } catch {
+        return undefined;
+    }
+}
+
+export function getVideoJsPlaybackCodecs(player: Pick<VideoJsPlayer, 'tech'>) {
+    try {
+        const variants =
+            player
+                .tech({ IWillNotUseThisInPlugins: true })
+                ?.vhs?.representations?.() ?? [];
+        return collectPlaybackCodecs(
+            variants.slice(0, 256).map((variant) => ({
+                audioCodec: variant.codecs?.audio,
+                videoCodec: variant.codecs?.video,
+            }))
+        );
+    } catch {
+        return collectPlaybackCodecs([]);
+    }
+}

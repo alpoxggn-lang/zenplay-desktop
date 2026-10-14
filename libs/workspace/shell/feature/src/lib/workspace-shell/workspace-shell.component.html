@@ -1,0 +1,147 @@
+<div
+    class="workspace-shell"
+    [appTrafficLightsClearance]="facade.isMacOS"
+>
+    <!-- While the drawer is open it is modal: `inert` removes the rail,
+         header, content and playback footer from BOTH the focus order and
+         the accessibility tree — CdkTrapFocus alone constrains Tab focus but
+         a screen reader's virtual cursor could still reach and activate the
+         visually obscured controls behind the backdrop. isOpen can only be
+         true at phone width (the toggle is CSS-hidden above it and the
+         service closes on viewport growth), so desktop is never inerted. -->
+    <app-workspace-shell-rail
+        [attr.inert]="contextDrawer.isOpen() ? '' : null"
+        [isMacOS]="facade.isMacOS"
+        [workspaceLinks]="facade.workspaceLinks()"
+        [primaryContextLinks]="facade.primaryContextLinks()"
+        [secondaryContextLinks]="facade.secondaryContextLinks()"
+        [selectedSection]="facade.currentSection()"
+        [railProviderClass]="facade.railProviderClass()"
+        [isSettingsRoute]="facade.isSettingsRoute()"
+        [supportsDownloads]="facade.supportsDownloads"
+    />
+
+    <app-workspace-shell-header
+        #workspaceHeader
+        [attr.inert]="contextDrawer.isOpen() ? '' : null"
+        [backTarget]="facade.backTarget()"
+        [playlistTitle]="facade.playlistTitle()"
+        [playlistSubtitle]="facade.playlistSubtitle()"
+        [canOpenPlaylistInfo]="facade.canOpenPlaylistInfo()"
+        [canOpenAccountInfo]="facade.canOpenAccountInfo()"
+        [searchQuery]="facade.searchQuery()"
+        [canUseSearch]="facade.canUseSearch()"
+        [searchPlaceholder]="facade.searchPlaceholder()"
+        [searchScopeLabel]="facade.searchScopeLabel()"
+        [searchStatusLabel]="facade.searchStatusLabel()"
+        [headerShortcut]="facade.headerShortcut()"
+        [headerSidebarToggle]="facade.headerSidebarToggle()"
+        [canRefreshPlaylist]="facade.canRefreshPlaylist()"
+        [isRefreshingPlaylist]="facade.isRefreshingPlaylist()"
+        [isElectron]="facade.isElectron"
+        [supportsDownloads]="facade.supportsDownloads"
+        [hasNoPlaylists]="facade.hasNoPlaylists()"
+        [isDownloadsView]="facade.isDownloadsView()"
+        [activeDownloadsCount]="facade.activeDownloadsCount()"
+        [isSettingsRoute]="facade.isSettingsRoute()"
+        [parentalLockState]="facade.parentalLockState()"
+        [showContextDrawerToggle]="facade.hasContextPanelContent()"
+        [isContextDrawerOpen]="contextDrawer.isOpen()"
+        [contextDrawerToggleAriaKey]="facade.contextDrawerLabelKeys().aria"
+        [contextDrawerTooltipKey]="facade.contextDrawerLabelKeys().tooltip"
+        (backRequested)="facade.goBack()"
+        (contextDrawerToggleRequested)="contextDrawer.toggle()"
+        (refreshPlaylistRequested)="facade.refreshCurrentPlaylist()"
+        (searchChanged)="facade.onSearchInput($event)"
+        (searchSubmitted)="facade.onSearchEnter($event)"
+        (commandPaletteRequested)="facade.openCommandPalette()"
+        (shortcutsRequested)="keyboardShortcuts.openShortcutsDialog()"
+        (addPlaylistRequested)="facade.openAddPlaylistDialog()"
+        (headerShortcutRequested)="facade.runHeaderShortcut()"
+        (headerSidebarToggleRequested)="facade.toggleLiveSidebar()"
+        (parentalLockToggleRequested)="facade.toggleParentalLock()"
+        (downloadsRequested)="facade.openDownloadsShortcut()"
+        (playlistInfoRequested)="facade.openPlaylistInfo()"
+        (accountInfoRequested)="facade.openAccountInfo()"
+        (accountInfoForPlaylistRequested)="facade.openAccountInfoFor($event)"
+    />
+
+    <!-- The content frame slides to make room for the context panel
+         instead of jumping (see LayoutSlideDirective). -->
+    <div
+        class="workspace-body"
+        [class.single-pane]="!facade.showContextPanel()"
+        [appLayoutSlide]="facade.showContextPanel()"
+        layoutSlideTargets=".workspace-content-frame"
+    >
+        @if (facade.showContextPanel()) {
+            <!-- Phone-only (CSS-hidden above 640px): tapping the scrim is
+                 one of the two ways to close the drawer, so it renders
+                 whenever the drawer is open. -->
+            @if (contextDrawer.isOpen()) {
+                <div
+                    class="context-drawer-backdrop"
+                    data-test-id="context-drawer-backdrop"
+                    aria-hidden="true"
+                    (click)="contextDrawer.close()"
+                ></div>
+            }
+            <!-- The trap only ever activates through the phone toggle: on
+                 desktop isOpen stays false, and the service closes the
+                 drawer when the viewport leaves the phone breakpoint, so
+                 the in-flow desktop sidebar can never hold the trap. -->
+            <!-- Dialog semantics only while open: assistive technology must
+                 hear that a named modal surface opened; the desktop sidebar
+                 is an always-visible complementary landmark, not a dialog. -->
+            <app-workspace-shell-context-sidebar
+                [class.drawer-open]="contextDrawer.isOpen()"
+                [cdkTrapFocus]="contextDrawer.isOpen()"
+                [cdkTrapFocusAutoCapture]="contextDrawer.isOpen()"
+                [attr.role]="contextDrawer.isOpen() ? 'dialog' : null"
+                [attr.aria-modal]="contextDrawer.isOpen() ? 'true' : null"
+                [attr.aria-label]="
+                    contextDrawer.isOpen()
+                        ? (facade.contextDrawerLabelKeys().tooltip | translate)
+                        : null
+                "
+                [variant]="facade.contextPanel()"
+                [context]="facade.currentContext()"
+                [section]="facade.currentSection()"
+                [hasPlaylists]="!facade.hasNoPlaylists()"
+            />
+        }
+
+        <!-- The frame carries the content surface's rounded corner and
+             shadow without clipping; the scroller inside clips to a
+             rectangle (see the stylesheet for why). -->
+        <div class="workspace-content-frame">
+            <!-- tabindex="-1": programmatic focus target for the drawer-close
+                 fallback when the toggle is gone (navigated to a route without
+                 a context panel); not in the Tab order. -->
+            <main
+                #workspaceContent
+                class="workspace-content"
+                tabindex="-1"
+                [attr.inert]="contextDrawer.isOpen() ? '' : null"
+            >
+                <router-outlet />
+            </main>
+        </div>
+    </div>
+
+    @if (facade.showExternalPlaybackBar()) {
+        @if (facade.externalPlaybackSession(); as session) {
+            <footer
+                class="workspace-now-playing"
+                [attr.inert]="contextDrawer.isOpen() ? '' : null"
+            >
+                <app-external-playback-dock
+                    [session]="session"
+                    (closeClicked)="facade.closeActiveExternalSession()"
+                    (dismissClicked)="facade.dismissActiveExternalSession()"
+                    (artworkClicked)="facade.openActiveExternalSessionTarget()"
+                />
+            </footer>
+        }
+    }
+</div>

@@ -1,0 +1,330 @@
+import { inject, Injectable } from '@angular/core';
+import { PlaybackPositionData } from '@iptvnator/shared/interfaces';
+import { RuntimeCapabilitiesService } from './runtime-capabilities.service';
+
+type PlaybackPositionContentType = 'vod' | 'episode';
+
+type PlaybackPositionElectronBridge = Partial<{
+    dbSavePlaybackPosition: (
+        playlistId: string,
+        data: PlaybackPositionData
+    ) => Promise<{ success: boolean }>;
+    dbGetPlaybackPosition: (
+        playlistId: string,
+        contentXtreamId: number,
+        contentType: PlaybackPositionContentType
+    ) => Promise<PlaybackPositionData | null>;
+    dbGetSeriesPlaybackPositions: (
+        playlistId: string,
+        seriesXtreamId: number
+    ) => Promise<PlaybackPositionData[]>;
+    dbGetRecentPlaybackPositions: (
+        playlistId: string,
+        limit?: number
+    ) => Promise<PlaybackPositionData[]>;
+    dbGetAllPlaybackPositions: (
+        playlistId: string
+    ) => Promise<PlaybackPositionData[]>;
+    dbReplaceAllPlaybackPositions: (
+        playlistId: string,
+        items: PlaybackPositionData[]
+    ) => Promise<{ success: boolean }>;
+    dbClearAllPlaybackPositions: (
+        playlistId: string
+    ) => Promise<{ success: boolean }>;
+    dbClearPlaybackPosition: (
+        playlistId: string,
+        contentXtreamId: number,
+        contentType: PlaybackPositionContentType
+    ) => Promise<{ success: boolean }>;
+    dbSavePlaybackPositionsBatch: (
+        playlistId: string,
+        items: PlaybackPositionData[]
+    ) => Promise<{ success: boolean }>;
+    dbClearPlaybackPositionsBatch: (
+        playlistId: string,
+        items: {
+            contentXtreamId: number;
+            contentType: PlaybackPositionContentType;
+        }[]
+    ) => Promise<{ success: boolean }>;
+    onPlaybackPositionUpdate: (
+        callback: (data: PlaybackPositionData) => void
+    ) => () => void;
+}>;
+
+type PlaybackPositionRuntimeWindow = Window & {
+    electron?: PlaybackPositionElectronBridge;
+};
+
+@Injectable({ providedIn: 'root' })
+export class PlaybackPositionRuntimeBridgeService {
+    private readonly runtime = inject(RuntimeCapabilitiesService);
+
+    get supportsStorage(): boolean {
+        return this.runtime.supportsPlaybackPositionStorage;
+    }
+
+    get supportsUpdates(): boolean {
+        return this.runtime.supportsPlaybackPositionUpdates;
+    }
+
+    async savePlaybackPosition(
+        playlistId: string,
+        data: PlaybackPositionData
+    ): Promise<void> {
+        if (!this.supportsStorage) {
+            return;
+        }
+
+        await this.bridge?.dbSavePlaybackPosition?.(playlistId, data);
+    }
+
+    async savePlaybackPositionOrThrow(
+        playlistId: string,
+        data: PlaybackPositionData
+    ): Promise<void> {
+        if (!this.supportsStorage) {
+            throw new Error('Playback position storage is unavailable');
+        }
+
+        const bridge = this.bridge;
+        if (typeof bridge?.dbSavePlaybackPosition !== 'function') {
+            throw new Error('Playback position save method is unavailable');
+        }
+
+        const result = await bridge.dbSavePlaybackPosition(playlistId, data);
+        if (result?.success !== true) {
+            throw new Error('Playback position save did not succeed');
+        }
+    }
+
+    getPlaybackPosition(
+        playlistId: string,
+        contentXtreamId: number,
+        contentType: PlaybackPositionContentType
+    ): Promise<PlaybackPositionData | null> {
+        if (!this.supportsStorage) {
+            return Promise.resolve(null);
+        }
+
+        return (
+            this.bridge?.dbGetPlaybackPosition?.(
+                playlistId,
+                contentXtreamId,
+                contentType
+            ) ?? Promise.resolve(null)
+        );
+    }
+
+    getSeriesPlaybackPositions(
+        playlistId: string,
+        seriesXtreamId: number
+    ): Promise<PlaybackPositionData[]> {
+        if (!this.supportsStorage) {
+            return Promise.resolve([]);
+        }
+
+        return (
+            this.bridge?.dbGetSeriesPlaybackPositions?.(
+                playlistId,
+                seriesXtreamId
+            ) ?? Promise.resolve([])
+        );
+    }
+
+    getRecentPlaybackPositions(
+        playlistId: string,
+        limit?: number
+    ): Promise<PlaybackPositionData[]> {
+        if (!this.supportsStorage) {
+            return Promise.resolve([]);
+        }
+
+        return (
+            this.bridge?.dbGetRecentPlaybackPositions?.(playlistId, limit) ??
+            Promise.resolve([])
+        );
+    }
+
+    getAllPlaybackPositions(
+        playlistId: string
+    ): Promise<PlaybackPositionData[]> {
+        if (!this.supportsStorage) {
+            return Promise.resolve([]);
+        }
+
+        return (
+            this.bridge?.dbGetAllPlaybackPositions?.(playlistId) ??
+            Promise.resolve([])
+        );
+    }
+
+    async getAllPlaybackPositionsOrThrow(
+        playlistId: string
+    ): Promise<PlaybackPositionData[]> {
+        if (!this.supportsStorage) {
+            throw new Error('Playback position storage is unavailable');
+        }
+        const bridge = this.bridge;
+        if (typeof bridge?.dbGetAllPlaybackPositions !== 'function') {
+            throw new Error('Playback position read method is unavailable');
+        }
+        const result = await bridge.dbGetAllPlaybackPositions(playlistId);
+        if (!Array.isArray(result)) {
+            throw new Error('Playback position read did not succeed');
+        }
+        return result;
+    }
+
+    /** Preflight restores before any other user-state mutation or IPC work. */
+    assertSupportsAtomicReplacement(): void {
+        if (!this.supportsStorage) {
+            throw new Error('Playback position storage is unavailable');
+        }
+        if (typeof this.bridge?.dbReplaceAllPlaybackPositions !== 'function') {
+            throw new Error(
+                'Playback position replacement method is unavailable'
+            );
+        }
+    }
+
+    async replaceAllPlaybackPositions(
+        playlistId: string,
+        items: PlaybackPositionData[]
+    ): Promise<void> {
+        if (!this.supportsStorage) {
+            throw new Error('Playback position storage is unavailable');
+        }
+        const bridge = this.bridge;
+        if (typeof bridge?.dbReplaceAllPlaybackPositions !== 'function') {
+            throw new Error(
+                'Playback position replacement method is unavailable'
+            );
+        }
+        const result = await bridge.dbReplaceAllPlaybackPositions(
+            playlistId,
+            items
+        );
+        if (result?.success !== true) {
+            throw new Error('Playback position replacement did not succeed');
+        }
+    }
+
+    async clearAllPlaybackPositions(playlistId: string): Promise<void> {
+        if (!this.supportsStorage) {
+            return;
+        }
+
+        await this.bridge?.dbClearAllPlaybackPositions?.(playlistId);
+    }
+
+    async clearPlaybackPosition(
+        playlistId: string,
+        contentXtreamId: number,
+        contentType: PlaybackPositionContentType
+    ): Promise<void> {
+        if (!this.supportsStorage) {
+            return;
+        }
+
+        await this.bridge?.dbClearPlaybackPosition?.(
+            playlistId,
+            contentXtreamId,
+            contentType
+        );
+    }
+
+    async clearPlaybackPositionOrThrow(
+        playlistId: string,
+        contentXtreamId: number,
+        contentType: PlaybackPositionContentType
+    ): Promise<void> {
+        if (!this.supportsStorage) {
+            throw new Error('Playback position storage is unavailable');
+        }
+
+        const bridge = this.bridge;
+        if (typeof bridge?.dbClearPlaybackPosition !== 'function') {
+            throw new Error('Playback position clear method is unavailable');
+        }
+
+        const result = await bridge.dbClearPlaybackPosition(
+            playlistId,
+            contentXtreamId,
+            contentType
+        );
+        if (result?.success !== true) {
+            throw new Error('Playback position clear did not succeed');
+        }
+    }
+
+    async savePlaybackPositionsBatch(
+        playlistId: string,
+        items: PlaybackPositionData[]
+    ): Promise<void> {
+        if (!this.supportsStorage || items.length === 0) {
+            return;
+        }
+
+        const bridge = this.bridge;
+        if (typeof bridge?.dbSavePlaybackPositionsBatch !== 'function') {
+            throw new Error(
+                'Playback position batch save method is unavailable'
+            );
+        }
+
+        const result = await bridge.dbSavePlaybackPositionsBatch(
+            playlistId,
+            items
+        );
+        if (result?.success !== true) {
+            throw new Error('Playback position batch save did not succeed');
+        }
+    }
+
+    async clearPlaybackPositionsBatch(
+        playlistId: string,
+        items: {
+            contentXtreamId: number;
+            contentType: PlaybackPositionContentType;
+        }[]
+    ): Promise<void> {
+        if (!this.supportsStorage || items.length === 0) {
+            return;
+        }
+
+        const bridge = this.bridge;
+        if (typeof bridge?.dbClearPlaybackPositionsBatch !== 'function') {
+            throw new Error(
+                'Playback position batch clear method is unavailable'
+            );
+        }
+
+        const result = await bridge.dbClearPlaybackPositionsBatch(
+            playlistId,
+            items
+        );
+        if (result?.success !== true) {
+            throw new Error('Playback position batch clear did not succeed');
+        }
+    }
+
+    onPlaybackPositionUpdate(
+        callback: (data: PlaybackPositionData) => void
+    ): (() => void) | undefined {
+        if (!this.supportsUpdates) {
+            return undefined;
+        }
+
+        return this.bridge?.onPlaybackPositionUpdate?.(callback);
+    }
+
+    private get bridge(): PlaybackPositionElectronBridge | undefined {
+        if (typeof window === 'undefined') {
+            return undefined;
+        }
+
+        return (window as PlaybackPositionRuntimeWindow).electron;
+    }
+}

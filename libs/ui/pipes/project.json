@@ -1,0 +1,28 @@
+{
+    "name": "@iptvnator/pipes",
+    "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+    "sourceRoot": "libs/ui/pipes/src",
+    "prefix": "lib",
+    "projectType": "library",
+    "tags": ["scope:shared", "domain:shared-ui", "type:util"],
+    "targets": {
+        "test": {
+            "executor": "nx:run-commands",
+            "outputs": ["{workspaceRoot}/coverage/{projectRoot}"],
+            "options": {
+                "command": [
+                    "node",
+                    "./tools/testing/run-web-esm-lib-tests.mjs",
+                    "libs/ui/pipes/src"
+                ],
+                "env": {
+                    "NODE_OPTIONS": "--experimental-vm-modules"
+                },
+                "forwardAllArgs": true
+            }
+        },
+        "lint": {
+            "executor": "@nx/eslint:lint"
+        }
+    }
+}

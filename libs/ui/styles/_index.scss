@@ -1,0 +1,15 @@
+// Canonical forwarding inventory for shared IPTVnator UI styles.
+// The workspace has no global Sass include path for this directory; production
+// consumers use a relative path to the partial they need, for example:
+//
+//   @use '../../../../../../ui/styles/portal-layout' as portal;
+
+@forward 'portal-layout';
+@forward 'content-grid';
+@forward 'portal-sidebar';
+@forward 'panel-header';
+@forward 'detail-view';
+@forward 'detail-view-actions';
+@forward 'nav-list';
+@forward 'focus-ring';
+@forward 'skeleton-shimmer' as skeleton-*;

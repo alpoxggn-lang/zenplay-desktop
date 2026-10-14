@@ -1,0 +1,358 @@
+import { Page } from '@playwright/test';
+import {
+    addXtreamPortal,
+    channelItemByTitle,
+    clickCategoryByNameExact,
+    clickFirstGridListCard,
+    closeElectronApp,
+    expectVisibleContentCardTitle,
+    defaultXtreamPassword,
+    defaultXtreamUsername,
+    expectPathname,
+    expect,
+    goToDashboard,
+    launchElectronApp,
+    openWorkspaceSection,
+    resetMockServers,
+    test,
+    waitForXtreamWorkspaceReady,
+} from './electron-test-fixtures';
+import {
+    fetchXtreamEpgFixture,
+    fetchXtreamLiveFixture,
+    fetchXtreamSeriesFixture,
+    fetchXtreamVodFixture,
+    getXtreamTitle,
+    pickDistinctTitles,
+} from './portal-mock-fixtures';
+import {
+    routePlayableStreams,
+    startAndConfirmPlayback,
+} from './playable-stream-fixture';
+import {
+    addCurrentDetailToFavorites,
+    goBackFromDetail,
+    toggleFavoriteForChannel,
+} from './dashboard-e2e-flows';
+
+test.describe('Dashboard Activation', () => {
+    test('opens live favorites in the collection route and movies/series in global collection detail views from the dashboard', async ({
+        dataDir,
+        request,
+    }) => {
+        await resetMockServers(request, ['xtream']);
+        const liveFixture = await fetchXtreamLiveFixture(
+            request,
+            xtreamCredentials
+        );
+        const vodFixture = await fetchXtreamVodFixture(
+            request,
+            xtreamCredentials
+        );
+        const seriesFixture = await fetchXtreamSeriesFixture(
+            request,
+            xtreamCredentials
+        );
+        const [liveTitle] = pickDistinctTitles(
+            liveFixture.items,
+            getXtreamTitle
+        );
+        // The mock's guide for the channel favourited below (its first live
+        // stream). The programme on air is read off the full guide at
+        // assertion time: the mock cuts its slots from the second the guide
+        // was generated, so the "current" listing of a fixture fetched in
+        // that same second is the slot that ended just then.
+        const epgFixture = await fetchXtreamEpgFixture(
+            request,
+            xtreamCredentials
+        );
+        expect(getXtreamTitle(epgFixture.stream)).toBe(liveTitle);
+        const liveNowTitle = () => {
+            const nowSeconds = Math.floor(Date.now() / 1000);
+            const index = epgFixture.fullEpg.findIndex(
+                (listing) =>
+                    listing.startTimestamp <= nowSeconds &&
+                    nowSeconds < listing.stopTimestamp
+            );
+            expect(index).toBeGreaterThanOrEqual(0);
+            // Tolerate a slot boundary passing between the app's answer and
+            // this assertion.
+            const titles = epgFixture.fullEpg
+                .slice(index, index + 2)
+                .map((listing) =>
+                    listing.title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+                );
+            return new RegExp(titles.join('|'));
+        };
+        const app = await launchElectronApp(dataDir);
+        await routePlayableStreams(app.mainWindow);
+
+        try {
+            await addXtreamPortal(app.mainWindow, {
+                name: 'Xtream Dashboard Activation Source',
+            });
+            await waitForXtreamWorkspaceReady(app.mainWindow);
+
+            await openWorkspaceSection(app.mainWindow, 'Live TV');
+            await clickCategoryByNameExact(
+                app.mainWindow,
+                liveFixture.categoryName
+            );
+            await toggleFavoriteForChannel(app.mainWindow, liveTitle);
+
+            await app.mainWindow
+                .getByRole('link', { name: 'Movies', exact: true })
+                .click();
+            await clickCategoryByNameExact(
+                app.mainWindow,
+                vodFixture.categoryName
+            );
+            const movieTitle = await clickFirstGridListCard(app.mainWindow);
+            await addCurrentDetailToFavorites(app.mainWindow);
+            // Recorded as recently viewed once it has really played.
+            await startAndConfirmPlayback(app.mainWindow, () =>
+                playCurrentDetail(app.mainWindow)
+            );
+            await goBackFromDetail(app.mainWindow);
+
+            await app.mainWindow
+                .getByRole('link', { name: 'Series', exact: true })
+                .click();
+            await clickCategoryByNameExact(
+                app.mainWindow,
+                seriesFixture.categoryName
+            );
+            const seriesTitle = await clickFirstGridListCard(app.mainWindow);
+            await addCurrentDetailToFavorites(app.mainWindow);
+            await startAndConfirmPlayback(app.mainWindow, () =>
+                playFirstSeriesEpisode(app.mainWindow)
+            );
+
+            await goToDashboard(app.mainWindow);
+
+            // Favorited movies/series are shown as cover cards in their own
+            // rail. The rail's "See all" opens Global Favorites directly on
+            // Movies instead of defaulting back to Live TV.
+            await expectDashboardRail(
+                app.mainWindow,
+                'dashboard-favorite-vod-rail'
+            );
+            await app.mainWindow
+                .getByTestId('dashboard-favorite-vod-rail-manage-all')
+                .click();
+            await expectPathname(
+                app.mainWindow,
+                /\/workspace\/global-favorites$/
+            );
+            await expectVisibleContentCardTitle(app.mainWindow, movieTitle);
+
+            await app.mainWindow.goBack();
+            await expectPathname(app.mainWindow, /\/workspace\/dashboard$/);
+
+            await dashboardRailCardByTitle(
+                app.mainWindow,
+                'dashboard-favorite-vod-rail',
+                movieTitle
+            ).click();
+            await expectInlineCollectionDetail(app.mainWindow, {
+                pathname: /\/workspace\/global-favorites$/,
+                title: movieTitle,
+            });
+
+            await app.mainWindow.goBack();
+            await expectPathname(app.mainWindow, /\/workspace\/dashboard$/);
+
+            await dashboardRailCardByTitle(
+                app.mainWindow,
+                'dashboard-favorite-vod-rail',
+                seriesTitle
+            ).click();
+            await expectInlineCollectionDetail(app.mainWindow, {
+                pathname: /\/workspace\/global-favorites$/,
+                title: seriesTitle,
+            });
+
+            await app.mainWindow.goBack();
+            await expectPathname(app.mainWindow, /\/workspace\/dashboard$/);
+
+            // Live favorites no longer fall back to recent live history.
+            // Clicking a favorited live card still opens the Xtream favorites
+            // collection with the channel playing.
+            await expectDashboardRail(
+                app.mainWindow,
+                'dashboard-live-favorites-rail'
+            );
+            // An Xtream card has no XMLTV key: its "now on air" line comes
+            // from the portal, asked for lazily once the card is on screen.
+            await expect(
+                dashboardRailCardByTitle(
+                    app.mainWindow,
+                    'dashboard-live-favorites-rail',
+                    liveTitle
+                ).locator('.rail__channel-now')
+            ).toContainText(liveNowTitle(), { timeout: 30000 });
+            await startAndConfirmPlayback(app.mainWindow, () =>
+                dashboardRailCardByTitle(
+                    app.mainWindow,
+                    'dashboard-live-favorites-rail',
+                    liveTitle
+                ).click()
+            );
+            await app.mainWindow.waitForURL(
+                /\/workspace\/xtreams\/[^/]+\/favorites$/
+            );
+            await expect(
+                app.mainWindow
+                    .locator(
+                        'app-unified-live-tab .content-container .video-player'
+                    )
+                    .first()
+            ).toBeVisible({ timeout: 20000 });
+            await expect(
+                channelItemByTitle(app.mainWindow, liveTitle).first()
+            ).toHaveClass(/(^|\s)active(\s|$)/);
+
+            await app.mainWindow.goBack();
+            await app.mainWindow.waitForURL(/\/workspace\/dashboard$/);
+
+            // Once the live card has been played, the separate recently
+            // watched live rail appears with the same channel layout.
+            await expectDashboardRail(
+                app.mainWindow,
+                'dashboard-recent-live-rail'
+            );
+            // Same channel, same key: the recent card shares the answer.
+            await expect(
+                dashboardRailCardByTitle(
+                    app.mainWindow,
+                    'dashboard-recent-live-rail',
+                    liveTitle
+                ).locator('.rail__channel-now')
+            ).toContainText(liveNowTitle(), { timeout: 30000 });
+            await dashboardRailCardByTitle(
+                app.mainWindow,
+                'dashboard-recent-live-rail',
+                liveTitle
+            ).click();
+            await expectPathname(
+                app.mainWindow,
+                /\/workspace\/xtreams\/[^/]+\/recent$/
+            );
+            await expect(
+                channelItemByTitle(app.mainWindow, liveTitle).first()
+            ).toBeVisible({ timeout: 20000 });
+
+            await app.mainWindow.goBack();
+            await expectPathname(app.mainWindow, /\/workspace\/dashboard$/);
+
+            // Movies and series that were played land in the Continue
+            // Watching rail (formerly "recently-watched"); clicking a card
+            // opens it inline in the global-recent collection detail view.
+            await expectDashboardRail(
+                app.mainWindow,
+                'dashboard-continue-watching-rail'
+            );
+            await dashboardRailCardByTitle(
+                app.mainWindow,
+                'dashboard-continue-watching-rail',
+                movieTitle
+            ).click();
+            await expectInlineCollectionDetail(app.mainWindow, {
+                pathname: /\/workspace\/global-recent$/,
+                title: movieTitle,
+            });
+
+            await app.mainWindow.goBack();
+            await expectPathname(app.mainWindow, /\/workspace\/dashboard$/);
+
+            await dashboardRailCardByTitle(
+                app.mainWindow,
+                'dashboard-continue-watching-rail',
+                seriesTitle
+            ).click();
+            await expectInlineCollectionDetail(app.mainWindow, {
+                pathname: /\/workspace\/global-recent$/,
+                title: seriesTitle,
+            });
+
+            await goBackFromDetail(app.mainWindow);
+            await expectPathname(app.mainWindow, /\/workspace\/dashboard$/);
+        } finally {
+            await closeElectronApp(app);
+        }
+    });
+});
+
+const xtreamCredentials = {
+    username: defaultXtreamUsername,
+    password: defaultXtreamPassword,
+};
+
+async function expectDashboardRail(
+    page: Page,
+    railTestId: string
+): Promise<void> {
+    await expect(page.locator(`[data-test-id="${railTestId}"]`)).toBeVisible({
+        timeout: 20000,
+    });
+}
+
+function dashboardRailCardByTitle(
+    page: Page,
+    railTestId: string,
+    title: string
+) {
+    return page
+        .locator(`[data-test-id="${railTestId}-card"]`)
+        .filter({
+            hasText: title,
+        })
+        .first();
+}
+
+async function expectInlineCollectionDetail(
+    page: Page,
+    params: {
+        pathname: RegExp;
+        title: string;
+    }
+): Promise<void> {
+    await expectPathname(page, params.pathname);
+    await expect(page.locator('app-workspace-context-panel')).toHaveCount(0);
+    await expect(page.locator('app-content-hero')).toContainText(params.title);
+    await expect(page.getByTestId('workspace-header-back')).toBeVisible({
+        timeout: 20000,
+    });
+}
+
+async function playCurrentDetail(page: Page): Promise<void> {
+    const playButton = page.locator('button.play-btn').first();
+
+    await expect(playButton).toBeVisible({ timeout: 20000 });
+    await playButton.click();
+}
+
+async function playFirstSeriesEpisode(page: Page): Promise<void> {
+    const seasonCard = page.locator('.season-card').first();
+    const episodeCard = page
+        .locator('.episode-card, .episode-list-item')
+        .first();
+
+    await expect
+        .poll(
+            async () =>
+                (await seasonCard.count()) + (await episodeCard.count()),
+            { timeout: 20000 }
+        )
+        .toBeGreaterThan(0);
+
+    if ((await seasonCard.count()) > 0) {
+        await seasonCard.scrollIntoViewIfNeeded();
+        await expect(seasonCard).toBeVisible({ timeout: 20000 });
+        await seasonCard.click();
+    }
+
+    await episodeCard.scrollIntoViewIfNeeded();
+    await expect(episodeCard).toBeVisible({ timeout: 20000 });
+    await episodeCard.click();
+}

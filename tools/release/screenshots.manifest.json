@@ -1,0 +1,263 @@
+{
+    "version": 1,
+    "viewport": {
+        "width": 1280,
+        "height": 720
+    },
+    "themes": [
+        "dark",
+        "light"
+    ],
+    "shots": [
+        {
+            "slug": "dashboard",
+            "title": "Dashboard",
+            "setup": [
+                "open-dashboard"
+            ]
+        },
+        {
+            "slug": "settings",
+            "title": "Settings",
+            "setup": [
+                "open-settings"
+            ]
+        },
+        {
+            "slug": "settings-search",
+            "title": "Settings search results",
+            "setup": [
+                "open-settings-search=player"
+            ]
+        },
+        {
+            "slug": "xtream-vod-details",
+            "title": "Movie details",
+            "setup": [
+                "open-xtream-vod=Action & Mystery"
+            ]
+        },
+        {
+            "slug": "xtream-series-season-open",
+            "title": "Series season view",
+            "setup": [
+                "open-xtream-series=Urban Drama"
+            ]
+        },
+        {
+            "slug": "m3u-live-groups-two-column",
+            "title": "Live TV groups",
+            "setup": [
+                "open-m3u-groups"
+            ]
+        },
+        {
+            "slug": "guide-xtream-add-playlist",
+            "title": "Add playlist: Xtream credentials",
+            "group": "guides",
+            "setup": [
+                "open-add-playlist-xtream"
+            ]
+        },
+        {
+            "slug": "guide-xtream-auto-detect",
+            "title": "Add playlist: Auto-detect",
+            "group": "guides",
+            "setup": [
+                "open-add-playlist-auto"
+            ]
+        },
+        {
+            "slug": "guide-xtream-live",
+            "title": "Xtream Live TV",
+            "group": "guides",
+            "setup": [
+                "open-xtream-live"
+            ]
+        },
+        {
+            "slug": "guide-stalker-add-playlist",
+            "title": "Add playlist: Stalker portal",
+            "group": "guides",
+            "setup": [
+                "open-add-playlist-stalker"
+            ]
+        },
+        {
+            "slug": "guide-stalker-live",
+            "title": "Stalker Live TV",
+            "group": "guides",
+            "setup": [
+                "open-stalker-live"
+            ]
+        },
+        {
+            "slug": "guide-m3u-add-playlist",
+            "title": "Add playlist: M3U URL",
+            "group": "guides",
+            "setup": [
+                "open-add-playlist-m3u-url"
+            ]
+        },
+        {
+            "slug": "guide-m3u-live-groups",
+            "title": "M3U Live TV groups",
+            "group": "guides",
+            "setup": [
+                "open-m3u-groups"
+            ]
+        },
+        {
+            "slug": "guide-epg-settings",
+            "title": "Settings: EPG sources",
+            "group": "guides",
+            "setup": [
+                "open-settings-epg"
+            ]
+        },
+        {
+            "slug": "guide-downloads-movie-detail",
+            "title": "Movie details with the download action",
+            "group": "guides",
+            "setup": [
+                "open-xtream-vod=Action & Mystery"
+            ]
+        },
+        {
+            "slug": "guide-downloads-manager",
+            "title": "Download manager: queue and offline library",
+            "group": "guides",
+            "setup": [
+                "open-downloads-manager"
+            ]
+        },
+        {
+            "slug": "guide-downloads-offline-movie",
+            "title": "Offline movie detail",
+            "group": "guides",
+            "setup": [
+                "open-downloads-offline-movie"
+            ]
+        },
+        {
+            "slug": "guide-sources-chip",
+            "title": "Movie details with the Sources chip",
+            "group": "guides",
+            "setup": [
+                "open-xtream-vod-sources=Action & Mystery"
+            ]
+        },
+        {
+            "slug": "guide-sources-menu",
+            "title": "Sources popover with checked copies",
+            "group": "guides",
+            "setup": [
+                "open-xtream-vod-sources-menu=Action & Mystery"
+            ]
+        },
+        {
+            "slug": "guide-remote-settings",
+            "title": "Settings: remote control with QR code",
+            "group": "guides",
+            "setup": [
+                "open-settings-remote-control"
+            ]
+        },
+        {
+            "slug": "guide-remote-phone",
+            "title": "Remote control phone view",
+            "group": "guides",
+            "setup": [
+                "enable-remote-control",
+                "open-xtream-live-channel=Newsroom"
+            ],
+            "browser": {
+                "url": "http://127.0.0.1:8765/",
+                "viewport": {
+                    "width": 390,
+                    "height": 1100
+                }
+            }
+        },
+        {
+            "slug": "guide-epg-map-menu",
+            "title": "Channel context menu with Map EPG channel",
+            "group": "guides",
+            "setup": [
+                "open-m3u-channel-menu"
+            ]
+        },
+        {
+            "slug": "guide-epg-map-dialog",
+            "title": "Map EPG channel dialog with a search result",
+            "group": "guides",
+            "setup": [
+                "open-epg-mapping-dialog"
+            ]
+        },
+        {
+            "slug": "guide-epg-offset",
+            "title": "Settings: EPG time offset",
+            "group": "guides",
+            "setup": [
+                "open-settings-epg-offset"
+            ]
+        },
+        {
+            "slug": "guide-tmdb-settings",
+            "title": "Settings: Metadata (TMDB)",
+            "group": "guides",
+            "setup": [
+                "open-settings-tmdb"
+            ]
+        },
+        {
+            "slug": "guide-update-channel",
+            "group": "feature-guides",
+            "description": "update channel",
+            "setup": [
+                "open-update-channel"
+            ]
+        },
+        {
+            "slug": "guide-backup",
+            "group": "feature-guides",
+            "description": "backup",
+            "setup": [
+                "open-backup"
+            ]
+        },
+        {
+            "slug": "guide-library-watched",
+            "group": "feature-guides",
+            "description": "library watched state",
+            "setup": [
+                "open-library-watched"
+            ]
+        },
+        {
+            "slug": "guide-player-subtitles",
+            "group": "feature-guides",
+            "description": "player subtitles",
+            "setup": [
+                "open-player-subtitles"
+            ]
+        },
+        {
+            "slug": "guide-stream-info",
+            "group": "feature-guides",
+            "description": "stream info",
+            "setup": [
+                "open-stream-info"
+            ]
+        },
+        {
+            "slug": "guide-fullscreen-channels",
+            "group": "feature-guides",
+            "description": "fullscreen channels",
+            "setup": [
+                "open-fullscreen-channels"
+            ]
+        }
+    ]
+}

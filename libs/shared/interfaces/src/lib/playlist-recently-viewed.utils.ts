@@ -1,0 +1,139 @@
+import { PlaylistMeta } from './playlist-meta.type';
+import { PortalRecentItem } from './portal-activity-item.interface';
+import { extractStalkerItemTmdbHints } from './stalker-item-tmdb-hints';
+import {
+    extractStalkerItemId,
+    extractStalkerItemPoster,
+    extractStalkerItemTitle,
+    extractStalkerItemType,
+    isStalkerSeriesItem,
+    normalizeStalkerDate,
+} from './stalker-item.normalizer';
+import {
+    PlaylistRecentlyViewedItem,
+    isM3uRecentlyViewedItem,
+} from './playlist-recently-viewed.interface';
+
+interface PlaylistRecentLabels {
+    stalker: string;
+    m3u: string;
+}
+
+function firstNonEmpty(...values: Array<string | undefined>): string | undefined {
+    return values.map((value) => value?.trim()).find(Boolean);
+}
+
+function getPlaylistRecentItems(
+    playlist: PlaylistMeta
+): PlaylistRecentlyViewedItem[] {
+    return Array.isArray(playlist.recentlyViewed)
+        ? (playlist.recentlyViewed as PlaylistRecentlyViewedItem[])
+        : [];
+}
+
+function mapStalkerPlaylistRecentItems(
+    playlist: PlaylistMeta,
+    defaultPlaylistName: string
+): PortalRecentItem[] {
+    return getPlaylistRecentItems(playlist).reduce<PortalRecentItem[]>(
+        (acc, rawItem, index) => {
+            if (isM3uRecentlyViewedItem(rawItem)) {
+                return acc;
+            }
+
+            const item = (rawItem ?? {}) as Record<string, unknown>;
+            const id = extractStalkerItemId(item, playlist._id, index);
+
+            acc.push({
+                id,
+                title: extractStalkerItemTitle(item),
+                type: extractStalkerItemType(item),
+                playlist_id: playlist._id,
+                playlist_name: playlist.title || defaultPlaylistName,
+                viewed_at: normalizeStalkerDate(item['added_at']),
+                category_id: String(item['category_id'] ?? ''),
+                xtream_id: id,
+                poster_url: extractStalkerItemPoster(item),
+                // Stalker has no `content` row to back-fill, so the backdrop
+                // travels inside the stored entry itself — present once the
+                // detail view has enriched the item.
+                backdrop_url: extractStalkerItemTmdbHints(item).backdropUrl,
+                source: 'stalker',
+                stalker_item: rawItem,
+                // `type` stays the routing verdict: an embedded-VOD row
+                // (a `series[]` array, no flag) routes as a movie. Either
+                // shape tracks progress per episode, keyed by this parent id.
+                ...(isStalkerSeriesItem(item) ? { watch_kind: 'series' } : {}),
+            });
+
+            return acc;
+        },
+        []
+    );
+}
+
+function mapM3uPlaylistRecentItems(
+    playlist: PlaylistMeta,
+    defaultPlaylistName: string
+): PortalRecentItem[] {
+    return getPlaylistRecentItems(playlist).reduce<PortalRecentItem[]>(
+        (acc, rawItem) => {
+            if (!isM3uRecentlyViewedItem(rawItem)) {
+                return acc;
+            }
+
+            const channelUrl = rawItem.url.trim();
+            if (!channelUrl) {
+                return acc;
+            }
+
+            acc.push({
+                id: rawItem.id || channelUrl,
+                title:
+                    firstNonEmpty(
+                        rawItem.title,
+                        rawItem.tvg_name,
+                        rawItem.channel_id
+                    ) ||
+                    channelUrl,
+                type: 'live',
+                playlist_id: playlist._id,
+                playlist_name: playlist.title || defaultPlaylistName,
+                viewed_at: normalizeStalkerDate(rawItem.added_at),
+                category_id: rawItem.category_id || 'live',
+                xtream_id: channelUrl,
+                poster_url: rawItem.poster_url || undefined,
+                epg_lookup_key: firstNonEmpty(
+                    rawItem.tvg_id,
+                    rawItem.tvg_name,
+                    rawItem.title,
+                    rawItem.channel_id
+                ),
+                source: 'm3u',
+            });
+
+            return acc;
+        },
+        []
+    );
+}
+
+export function buildPlaylistRecentItems(
+    playlists: PlaylistMeta[],
+    labels: PlaylistRecentLabels
+): PortalRecentItem[] {
+    return playlists.reduce<PortalRecentItem[]>((acc, playlist) => {
+        if (playlist.macAddress) {
+            acc.push(
+                ...mapStalkerPlaylistRecentItems(playlist, labels.stalker)
+            );
+            return acc;
+        }
+
+        if (!playlist.serverUrl) {
+            acc.push(...mapM3uPlaylistRecentItems(playlist, labels.m3u));
+        }
+
+        return acc;
+    }, []);
+}

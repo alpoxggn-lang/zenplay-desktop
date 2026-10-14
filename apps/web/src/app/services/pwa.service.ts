@@ -1,0 +1,828 @@
+import { HttpClient } from '@angular/common/http';
+import { inject, Injectable } from '@angular/core';
+import { MatSnackBar } from '@angular/material/snack-bar';
+import { Store } from '@ngrx/store';
+import { TranslateService } from '@ngx-translate/core';
+import { PlaylistActions } from '@iptvnator/m3u-state';
+import {
+    catchError,
+    firstValueFrom,
+    from,
+    Observable,
+    switchMap,
+    throwError,
+} from 'rxjs';
+import { DataService } from '@iptvnator/services';
+import {
+    CONNECTIVITY_GUARD_RESET,
+    ERROR,
+    isHostConnectivityFastFailMessage,
+    Playlist,
+    PLAYLIST_PARSE_BY_URL,
+    PLAYLIST_UPDATE,
+    STALKER_REQUEST,
+    XtreamCodeActions,
+    XTREAM_REQUEST,
+    XTREAM_RESPONSE,
+} from '@iptvnator/shared/interfaces';
+import { AppConfig } from '../../environments/environment';
+import {
+    createPortalDebugErrorEvent,
+    createPortalDebugRequestContext,
+    createPortalDebugSuccessEvent,
+    logPortalDebugEvent,
+    logPortalDebugRequest,
+    createLogger,
+} from '@iptvnator/portal/shared/util/logger';
+import { getRuntimeBackendUrl } from './runtime-config';
+import { PwaUpdateService } from './pwa-update.service';
+
+/**
+ * How long to wait for the backend to forget a host before giving up.
+ *
+ * This talks to the user's own backend, not a provider, so it should answer
+ * immediately; the bound exists so a stuck one cannot hold up the retry that
+ * asked for the reset. Short on purpose — the reset is best effort, and the
+ * caller's own request reports the real state either way.
+ */
+const CONNECTIVITY_GUARD_RESET_TIMEOUT_MS = 5_000;
+
+interface PwaXtreamResponse {
+    readonly payload?: unknown;
+    readonly status?: number;
+}
+
+interface PwaXtreamResult {
+    readonly action: string;
+    readonly payload: unknown;
+    readonly type: typeof XTREAM_RESPONSE;
+}
+
+interface PwaErrorResult {
+    readonly message: string;
+    readonly status: number;
+    readonly type: typeof ERROR;
+}
+
+interface ErrorStatus {
+    readonly message?: string;
+    readonly status?: number;
+}
+
+interface ProviderTargetRegistration {
+    readonly targetId: string;
+}
+
+@Injectable({
+    providedIn: 'root',
+})
+export class PwaService extends DataService {
+    private messageListeners = new Map<string, EventListener>();
+    private readonly http = inject(HttpClient);
+    private readonly snackBar = inject(MatSnackBar);
+    private readonly store = inject(Store);
+    private readonly pwaUpdates = inject(PwaUpdateService);
+    private readonly translateService = inject(TranslateService);
+    private readonly logger = createLogger('PwaService');
+    private readonly providerTargetIds = new Map<string, Promise<string>>();
+    private readonly silentXtreamActions = new Set<string>([
+        XtreamCodeActions.GetAccountInfo,
+        XtreamCodeActions.GetLiveCategories,
+        XtreamCodeActions.GetVodCategories,
+        XtreamCodeActions.GetSeriesCategories,
+        XtreamCodeActions.GetShortEpg,
+        XtreamCodeActions.GetSimpleDataTable,
+        XtreamCodeActions.GetSimpleDateTable,
+    ]);
+
+    /** Proxy URL to avoid CORS issues */
+    corsProxyUrl = getRuntimeBackendUrl();
+
+    constructor() {
+        super();
+        this.checkUpdates();
+    }
+
+    /** Uses service worker mechanism to check for available application updates */
+    checkUpdates(): void {
+        this.pwaUpdates.start();
+    }
+
+    getAppVersion(): string {
+        return AppConfig.version;
+    }
+
+    /**
+     * Handles incoming IPC commands
+     * @param type ipc command type
+     * @param payload payload
+     */
+    sendIpcEvent<T = unknown>(type: string, payload?: unknown): T {
+        if (type === PLAYLIST_PARSE_BY_URL) {
+            this.fetchFromUrl(payload as Partial<Playlist>);
+            return undefined as T;
+        }
+
+        if (type === PLAYLIST_UPDATE) {
+            this.refreshPlaylist(payload as Partial<Playlist & { id: string }>);
+            return undefined as T;
+        }
+
+        if (type === XTREAM_REQUEST) {
+            return this.forwardXtreamRequest(
+                payload as { url: string; params: Record<string, string> }
+            ) as T;
+        }
+
+        if (type === STALKER_REQUEST) {
+            return this.forwardStalkerRequest(
+                payload as {
+                    url: string;
+                    macAddress: string;
+                    params: Record<string, string>;
+                    token?: string;
+                    serialNumber?: string;
+                    silent?: boolean;
+                    skipConnectionGuard?: boolean;
+                }
+            ) as T;
+        }
+
+        if (type === CONNECTIVITY_GUARD_RESET) {
+            return this.resetConnectivityGuard(
+                payload as { url?: string }
+            ) as T;
+        }
+
+        return undefined as T;
+    }
+
+    /**
+     * Clears the web backend's per-host failure record, so the next request
+     * contacts the host for real instead of being fast-failed.
+     *
+     * The breaker lives in the backend process, not the browser, so this is an
+     * HTTP call rather than a local reset. Best effort by design — the caller's
+     * own request reports the real state, and `resetHostConnectivityGuard`
+     * swallows whatever this rejects with.
+     */
+    private async resetConnectivityGuard(payload: {
+        url?: string;
+    }): Promise<{ reset: boolean }> {
+        if (!payload?.url) {
+            return { reset: false };
+        }
+
+        // Bounded, because every caller awaits this BEFORE issuing the request
+        // it is clearing the way for. `fetch` has no timeout of its own, so a
+        // backend or reverse proxy that accepts the POST and then goes quiet
+        // would leave Retry doing nothing at all — the failure this whole
+        // change exists to stop, reintroduced one layer up. The abort rejects,
+        // `resetHostConnectivityGuard` swallows it, and the caller proceeds.
+        const controller = new AbortController();
+        const abortTimer = setTimeout(
+            () => controller.abort(),
+            CONNECTIVITY_GUARD_RESET_TIMEOUT_MS
+        );
+
+        try {
+            const response = await fetch(
+                `${this.corsProxyUrl}/connectivity-guard/reset`,
+                {
+                    body: JSON.stringify({ url: payload.url }),
+                    headers: { 'content-type': 'application/json' },
+                    method: 'POST',
+                    signal: controller.signal,
+                }
+            );
+
+            if (!response.ok) {
+                return { reset: false };
+            }
+
+            return (await response.json()) as { reset: boolean };
+        } finally {
+            clearTimeout(abortTimer);
+        }
+    }
+
+    refreshPlaylist(payload?: Partial<Playlist & { id: string }>) {
+        if (!payload?.url || !payload?.id) {
+            return;
+        }
+
+        const playlistId = payload.id;
+
+        this.getPlaylistFromUrl(payload.url, payload.userAgent)
+            .pipe(
+                catchError((error) => {
+                    this.snackBar.open(
+                        this.appendProviderErrorCode(
+                            this.getPlaylistRefreshErrorMessage(error),
+                            error
+                        ),
+                        this.translateService.instant('CLOSE'),
+                        {
+                            duration: 5000,
+                        }
+                    );
+                    return throwError(() => error);
+                })
+            )
+            .subscribe((playlist: Playlist) => {
+                this.store.dispatch(
+                    PlaylistActions.updatePlaylist({
+                        playlist,
+                        playlistId,
+                        refreshEpg: true,
+                    })
+                );
+
+                this.snackBar.open(
+                    this.translateService.instant(
+                        'HOME.PLAYLISTS.PLAYLIST_UPDATE_SUCCESS'
+                    ),
+                    undefined,
+                    { duration: 2000 }
+                );
+            });
+    }
+
+    private getPlaylistRefreshErrorMessage(error: unknown): string {
+        const statusCode =
+            this.getErrorDetails(error)?.status ??
+            this.extractHttpStatusCode(error);
+
+        if (statusCode === 404) {
+            return this.translateService.instant('HOME.URL_UPLOAD.ERROR_404');
+        }
+        if (statusCode === 403) {
+            return this.translateService.instant('HOME.URL_UPLOAD.ERROR_403');
+        }
+        if (statusCode === 401) {
+            return this.translateService.instant('HOME.URL_UPLOAD.ERROR_401');
+        }
+        return this.translateService.instant(
+            'HOME.URL_UPLOAD.ERROR_FETCH_FAILED'
+        );
+    }
+
+    /**
+     * Fetches playlist from the specified url
+     * @param payload playlist payload
+     */
+    fetchFromUrl(payload?: Partial<Playlist>): void {
+        if (!payload?.url) {
+            return;
+        }
+
+        const title = payload.title?.trim() || undefined;
+
+        this.getPlaylistFromUrl(payload.url, payload.userAgent)
+            .pipe(
+                catchError((error) => {
+                    this.snackBar.open(
+                        this.appendProviderErrorCode(
+                            this.getErrorMessageByStatusCode(
+                                this.extractHttpStatusCode(error)
+                            ),
+                            error
+                        ),
+                        this.translateService.instant('CLOSE'),
+                        {
+                            duration: 5000,
+                        }
+                    );
+                    return throwError(() => error);
+                })
+            )
+            .subscribe((response: Playlist) => {
+                const playlist = title
+                    ? {
+                          ...response,
+                          filename: title,
+                          title,
+                      }
+                    : response;
+
+                this.store.dispatch(
+                    PlaylistActions.handleAddingPlaylistByUrl({
+                        isTemporary: !!payload?.isTemporary,
+                        playlist,
+                    })
+                );
+            });
+    }
+
+    getErrorMessageByStatusCode(status: number | null | undefined) {
+        let messageKey = 'HOME.URL_UPLOAD.ERROR_FETCH_FAILED';
+        switch (status) {
+            case 413:
+                messageKey = 'HOME.URL_UPLOAD.ERROR_413';
+                break;
+            case 403:
+                messageKey = 'HOME.URL_UPLOAD.ERROR_403';
+                break;
+            case 404:
+                messageKey = 'HOME.URL_UPLOAD.ERROR_404';
+                break;
+            case 401:
+                messageKey = 'HOME.URL_UPLOAD.ERROR_401';
+                break;
+            default:
+                break;
+        }
+        return this.translateService.instant(messageKey);
+    }
+
+    /**
+     * The web backend attaches the underlying Node network code (ETIMEDOUT,
+     * ENETUNREACH, ...) to proxy error bodies; without it the toast collapses
+     * every connection failure into the same generic fetch error (#1400).
+     */
+    private appendProviderErrorCode(message: string, error: unknown): string {
+        const body = (error as { error?: { code?: unknown } } | null)?.error;
+        const code = typeof body?.code === 'string' ? body.code : '';
+        return code && !message.includes(`(${code})`)
+            ? `${message} (${code})`
+            : message;
+    }
+
+    private extractHttpStatusCode(error: unknown): number | null {
+        if (
+            error &&
+            typeof error === 'object' &&
+            'status' in error &&
+            typeof error.status === 'number'
+        ) {
+            return error.status;
+        }
+
+        const msg = String((error as { message?: string })?.message ?? error);
+        const match = msg.match(/status code (\d{3})/);
+        return match ? parseInt(match[1], 10) : null;
+    }
+
+    async forwardXtreamRequest(payload: {
+        connectionTest?: boolean;
+        url: string;
+        params: Record<string, string>;
+        macAddress?: string;
+        requestId?: string;
+        sessionId?: string;
+        suppressErrorLog?: boolean;
+    }) {
+        const headers = payload.macAddress
+            ? {
+                  headers: {
+                      Cookie: `mac=${payload.macAddress}`,
+                  },
+              }
+            : {};
+        let context = createPortalDebugRequestContext({
+            provider: 'xtream',
+            operation: payload.params?.action ?? 'unknown',
+            transport: 'pwa-http',
+            request: {
+                method: 'GET',
+                params: payload.params,
+                url: `${this.corsProxyUrl}/xtream`,
+            },
+        });
+
+        try {
+            let result: PwaErrorResult | PwaXtreamResult;
+            let targetId = await this.getProviderTargetId(payload.url);
+            const requestXtream = async (): Promise<PwaXtreamResponse> => {
+                const requestBody = {
+                    targetId,
+                    params: payload.params,
+                    ...(payload.connectionTest
+                        ? { connectionTest: true }
+                        : {}),
+                };
+                const requestPayload = {
+                    method: 'POST',
+                    body: requestBody,
+                    url: `${this.corsProxyUrl}/xtream`,
+                    ...(payload.macAddress
+                        ? {
+                              headers: {
+                                  Cookie: `mac=${payload.macAddress}`,
+                              },
+                          }
+                        : {}),
+                };
+                context = createPortalDebugRequestContext({
+                    provider: 'xtream',
+                    operation: payload.params?.action ?? 'unknown',
+                    transport: 'pwa-http',
+                    request: requestPayload,
+                });
+                logPortalDebugRequest(context);
+                return firstValueFrom(
+                    this.http.post<PwaXtreamResponse>(
+                        `${this.corsProxyUrl}/xtream`,
+                        requestBody,
+                        headers
+                    )
+                );
+            };
+
+            let response: PwaXtreamResponse;
+            try {
+                response = await requestXtream();
+            } catch (error) {
+                if (!this.isStaleProviderTargetError(error)) throw error;
+
+                // Provider target ids live only in the backend process. After
+                // a backend restart this tab can still hold the old opaque id;
+                // register the same URL again and replay this safe POST once.
+                // Compare before deleting so concurrent stale requests cannot
+                // discard a target that another request already refreshed.
+                await this.invalidateProviderTargetId(payload.url, targetId);
+                targetId = await this.getProviderTargetId(payload.url);
+                response = await requestXtream();
+            }
+
+            if (payload.connectionTest) return response;
+
+            if (!response.payload) {
+                const action = payload.params.action;
+                const isSilentAction =
+                    payload.suppressErrorLog === true ||
+                    this.silentXtreamActions.has(action);
+                const normalizedMessage =
+                    this.getReadableXtreamErrorMessage(response);
+                logPortalDebugEvent(
+                    createPortalDebugErrorEvent(context, response)
+                );
+
+                if (isSilentAction) {
+                    this.logger.debug(
+                        `Background Xtream action failed (${action ?? 'unknown'}):`,
+                        normalizedMessage
+                    );
+                    return {
+                        type: ERROR,
+                        status: response.status ?? 500,
+                        message: normalizedMessage,
+                    };
+                }
+
+                result = {
+                    type: ERROR,
+                    status: response.status ?? 500,
+                    message: normalizedMessage,
+                };
+                window.postMessage(result);
+            } else {
+                result = {
+                    type: XTREAM_RESPONSE,
+                    payload: response.payload,
+                    action: payload.params.action,
+                };
+                logPortalDebugEvent(
+                    createPortalDebugSuccessEvent(context, response)
+                );
+                window.postMessage(result);
+            }
+            return result;
+        } catch (error: unknown) {
+            logPortalDebugEvent(createPortalDebugErrorEvent(context, error));
+            const action = payload.params.action;
+            const isSilentAction =
+                payload.suppressErrorLog === true ||
+                this.silentXtreamActions.has(action);
+            const normalizedMessage = this.getReadableXtreamErrorMessage(error);
+            const errorInfo = this.getErrorDetails(error);
+
+            // Log error to console
+            if (isSilentAction) {
+                this.logger.debug(
+                    `Background Xtream action failed (${action ?? 'unknown'}):`,
+                    normalizedMessage
+                );
+                return {
+                    type: ERROR,
+                    status: errorInfo?.status ?? 500,
+                    message: normalizedMessage,
+                };
+            }
+
+            this.logger.error('Xtream request error:', normalizedMessage);
+            this.snackBar.open(
+                this.translateService.instant('PORTALS.REQUEST_ERRORS.XTREAM', {
+                    message: normalizedMessage,
+                }),
+                this.translateService.instant('CLOSE'),
+                {
+                    duration: 5000,
+                }
+            );
+            return {
+                type: ERROR,
+                status: errorInfo?.status ?? 500,
+                message: normalizedMessage,
+            };
+        }
+    }
+
+    private getReadableXtreamErrorMessage(error: unknown): string {
+        const fallback = this.translateService.instant(
+            'PORTALS.REQUEST_ERRORS.XTREAM_CONNECTION'
+        );
+        if (!error) {
+            return fallback;
+        }
+
+        const maybeError = error as {
+            message?: unknown;
+            statusText?: unknown;
+            error?: unknown;
+        };
+
+        if (typeof maybeError.message === 'string') {
+            if (maybeError.message.includes('[object Object]')) {
+                if (typeof maybeError.error === 'string') {
+                    return maybeError.error;
+                }
+                if (
+                    maybeError.error &&
+                    typeof maybeError.error === 'object' &&
+                    'message' in
+                        (maybeError.error as Record<string, unknown>) &&
+                    typeof (maybeError.error as Record<string, unknown>)
+                        .message === 'string'
+                ) {
+                    return (maybeError.error as Record<string, string>).message;
+                }
+                return fallback;
+            }
+            return maybeError.message;
+        }
+
+        if (typeof maybeError.statusText === 'string') {
+            return maybeError.statusText;
+        }
+
+        if (typeof error === 'string') {
+            return error;
+        }
+
+        return fallback;
+    }
+
+    private getErrorDetails(error: unknown): ErrorStatus | null {
+        if (error && typeof error === 'object') {
+            return error as ErrorStatus;
+        }
+        return null;
+    }
+
+    async forwardStalkerRequest(payload: {
+        url: string;
+        params: Record<string, string>;
+        macAddress: string;
+        token?: string;
+        serialNumber?: string;
+        /** Endpoint-discovery probes expect failures; no error snackbar. */
+        silent?: boolean;
+        /**
+         * Endpoint-discovery probes are exempt from the backend's per-host
+         * connectivity guard: they walk several candidates on one host and
+         * expect most to fail, so counting them would declare a working portal
+         * unreachable. Mirrors the Electron `STALKER_REQUEST` payload flag.
+         */
+        skipConnectionGuard?: boolean;
+    }) {
+        let context = createPortalDebugRequestContext({
+            provider: 'stalker',
+            operation: payload.params?.action ?? 'unknown',
+            transport: 'pwa-http',
+            request: {
+                method: 'GET',
+                params: payload.params,
+                url: `${this.corsProxyUrl}/stalker`,
+            },
+        });
+
+        try {
+            const targetId = await this.getProviderTargetId(payload.url);
+            const token = payload.token ?? payload.params.token;
+            // `macAddress`, `token` and `serialNumber` are control params for
+            // the /stalker proxy: it turns them into the portal-facing
+            // Cookie / Authorization / SN headers and strips them from the
+            // query it forwards to the portal.
+            const requestParams = {
+                targetId,
+                ...payload.params,
+                macAddress: payload.macAddress,
+                ...(token ? { token } : {}),
+                ...(payload.serialNumber
+                    ? { serialNumber: payload.serialNumber }
+                    : {}),
+                // Endpoint-discovery probes are exempt from the backend's
+                // connectivity guard. Dropping this here would let two probes
+                // that time out open the breaker and fast-fail the healthy
+                // candidate discovery is looking for.
+                ...(payload.skipConnectionGuard
+                    ? { skipConnectionGuard: 'true' }
+                    : {}),
+            };
+            const params = new URLSearchParams(requestParams);
+            const requestUrl = `${this.corsProxyUrl}/stalker?${params.toString()}`;
+            context = createPortalDebugRequestContext({
+                provider: 'stalker',
+                operation: payload.params?.action ?? 'unknown',
+                transport: 'pwa-http',
+                request: {
+                    method: 'GET',
+                    params: requestParams,
+                    url: requestUrl,
+                },
+            });
+            logPortalDebugRequest(context);
+
+            // Make the fetch request
+            const response = await fetch(requestUrl);
+
+            if (!response.ok) {
+                throw new Error(
+                    `Error: ${response.statusText} (Status: ${response.status})`
+                );
+            }
+
+            // Parse and return the JSON response
+            const responseBody = await response.json();
+
+            // The proxy converts upstream provider failures (404 on an
+            // absent endpoint, 5xx) into an HTTP 200 `{ message, status }`
+            // body WITHOUT a `payload` key. Surface those as errors carrying
+            // the status so endpoint discovery and the lazy portal repair
+            // can classify them — unwrapping `payload` here silently
+            // returned `undefined`, making a dead endpoint look like an
+            // empty answer and unreachable to the repair.
+            // The connectivity guard refused to contact the host. This one must
+            // NOT go through the branch below: an `HTTP Error <code>` prefix
+            // and a numeric `status` both read as "the endpoint answered", so
+            // endpoint discovery would keep walking candidates instead of
+            // aborting, and a 4xx reading would additionally fire lazy portal
+            // repair against a host just declared unreachable. Thrown bare, the
+            // message lands in the connection-level-failure slot — which is
+            // exactly what a tripped breaker means.
+            if (
+                responseBody &&
+                typeof responseBody === 'object' &&
+                !('payload' in responseBody) &&
+                isHostConnectivityFastFailMessage(responseBody.message)
+            ) {
+                throw new Error(String(responseBody.message));
+            }
+
+            if (
+                responseBody &&
+                typeof responseBody === 'object' &&
+                !('payload' in responseBody) &&
+                typeof responseBody.status === 'number'
+            ) {
+                const proxyError = new Error(
+                    `HTTP Error ${responseBody.status}: ${
+                        responseBody.message ?? ''
+                    }`
+                ) as Error & { status: number };
+                proxyError.status = responseBody.status;
+                throw proxyError;
+            }
+
+            logPortalDebugEvent(
+                createPortalDebugSuccessEvent(context, responseBody)
+            );
+            return responseBody.payload;
+        } catch (err: unknown) {
+            const errorInfo = this.getErrorDetails(err);
+            logPortalDebugEvent(createPortalDebugErrorEvent(context, err));
+            this.logger.error('Stalker request error:', err);
+
+            if (!payload.silent) {
+                this.snackBar.open(
+                    this.translateService.instant(
+                        'PORTALS.REQUEST_ERRORS.STALKER',
+                        {
+                            message:
+                                errorInfo?.message ??
+                                this.translateService.instant(
+                                    'PORTALS.REQUEST_ERRORS.NOT_FOUND'
+                                ),
+                            status: errorInfo?.status ?? 404,
+                        }
+                    ),
+                    this.translateService.instant('CLOSE'),
+                    {
+                        duration: 5000,
+                    }
+                );
+            }
+            throw err;
+        }
+    }
+
+    getPlaylistFromUrl(url: string, userAgent?: string): Observable<Playlist> {
+        const normalizedUserAgent = userAgent?.trim();
+        return from(this.getProviderTargetId(url)).pipe(
+            switchMap((targetId) =>
+                this.http.get<Playlist>(`${this.corsProxyUrl}/parse`, {
+                    params: {
+                        targetId,
+                        ...(normalizedUserAgent
+                            ? { userAgent: normalizedUserAgent }
+                            : {}),
+                    },
+                })
+            )
+        );
+    }
+
+    private getProviderTargetId(url: string): Promise<string> {
+        const cachedTargetId = this.providerTargetIds.get(url);
+        if (cachedTargetId) {
+            return cachedTargetId;
+        }
+
+        const targetIdRequest = firstValueFrom(
+            this.http.post<ProviderTargetRegistration>(
+                `${this.corsProxyUrl}/provider-targets`,
+                { url }
+            )
+        )
+            .then((response) => response.targetId)
+            .catch((error) => {
+                this.providerTargetIds.delete(url);
+                throw error;
+            });
+
+        this.providerTargetIds.set(url, targetIdRequest);
+        return targetIdRequest;
+    }
+
+    private async invalidateProviderTargetId(
+        url: string,
+        staleTargetId: string
+    ): Promise<void> {
+        const cachedTargetId = this.providerTargetIds.get(url);
+        if (!cachedTargetId) return;
+        try {
+            if ((await cachedTargetId) === staleTargetId) {
+                this.providerTargetIds.delete(url);
+            }
+        } catch {
+            // A failed registration already removes itself in
+            // getProviderTargetId(); there is nothing else to invalidate.
+        }
+    }
+
+    private isStaleProviderTargetError(error: unknown): boolean {
+        if (!error || typeof error !== 'object') return false;
+        const candidate = error as {
+            readonly status?: unknown;
+            readonly error?: { readonly message?: unknown };
+        };
+        return (
+            candidate.status === 404 &&
+            candidate.error?.message === 'Provider target not found'
+        );
+    }
+
+    removeAllListeners(type: string): void {
+        if (type === 'all') {
+            this.messageListeners.forEach((listener) =>
+                window.removeEventListener('message', listener)
+            );
+            this.messageListeners.clear();
+            return;
+        }
+
+        const messageListener = this.messageListeners.get(type);
+        if (messageListener) {
+            window.removeEventListener('message', messageListener);
+            this.messageListeners.delete(type);
+        }
+    }
+
+    listenOn(command: string, callback: (...args: unknown[]) => void): void {
+        // Drop any existing listener for this command so calling listenOn()
+        // again rebinds rather than accumulating duplicates.
+        const existing = this.messageListeners.get(command);
+        if (existing) {
+            window.removeEventListener('message', existing);
+        }
+
+        const listener = callback as EventListener;
+        window.addEventListener('message', listener);
+        this.messageListeners.set(command, listener);
+    }
+
+    getAppEnvironment(): string {
+        return 'pwa';
+    }
+}

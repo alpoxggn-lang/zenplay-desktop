@@ -1,0 +1,22 @@
+{
+    "name": "playlist-shared-ui",
+    "$schema": "../../../../node_modules/nx/schemas/project-schema.json",
+    "sourceRoot": "libs/playlist/shared/ui/src",
+    "prefix": "lib",
+    "projectType": "library",
+    "tags": ["scope:playlist", "domain:m3u", "type:ui"],
+    "implicitDependencies": ["ui-styles"],
+    "targets": {
+        "test": {
+            "executor": "@nx/jest:jest",
+            "outputs": ["{workspaceRoot}/coverage/{projectRoot}"],
+            "options": {
+                "jestConfig": "libs/playlist/shared/ui/jest.config.ts",
+                "tsConfig": "libs/playlist/shared/ui/tsconfig.spec.json"
+            }
+        },
+        "lint": {
+            "executor": "@nx/eslint:lint"
+        }
+    }
+}

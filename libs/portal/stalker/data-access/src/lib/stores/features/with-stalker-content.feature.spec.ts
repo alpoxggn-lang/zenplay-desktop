@@ -1,0 +1,1335 @@
+import { signal } from '@angular/core';
+import { TestBed } from '@angular/core/testing';
+import { patchState, signalStore, withMethods, withState } from '@ngrx/signals';
+import { DataService, ParentalLockService } from '@iptvnator/services';
+import {
+    CONNECTIVITY_GUARD_RESET,
+    PlaylistMeta,
+    StalkerPortalActions,
+} from '@iptvnator/shared/interfaces';
+import { StalkerItvChannel } from '../../models';
+import { StalkerItvCacheService } from '../../stalker-itv-cache.service';
+import { StalkerSessionService } from '../../stalker-session.service';
+import { withStalkerContent } from './with-stalker-content.feature';
+
+jest.mock('@iptvnator/portal/shared/util', () => ({
+    createLogger: () => ({
+        debug: jest.fn(),
+        info: jest.fn(),
+        warn: jest.fn(),
+        error: jest.fn(),
+    }),
+}));
+
+const PLAYLIST = {
+    _id: 'playlist-1',
+    title: 'Demo Stalker',
+    count: 0,
+    autoRefresh: false,
+    importDate: '2026-04-14T00:00:00.000Z',
+    portalUrl: 'http://demo.example/stalker_portal/server/load.php',
+    macAddress: '00:1A:79:00:00:01',
+    isFullStalkerPortal: false,
+} as PlaylistMeta;
+
+const TestContentStore = signalStore(
+    { protectedState: false },
+    withState({
+        currentPlaylist: undefined as PlaylistMeta | undefined,
+        selectedContentType: 'vod' as 'vod' | 'series' | 'itv' | 'radio',
+        selectedCategoryId: undefined as string | null | undefined,
+        searchPhrase: '',
+        page: 0,
+    }),
+    withMethods((store) => ({
+        setCurrentPlaylist(playlist: PlaylistMeta | undefined) {
+            patchState(store, { currentPlaylist: playlist });
+        },
+        setSelectedContentType(type: 'vod' | 'series' | 'itv' | 'radio') {
+            patchState(store, { selectedContentType: type });
+        },
+        setSelectedCategory(id: string | null | undefined) {
+            patchState(store, { selectedCategoryId: id });
+        },
+        setPage(page: number) {
+            patchState(store, { page });
+        },
+    })),
+    withStalkerContent()
+);
+
+/** Request payload the content feature sends through `sendIpcEvent`. */
+interface StalkerIpcRequest {
+    params?: { action?: string; p?: number; search?: string };
+}
+
+function createDeferred<T>() {
+    let resolve!: (value: T) => void;
+    let reject!: (reason?: unknown) => void;
+    const promise = new Promise<T>((res, rej) => {
+        resolve = res;
+        reject = rej;
+    });
+
+    return { promise, resolve, reject };
+}
+
+function createContentResponse(title: string) {
+    return {
+        js: {
+            data: [
+                {
+                    id: title,
+                    name: title,
+                    category_id: '5',
+                },
+            ],
+            total_items: 28,
+        },
+    };
+}
+
+async function flushResources(): Promise<void> {
+    TestBed.flushEffects();
+    await Promise.resolve();
+    await Promise.resolve();
+    TestBed.flushEffects();
+    await Promise.resolve();
+}
+
+async function waitForCondition(
+    predicate: () => boolean,
+    attempts = 20
+): Promise<void> {
+    for (let index = 0; index < attempts; index += 1) {
+        if (predicate()) {
+            return;
+        }
+
+        await flushResources();
+    }
+
+    throw new Error('Timed out waiting for resource activity');
+}
+
+/**
+ * Controllable stand-in for StalkerItvCacheService so the legacy paged flow
+ * can be tested in isolation and the cache-served flow deterministically.
+ */
+function createItvCacheMock(
+    initialChannels: StalkerItvChannel[] | null = null
+) {
+    const version = signal(0);
+    let channels = initialChannels;
+
+    return {
+        versionFor: jest.fn(() => version()),
+        getChannels: jest.fn(() => channels),
+        isUnsupported: jest.fn(() => false),
+        ensureLoaded: jest.fn().mockResolvedValue(undefined),
+        refresh: jest.fn().mockResolvedValue(undefined),
+        isReady: jest.fn(() => channels !== null),
+        isLoading: jest.fn(() => false),
+        progressOf: jest.fn(() => null),
+        setChannels(next: StalkerItvChannel[] | null) {
+            channels = next;
+            version.update((value) => value + 1);
+        },
+    };
+}
+
+describe('withStalkerContent failure states', () => {
+    let store: InstanceType<typeof TestContentStore>;
+    let dataService: {
+        sendIpcEvent: jest.Mock<
+            Promise<unknown>,
+            [event: string, request: StalkerIpcRequest]
+        >;
+    };
+    let parentalLock: {
+        active: jest.Mock<boolean, []>;
+        version: ReturnType<typeof signal<number>>;
+        lockedStalkerIds: jest.Mock<string[], [string, string]>;
+    };
+
+    beforeEach(() => {
+        dataService = {
+            sendIpcEvent: jest.fn(),
+        };
+        parentalLock = {
+            active: jest.fn(() => false),
+            version: signal(0),
+            lockedStalkerIds: jest.fn(
+                (_playlistId: string, _type: string): string[] => []
+            ),
+        };
+
+        TestBed.configureTestingModule({
+            providers: [
+                TestContentStore,
+                { provide: DataService, useValue: dataService },
+                { provide: ParentalLockService, useValue: parentalLock },
+                {
+                    provide: StalkerItvCacheService,
+                    useValue: createItvCacheMock(),
+                },
+                {
+                    provide: StalkerSessionService,
+                    useValue: {
+                        makeAuthenticatedRequest: jest.fn(),
+                        ensureToken: jest.fn().mockResolvedValue({
+                            token: null,
+                        }),
+                    },
+                },
+            ],
+        });
+
+        store = TestBed.inject(TestContentStore);
+    });
+
+    it('keeps ITV pages unfiltered while independent local searches change', async () => {
+        const pending =
+            createDeferred<ReturnType<typeof createContentResponse>>();
+        dataService.sendIpcEvent.mockImplementation((_event, request) =>
+            request.params?.action === 'get_genres'
+                ? Promise.resolve({ js: [] })
+                : pending.promise
+        );
+        store.setSelectedContentType('itv');
+        store.setCurrentPlaylist(PLAYLIST);
+        store.setCategories('itv', [
+            { category_id: '5', category_name: 'Five' },
+        ]);
+        store.setSelectedCategory('5');
+        patchState(store, { searchPhrase: 'sidebar' });
+        await flushResources();
+        const orderedCalls = () =>
+            dataService.sendIpcEvent.mock.calls.filter(
+                (call) => call[1].params?.action === 'get_ordered_list'
+            );
+        await waitForCondition(() => orderedCalls().length > 0);
+        expect(orderedCalls()[0][1].params?.search).toBeUndefined();
+        patchState(store, { searchPhrase: 'changed' });
+        await flushResources();
+        pending.resolve(createContentResponse('Panel match'));
+        await waitForCondition(() => store.itvChannels().length > 0);
+        expect(orderedCalls()).toHaveLength(1);
+        expect(store.itvChannels()[0].name).toBe('Panel match');
+    });
+
+    it('normalizes category failures into empty arrays and explicit error state', async () => {
+        dataService.sendIpcEvent.mockRejectedValue(
+            new Error('get_genres failed')
+        );
+
+        store.setSelectedContentType('itv');
+        store.setCurrentPlaylist(PLAYLIST);
+        void store.isCategoryResourceLoading();
+
+        await waitForCondition(
+            () => dataService.sendIpcEvent.mock.calls.length > 0
+        );
+        await flushResources();
+
+        expect(dataService.sendIpcEvent).toHaveBeenCalledWith(
+            expect.anything(),
+            expect.objectContaining({
+                url: PLAYLIST.portalUrl,
+                macAddress: PLAYLIST.macAddress,
+                params: expect.objectContaining({
+                    action: StalkerPortalActions.GetGenres,
+                    type: 'itv',
+                }),
+            })
+        );
+        expect(store.getCategoryResource()).toEqual([]);
+        expect(store.itvCategories()).toEqual([]);
+        expect(store.isCategoryResourceFailed()).toBeInstanceOf(Error);
+        expect((store.isCategoryResourceFailed() as Error).message).toBe(
+            'get_genres failed'
+        );
+    });
+
+    it('derives the selected category from the normalized category collections', () => {
+        store.setSelectedContentType('series');
+        store.setCategories('series', [
+            {
+                category_id: '7',
+                category_name: 'Drama',
+            },
+        ]);
+        store.setSelectedCategory('7');
+
+        expect(store.getSelectedCategory()).toEqual({
+            category_id: '7',
+            category_name: 'Drama',
+        });
+    });
+
+    it('preserves server category order while keeping the all category first', async () => {
+        dataService.sendIpcEvent.mockResolvedValue({
+            js: [
+                { id: 'z', title: 'Zulu' },
+                { id: 'a', title: 'Alpha' },
+                { id: 'm', title: 'Movies' },
+            ],
+        });
+
+        store.setSelectedContentType('vod');
+        store.setCurrentPlaylist(PLAYLIST);
+        void store.isCategoryResourceLoading();
+
+        await waitForCondition(
+            () => dataService.sendIpcEvent.mock.calls.length > 0
+        );
+        await flushResources();
+
+        expect(
+            store
+                .getCategoryResource()
+                .map((category) => category.labelKey ?? category.category_name)
+        ).toEqual(['PORTALS.ALL_CATEGORIES', 'Zulu', 'Alpha', 'Movies']);
+        // The added entry is named by its key alone: a name translated at
+        // load time would keep that language after a runtime switch.
+        expect(store.getCategoryResource()[0]).toEqual({
+            category_id: '*',
+            category_name: '',
+            labelKey: 'PORTALS.ALL_CATEGORIES',
+        });
+    });
+
+    it('names the selected genre by the portal name or the added entry key', async () => {
+        dataService.sendIpcEvent.mockResolvedValue({
+            js: [{ id: '7', title: 'Drama' }],
+        });
+
+        store.setSelectedContentType('vod');
+        store.setCurrentPlaylist(PLAYLIST);
+        void store.isCategoryResourceLoading();
+        await waitForCondition(() => store.getCategoryResource().length > 0);
+
+        store.setSelectedCategory('*');
+        expect(store.getSelectedCategoryLabel()).toEqual({
+            name: '',
+            labelKey: 'PORTALS.ALL_CATEGORIES',
+        });
+
+        store.setSelectedCategory('7');
+        expect(store.getSelectedCategoryLabel()).toEqual({
+            name: 'Drama',
+            labelKey: null,
+        });
+
+        store.setSelectedCategory(null);
+        expect(store.getSelectedCategoryLabel()).toEqual({
+            name: '',
+            labelKey: null,
+        });
+    });
+
+    it('normalizes content failures into empty collections instead of undefined state', async () => {
+        dataService.sendIpcEvent.mockRejectedValue(
+            new Error('get_ordered_list failed')
+        );
+
+        store.setSelectedContentType('itv');
+        store.setCurrentPlaylist(PLAYLIST);
+        store.setCategories('itv', [
+            {
+                category_id: '5',
+                category_name: 'News',
+            },
+        ]);
+        store.setSelectedCategory('5');
+        void store.isPaginatedContentLoading();
+
+        await waitForCondition(
+            () => dataService.sendIpcEvent.mock.calls.length > 0
+        );
+        await flushResources();
+
+        expect(dataService.sendIpcEvent).toHaveBeenCalledWith(
+            expect.anything(),
+            expect.objectContaining({
+                params: expect.objectContaining({
+                    action: StalkerPortalActions.GetOrderedList,
+                    type: 'itv',
+                    category: '5',
+                    genre: '5',
+                }),
+            })
+        );
+        expect(store.getPaginatedContent()).toEqual([]);
+        expect(store.itvChannels()).toEqual([]);
+        expect(store.hasMoreChannels()).toBe(false);
+        expect(store.isPaginatedContentFailed()).toBeInstanceOf(Error);
+        expect((store.isPaginatedContentFailed() as Error).message).toBe(
+            'get_ordered_list failed'
+        );
+    });
+
+    it('loads live TV channels page by page and appends later pages', async () => {
+        dataService.sendIpcEvent.mockImplementation(
+            (_event: unknown, payload: { params?: { p?: number } }) => {
+                const page = Number(payload.params?.p ?? 1);
+
+                return Promise.resolve({
+                    js: {
+                        data: [
+                            {
+                                id: `channel-${page}`,
+                                name: `Channel page ${page}`,
+                                category_id: '5',
+                            },
+                        ],
+                        total_items: 2,
+                    },
+                });
+            }
+        );
+
+        store.setSelectedContentType('itv');
+        store.setCurrentPlaylist(PLAYLIST);
+        store.setCategories('itv', [
+            {
+                category_id: '5',
+                category_name: 'News',
+            },
+        ]);
+        store.setSelectedCategory('5');
+        void store.isPaginatedContentLoading();
+
+        await waitForCondition(() => store.itvChannels().length === 1);
+
+        expect(dataService.sendIpcEvent).toHaveBeenLastCalledWith(
+            expect.anything(),
+            expect.objectContaining({
+                params: expect.objectContaining({
+                    action: StalkerPortalActions.GetOrderedList,
+                    type: 'itv',
+                    category: '5',
+                    genre: '5',
+                    p: 1,
+                }),
+            })
+        );
+        expect(store.itvChannels().map((channel) => channel.name)).toEqual([
+            'Channel page 1',
+        ]);
+        expect(store.hasMoreChannels()).toBe(true);
+
+        store.setPage(1);
+
+        await waitForCondition(() => store.itvChannels().length === 2);
+
+        expect(dataService.sendIpcEvent).toHaveBeenLastCalledWith(
+            expect.anything(),
+            expect.objectContaining({
+                params: expect.objectContaining({
+                    action: StalkerPortalActions.GetOrderedList,
+                    type: 'itv',
+                    category: '5',
+                    genre: '5',
+                    p: 2,
+                }),
+            })
+        );
+        expect(store.itvChannels().map((channel) => channel.name)).toEqual([
+            'Channel page 1',
+            'Channel page 2',
+        ]);
+        expect(store.hasMoreChannels()).toBe(false);
+    });
+
+    it('reports which category the ITV channels on screen were served for', async () => {
+        dataService.sendIpcEvent.mockImplementation(() =>
+            Promise.resolve({
+                js: {
+                    data: [{ id: 'channel-1', name: 'One', category_id: '5' }],
+                    total_items: 1,
+                },
+            })
+        );
+
+        store.setSelectedContentType('itv');
+        store.setCurrentPlaylist(PLAYLIST);
+        store.setCategories('itv', [
+            { category_id: '5', category_name: 'News' },
+            { category_id: '9', category_name: 'Sports' },
+        ]);
+        expect(store.itvChannelsCategory()).toBeNull();
+
+        store.setSelectedCategory('5');
+        void store.isPaginatedContentLoading();
+        await waitForCondition(() => store.itvChannels().length === 1);
+
+        expect(store.itvChannelsCategory()).toBe('5');
+
+        // Selecting another genre does not retroactively re-label the rows
+        // still on screen: they belong to '5' until the new page arrives.
+        store.setSelectedCategory('9');
+        expect(store.itvChannelsCategory()).toBe('5');
+
+        await waitForCondition(() => store.itvChannelsCategory() === '9');
+
+        // Clearing the list leaves no category on screen.
+        store.setItvChannels([]);
+        expect(store.itvChannelsCategory()).toBeNull();
+    });
+
+    it("does not report another portal's served category as its own", async () => {
+        dataService.sendIpcEvent.mockImplementation(() =>
+            Promise.resolve({
+                js: {
+                    data: [{ id: 'channel-1', name: 'One', category_id: '5' }],
+                    total_items: 1,
+                },
+            })
+        );
+
+        store.setSelectedContentType('itv');
+        store.setCurrentPlaylist(PLAYLIST);
+        store.setCategories('itv', [
+            { category_id: '5', category_name: 'News' },
+        ]);
+        store.setSelectedCategory('5');
+        void store.isPaginatedContentLoading();
+        await waitForCondition(() => store.itvChannelsCategory() === '5');
+
+        // Switching portal keeps the previous rows until the new portal's
+        // own load lands; genre ids are provider-local, so the marker must
+        // not answer for a portal that did not serve them.
+        store.setCurrentPlaylist({ ...PLAYLIST, _id: 'other-portal' });
+
+        expect(store.itvChannelsCategory()).toBeNull();
+    });
+
+    it('forgets the served category when a failed ITV page clears the rows', async () => {
+        dataService.sendIpcEvent.mockImplementation(() =>
+            Promise.resolve({
+                js: {
+                    data: [{ id: 'channel-1', name: 'One', category_id: '5' }],
+                    total_items: 1,
+                },
+            })
+        );
+
+        store.setSelectedContentType('itv');
+        store.setCurrentPlaylist(PLAYLIST);
+        store.setCategories('itv', [
+            { category_id: '5', category_name: 'News' },
+            { category_id: '9', category_name: 'Sports' },
+        ]);
+        store.setSelectedCategory('5');
+        void store.isPaginatedContentLoading();
+        await waitForCondition(() => store.itvChannelsCategory() === '5');
+
+        // The next category's first page fails: the rows are cleared, so no
+        // category is on screen — a stale marker would tell an auto-open
+        // handoff for genre 5 that its channels are still rendered.
+        dataService.sendIpcEvent.mockImplementation(() =>
+            Promise.reject(new Error('portal down'))
+        );
+        store.setSelectedCategory('9');
+
+        await waitForCondition(() => store.contentError() !== null);
+        expect(store.itvChannels()).toEqual([]);
+        expect(store.itvChannelsCategory()).toBeNull();
+    });
+
+    it('appends later VOD pages into one continuous deduplicated list', async () => {
+        dataService.sendIpcEvent.mockImplementation(
+            (_event: unknown, payload: { params?: { p?: number } }) => {
+                const page = Number(payload.params?.p ?? 1);
+
+                return Promise.resolve({
+                    js: {
+                        data: [
+                            {
+                                id: `movie-${page}`,
+                                name: `Movie page ${page}`,
+                                category_id: '5',
+                            },
+                            // The portal shifts this row between pages —
+                            // the append must deduplicate it.
+                            {
+                                id: 'movie-shared',
+                                name: 'Shared Movie',
+                                category_id: '5',
+                            },
+                        ],
+                        total_items: 3,
+                    },
+                });
+            }
+        );
+
+        store.setSelectedContentType('vod');
+        store.setCurrentPlaylist(PLAYLIST);
+        store.setCategories('vod', [
+            { category_id: '5', category_name: 'Action' },
+        ]);
+        store.setSelectedCategory('5');
+        void store.isPaginatedContentLoading();
+
+        await waitForCondition(() => store.getPaginatedContent().length === 2);
+        expect(store.hasMoreContent()).toBe(true);
+
+        store.setPage(1);
+        await waitForCondition(() => store.getPaginatedContent().length === 3);
+
+        expect(store.getPaginatedContent().map((item) => item.name)).toEqual([
+            'Movie page 1',
+            'Shared Movie',
+            'Movie page 2',
+        ]);
+        expect(store.hasMoreContent()).toBe(false);
+    });
+
+    it('stops paging when an append adds no unique items despite total_items', async () => {
+        dataService.sendIpcEvent.mockImplementation(
+            (_event: unknown, payload: { params?: { p?: number } }) => {
+                const page = Number(payload.params?.p ?? 1);
+
+                return Promise.resolve({
+                    js: {
+                        // Page 2 repeats page 1's rows — after a mid-list
+                        // portal mutation the unique list can stay shorter
+                        // than the claimed total forever.
+                        data: [
+                            {
+                                id: 'movie-1',
+                                name: 'Movie one',
+                                category_id: '5',
+                            },
+                            {
+                                id: 'movie-2',
+                                name: 'Movie two',
+                                category_id: '5',
+                            },
+                        ],
+                        total_items: page === 1 ? 4 : 4,
+                    },
+                });
+            }
+        );
+
+        store.setSelectedContentType('vod');
+        store.setCurrentPlaylist(PLAYLIST);
+        store.setCategories('vod', [
+            { category_id: '5', category_name: 'Action' },
+        ]);
+        store.setSelectedCategory('5');
+        void store.isPaginatedContentLoading();
+
+        await waitForCondition(() => store.getPaginatedContent().length === 2);
+        expect(store.hasMoreContent()).toBe(true);
+
+        store.setPage(1);
+        await waitForCondition(() => !store.hasMoreContent());
+
+        // The duplicate page made no progress: the total clamps to reality
+        // instead of leaving hasMoreContent true past the end forever.
+        expect(store.getPaginatedContent()).toHaveLength(2);
+        expect(store.totalCount()).toBe(2);
+    });
+
+    it('pages past a VOD page made only of parental-locked rows', async () => {
+        parentalLock.active.mockReturnValue(true);
+        parentalLock.lockedStalkerIds.mockReturnValue(['9']);
+        dataService.sendIpcEvent.mockImplementation(
+            (_event: unknown, payload: { params?: { p?: number } }) => {
+                const page = Number(payload.params?.p ?? 1);
+                // Page 1: one visible film. Page 2: locked rows only. Page 3:
+                // the visible film paging must still reach.
+                const data =
+                    page === 1
+                        ? [{ id: 'movie-1', name: 'One', category_id: '5' }]
+                        : page === 2
+                          ? [
+                                { id: 'adult-1', name: 'A', category_id: '9' },
+                                { id: 'adult-2', name: 'B', category_id: '9' },
+                            ]
+                          : [
+                                {
+                                    id: 'movie-3',
+                                    name: 'Three',
+                                    category_id: '5',
+                                },
+                            ];
+                return Promise.resolve({ js: { data, total_items: 4 } });
+            }
+        );
+
+        store.setSelectedContentType('vod');
+        store.setCurrentPlaylist(PLAYLIST);
+        store.setCategories('vod', [
+            { category_id: '5', category_name: 'Action' },
+            { category_id: '9', category_name: 'Adult' },
+        ]);
+        store.setSelectedCategory('*');
+        void store.isPaginatedContentLoading();
+
+        await waitForCondition(() => store.getPaginatedContent().length === 1);
+        expect(store.hasMoreContent()).toBe(true);
+
+        // The append lands on the fully withheld page; the loader must ask
+        // for the next one by itself instead of ending the list.
+        store.setPage(1);
+        await waitForCondition(
+            () => store.getPaginatedContent().length === 2,
+            60
+        );
+
+        expect(store.getPaginatedContent().map((item) => item.id)).toEqual([
+            'movie-1',
+            'movie-3',
+        ]);
+        // Both withheld ids are subtracted from the portal's total.
+        expect(store.totalCount()).toBe(2);
+        expect(store.hasMoreContent()).toBe(false);
+    });
+
+    it('drops accumulated rows of a newly locked genre and restarts from page 1', async () => {
+        dataService.sendIpcEvent.mockImplementation(
+            (_event: unknown, payload: { params?: { p?: number } }) => {
+                const page = Number(payload.params?.p ?? 1);
+                const data =
+                    page === 1
+                        ? [
+                              { id: 'movie-1', name: 'One', category_id: '5' },
+                              { id: 'adult-1', name: 'A', category_id: '9' },
+                          ]
+                        : [{ id: 'movie-2', name: 'Two', category_id: '5' }];
+                return Promise.resolve({ js: { data, total_items: 3 } });
+            }
+        );
+
+        store.setSelectedContentType('vod');
+        store.setCurrentPlaylist(PLAYLIST);
+        store.setCategories('vod', [
+            { category_id: '5', category_name: 'Action' },
+            { category_id: '9', category_name: 'Adult' },
+        ]);
+        store.setSelectedCategory('*');
+        void store.isPaginatedContentLoading();
+
+        await waitForCondition(() => store.getPaginatedContent().length === 2);
+        store.setPage(1);
+        await waitForCondition(() => store.getPaginatedContent().length === 3);
+
+        // Lock now: the genre-9 row loaded on page 1 must leave the screen
+        // and the list must be rebuilt from page 1 under the new lock state.
+        parentalLock.active.mockReturnValue(true);
+        parentalLock.lockedStalkerIds.mockReturnValue(['9']);
+        parentalLock.version.set(1);
+
+        await waitForCondition(
+            () =>
+                store.page() === 0 &&
+                !store.isPaginatedContentLoading() &&
+                store
+                    .getPaginatedContent()
+                    .every((item) => item.category_id !== '9'),
+            60
+        );
+
+        expect(store.getPaginatedContent().map((item) => item.id)).toEqual([
+            'movie-1',
+        ]);
+        expect(store.totalCount()).toBe(2);
+    });
+
+    it('takes page-one rows of a newly locked genre off screen before the reload answers', async () => {
+        let hangReload = false;
+        dataService.sendIpcEvent.mockImplementation(() =>
+            hangReload
+                ? new Promise(() => undefined)
+                : Promise.resolve({
+                      js: {
+                          data: [
+                              { id: 'movie-1', name: 'One', category_id: '5' },
+                              { id: 'adult-1', name: 'A', category_id: '9' },
+                          ],
+                          total_items: 2,
+                      },
+                  })
+        );
+        store.setSelectedContentType('vod');
+        store.setCurrentPlaylist(PLAYLIST);
+        store.setCategories('vod', [
+            { category_id: '5', category_name: 'Action' },
+            { category_id: '9', category_name: 'Adult' },
+        ]);
+        store.setSelectedCategory('*');
+        void store.isPaginatedContentLoading();
+        await waitForCondition(() => store.getPaginatedContent().length === 2);
+
+        // Lock now while the replacement request hangs.
+        hangReload = true;
+        parentalLock.active.mockReturnValue(true);
+        parentalLock.lockedStalkerIds.mockReturnValue(['9']);
+        parentalLock.version.set(1);
+
+        // Page 1 blanks the grid synchronously before its request, so the
+        // locked row is gone even though the reload never answers.
+        await waitForCondition(() => store.getPaginatedContent().length === 0);
+        expect(dataService.sendIpcEvent).toHaveBeenCalledTimes(2);
+    });
+
+    it('keeps accumulated pages when an append fails and retries the same page', async () => {
+        let failPageTwo = true;
+        dataService.sendIpcEvent.mockImplementation(
+            (_event: unknown, payload: { params?: { p?: number } }) => {
+                const page = Number(payload.params?.p ?? 1);
+                if (page === 2 && failPageTwo) {
+                    return Promise.reject(new Error('portal hiccup'));
+                }
+
+                return Promise.resolve({
+                    js: {
+                        data: [
+                            {
+                                id: `movie-${page}`,
+                                name: `Movie page ${page}`,
+                                category_id: '5',
+                            },
+                        ],
+                        total_items: 2,
+                    },
+                });
+            }
+        );
+
+        store.setSelectedContentType('vod');
+        store.setCurrentPlaylist(PLAYLIST);
+        store.setCategories('vod', [
+            { category_id: '5', category_name: 'Action' },
+        ]);
+        store.setSelectedCategory('5');
+        void store.isPaginatedContentLoading();
+        await waitForCondition(() => store.getPaginatedContent().length === 1);
+
+        store.setPage(1);
+        // The grid renders the retry action only after the failed resource
+        // has settled; while loading it renders the append spinner instead.
+        await waitForCondition(
+            () =>
+                store.hasContentAppendError() &&
+                !store.isPaginatedContentLoading()
+        );
+
+        // The failed append left page 1 on screen, not the empty state.
+        expect(store.getPaginatedContent().map((item) => item.name)).toEqual([
+            'Movie page 1',
+        ]);
+        expect(store.contentError()).toBeNull();
+
+        failPageTwo = false;
+        dataService.sendIpcEvent.mockClear();
+        await store.retryContentPage();
+        await waitForCondition(() => store.getPaginatedContent().length === 2);
+
+        // Two failed appends are exactly what opens the main process'
+        // connectivity guard, so the retry has to clear it FIRST — otherwise
+        // this button fast-fails without a request and looks broken.
+        const [firstChannel] = dataService.sendIpcEvent.mock.calls[0];
+        expect(firstChannel).toBe(CONNECTIVITY_GUARD_RESET);
+
+        expect(store.hasContentAppendError()).toBe(false);
+        expect(store.getPaginatedContent().map((item) => item.name)).toEqual([
+            'Movie page 1',
+            'Movie page 2',
+        ]);
+    });
+
+    it('falls back to a synthetic all-radio category when radio categories are unavailable', async () => {
+        dataService.sendIpcEvent.mockRejectedValue(
+            new Error('radio categories unsupported')
+        );
+
+        store.setSelectedContentType('radio');
+        store.setCurrentPlaylist(PLAYLIST);
+        void store.isCategoryResourceLoading();
+
+        await waitForCondition(
+            () => dataService.sendIpcEvent.mock.calls.length > 0
+        );
+        await flushResources();
+
+        expect(dataService.sendIpcEvent).toHaveBeenCalledWith(
+            expect.anything(),
+            expect.objectContaining({
+                params: expect.objectContaining({
+                    action: StalkerPortalActions.GetCategories,
+                    type: 'radio',
+                }),
+            })
+        );
+        const allRadio = {
+            category_id: '*',
+            category_name: '',
+            labelKey: 'PORTALS.ALL_RADIO',
+        };
+        expect(store.getCategoryResource()).toEqual([allRadio]);
+        expect(store.radioCategories()).toEqual([allRadio]);
+        expect(store.isCategoryResourceFailed()).toBeNull();
+    });
+
+    it('loads radio stations separately from live TV channels', async () => {
+        dataService.sendIpcEvent.mockResolvedValue({
+            js: {
+                data: [
+                    {
+                        id: 'radio-1',
+                        name: 'Jazz FM',
+                        cmd: 'ifm https://stream.example/jazz.mp3',
+                    },
+                ],
+                total_items: 1,
+            },
+        });
+
+        store.setSelectedContentType('radio');
+        store.setCurrentPlaylist(PLAYLIST);
+        store.setCategories('radio', [
+            {
+                category_id: 'radio-all',
+                category_name: 'Radio',
+            },
+        ]);
+        store.setSelectedCategory('radio-all');
+        void store.isPaginatedContentLoading();
+
+        await waitForCondition(() => store.radioChannels().length === 1);
+
+        expect(dataService.sendIpcEvent).toHaveBeenCalledWith(
+            expect.anything(),
+            expect.objectContaining({
+                params: expect.objectContaining({
+                    action: StalkerPortalActions.GetOrderedList,
+                    type: 'radio',
+                    category: 'radio-all',
+                    p: 1,
+                }),
+            })
+        );
+        expect(store.radioChannels().map((channel) => channel.name)).toEqual([
+            'Jazz FM',
+        ]);
+        expect(store.itvChannels()).toEqual([]);
+    });
+
+    it('ignores stale content responses after the selected page changes', async () => {
+        const pendingByPage = new Map<
+            number,
+            ReturnType<typeof createDeferred<unknown>>[]
+        >();
+
+        dataService.sendIpcEvent.mockImplementation(
+            (_event: unknown, payload: { params?: { p?: number } }) => {
+                const page = Number(payload.params?.p);
+                const deferred = createDeferred<unknown>();
+                const pending = pendingByPage.get(page) ?? [];
+                pending.push(deferred);
+                pendingByPage.set(page, pending);
+                return deferred.promise;
+            }
+        );
+
+        store.setSelectedContentType('vod');
+        store.setCurrentPlaylist(PLAYLIST);
+        store.setCategories('vod', [
+            {
+                category_id: '5',
+                category_name: 'Movies',
+            },
+        ]);
+        store.setSelectedCategory('5');
+        void store.isPaginatedContentLoading();
+
+        await waitForCondition(() => pendingByPage.get(1)?.length === 1);
+        pendingByPage
+            .get(1)?.[0]
+            .resolve(createContentResponse('Page 1 initial'));
+        await waitForCondition(
+            () => store.getPaginatedContent()[0]?.name === 'Page 1 initial'
+        );
+
+        store.setPage(1);
+        await waitForCondition(() => pendingByPage.get(2)?.length === 1);
+
+        store.setPage(0);
+        await waitForCondition(() => pendingByPage.get(1)?.length === 2);
+        pendingByPage
+            .get(1)?.[1]
+            .resolve(createContentResponse('Page 1 restored'));
+        await waitForCondition(
+            () => store.getPaginatedContent()[0]?.name === 'Page 1 restored'
+        );
+
+        pendingByPage
+            .get(2)?.[0]
+            .resolve(createContentResponse('Page 2 stale'));
+        await flushResources();
+
+        expect(store.page()).toBe(0);
+        expect(store.getPaginatedContent()[0]?.name).toBe('Page 1 restored');
+    });
+});
+
+describe('withStalkerContent full ITV channel list cache', () => {
+    const CACHED_CHANNELS: StalkerItvChannel[] = [
+        { id: '1', cmd: 'ffrt http://x/1', name: 'News One', tv_genre_id: '5' },
+        {
+            id: '2',
+            cmd: 'ffrt http://x/2',
+            name: 'Sports HD',
+            tv_genre_id: '9',
+        },
+        { id: '3', cmd: 'ffrt http://x/3', name: 'News Two', tv_genre_id: '5' },
+    ];
+
+    let store: InstanceType<typeof TestContentStore>;
+    let dataService: {
+        sendIpcEvent: jest.Mock<
+            Promise<unknown>,
+            [event: string, request: StalkerIpcRequest]
+        >;
+    };
+    let itvCache: ReturnType<typeof createItvCacheMock>;
+
+    function setup(initialChannels: StalkerItvChannel[] | null) {
+        dataService = {
+            sendIpcEvent: jest.fn(),
+        };
+        itvCache = createItvCacheMock(initialChannels);
+
+        TestBed.configureTestingModule({
+            providers: [
+                TestContentStore,
+                { provide: DataService, useValue: dataService },
+                { provide: StalkerItvCacheService, useValue: itvCache },
+                {
+                    provide: StalkerSessionService,
+                    useValue: {
+                        makeAuthenticatedRequest: jest.fn(),
+                        ensureToken: jest.fn().mockResolvedValue({
+                            token: null,
+                        }),
+                    },
+                },
+            ],
+        });
+
+        store = TestBed.inject(TestContentStore);
+    }
+
+    function enterItvCategory(categoryId: string) {
+        store.setSelectedContentType('itv');
+        store.setCurrentPlaylist(PLAYLIST);
+        store.setCategories('itv', [
+            { category_id: '5', category_name: 'News' },
+            { category_id: '9', category_name: 'Sports' },
+        ]);
+        store.setSelectedCategory(categoryId);
+        void store.isPaginatedContentLoading();
+    }
+
+    it('does not request paged channels without a selected category', async () => {
+        setup(null);
+        enterItvCategory('');
+        await flushResources();
+        expect(store.itvChannels()).toEqual([]);
+        expect(store.hasMoreChannels()).toBe(false);
+        expect(dataService.sendIpcEvent).not.toHaveBeenCalled();
+    });
+
+    it('serves the whole category from the cache without portal requests', async () => {
+        setup(CACHED_CHANNELS);
+        enterItvCategory('5');
+
+        await waitForCondition(() => store.itvChannels().length === 2);
+
+        expect(store.itvChannels().map((channel) => channel.name)).toEqual([
+            'News One',
+            'News Two',
+        ]);
+        expect(store.totalCount()).toBe(2);
+        expect(store.hasMoreChannels()).toBe(false);
+        expect(dataService.sendIpcEvent).not.toHaveBeenCalled();
+    });
+
+    it('serves all channels for the "*" category so search can cover everything', async () => {
+        setup(CACHED_CHANNELS);
+        enterItvCategory('*');
+
+        await waitForCondition(() => store.itvChannels().length === 3);
+
+        // Regression for the "search only finds the first 14 loaded items"
+        // bug: the full list is available at once, no paging required.
+        expect(store.itvChannels()).toHaveLength(3);
+        expect(store.hasMoreChannels()).toBe(false);
+        expect(dataService.sendIpcEvent).not.toHaveBeenCalled();
+    });
+
+    it('falls back to the legacy paged fetch for a genre absent from the cache (censored/adult)', async () => {
+        setup(CACHED_CHANNELS);
+        dataService.sendIpcEvent.mockResolvedValue({
+            js: {
+                data: [
+                    {
+                        id: 'adult-1',
+                        name: 'Adult One',
+                        cmd: 'ffrt http://x/adult-1',
+                    },
+                ],
+                total_items: 40,
+            },
+        });
+
+        // Genre '19' has no channels in the cached full list.
+        store.setSelectedContentType('itv');
+        store.setCurrentPlaylist(PLAYLIST);
+        store.setCategories('itv', [
+            { category_id: '5', category_name: 'News' },
+            { category_id: '19', category_name: 'For adults', censored: true },
+        ]);
+        store.setSelectedCategory('19');
+        void store.isPaginatedContentLoading();
+
+        await waitForCondition(() => store.itvChannels().length === 1);
+
+        expect(dataService.sendIpcEvent).toHaveBeenCalledWith(
+            expect.anything(),
+            expect.objectContaining({
+                params: expect.objectContaining({
+                    action: StalkerPortalActions.GetOrderedList,
+                    type: 'itv',
+                    genre: '19',
+                    p: 1,
+                }),
+            })
+        );
+        expect(store.itvChannels()[0]?.name).toBe('Adult One');
+        // Portal pagination stays in charge for this genre.
+        expect(store.hasMoreChannels()).toBe(true);
+    });
+
+    it('reports whether the selected category is served from the cache', () => {
+        setup(CACHED_CHANNELS);
+        enterItvCategory('5');
+        expect(store.itvSelectedCategoryFromCache()).toBe(true);
+
+        store.setSelectedCategory('*');
+        expect(store.itvSelectedCategoryFromCache()).toBe(true);
+
+        // Genre with zero cached channels — e.g. a censored/adult category.
+        store.setSelectedCategory('19');
+        expect(store.itvSelectedCategoryFromCache()).toBe(false);
+    });
+
+    it('omits genres without cached channels from the count map (adult genres)', () => {
+        setup(CACHED_CHANNELS);
+        store.setSelectedContentType('itv');
+        store.setCurrentPlaylist(PLAYLIST);
+        store.setCategories('itv', [
+            { category_id: '*', category_name: 'All' },
+            { category_id: '5', category_name: 'News' },
+            { category_id: '19', category_name: 'For adults', censored: true },
+        ]);
+
+        const counts = store.itvCategoryItemCounts();
+        expect(counts.get(5)).toBe(2);
+        // Adult genres are excluded from get_all_channels — regardless of any
+        // `censored` flag — so their count is unknown: no entry, no badge.
+        expect(counts.has(19)).toBe(false);
+    });
+
+    it('preloadItvChannels kicks off the cache load for the current playlist', () => {
+        setup(null);
+        store.setCurrentPlaylist(PLAYLIST);
+
+        store.preloadItvChannels();
+
+        expect(itvCache.ensureLoaded).toHaveBeenCalledWith(PLAYLIST);
+    });
+
+    it('exposes per-genre channel counts for category badges (with the total under the "All" key)', () => {
+        setup(CACHED_CHANNELS);
+        enterItvCategory('*');
+
+        const counts = store.itvCategoryItemCounts();
+        // Two channels in genre 5, one in genre 9.
+        expect(counts.get(5)).toBe(2);
+        expect(counts.get(9)).toBe(1);
+        // "All" category is category_id '*' → Number('*') is NaN; the grand
+        // total lives under the NaN key so the "All" row shows every channel.
+        expect(counts.get(Number.NaN)).toBe(3);
+    });
+
+    it('has an empty count map when no full list is cached', () => {
+        setup(null);
+        enterItvCategory('*');
+
+        const counts = store.itvCategoryItemCounts();
+        // No genre entries at all — counts are unknown without the cache.
+        expect(counts.get(5)).toBeUndefined();
+        expect(counts.get(Number.NaN)).toBe(0);
+    });
+
+    it('drops a stale legacy page response that resolves after the cache took over', async () => {
+        setup(null);
+        const legacyResponse = createDeferred<unknown>();
+        dataService.sendIpcEvent.mockReturnValue(legacyResponse.promise);
+
+        enterItvCategory('5');
+
+        await waitForCondition(
+            () => dataService.sendIpcEvent.mock.calls.length > 0
+        );
+
+        // The background full-list load finishes while the legacy page-1
+        // request is still in flight; the resource re-fires and serves the
+        // complete category from the cache.
+        itvCache.setChannels(CACHED_CHANNELS);
+        await waitForCondition(() => store.itvChannels().length === 2);
+
+        // The late legacy response must not overwrite the full list with the
+        // first 14-item page again.
+        legacyResponse.resolve({
+            js: {
+                data: [
+                    {
+                        id: 'legacy-1',
+                        name: 'Legacy page one',
+                        cmd: 'ffrt http://x/legacy',
+                    },
+                ],
+                total_items: 28,
+            },
+        });
+        await flushResources();
+
+        expect(store.itvChannels().map((channel) => channel.name)).toEqual([
+            'News One',
+            'News Two',
+        ]);
+        expect(store.hasMoreChannels()).toBe(false);
+    });
+
+    it('keeps censored pagination after a delayed cache replays the current page', async () => {
+        setup(null);
+        dataService.sendIpcEvent.mockImplementation((_event, payload) =>
+            Promise.resolve({
+                js: {
+                    data: [
+                        {
+                            id: String(payload.params?.p),
+                            name: `Hidden ${payload.params?.p}`,
+                        },
+                    ],
+                    total_items: 3,
+                },
+            })
+        );
+        enterItvCategory('1099');
+        await waitForCondition(() => store.itvChannels().length === 1);
+        store.setPage(1);
+        await waitForCondition(() => store.itvChannels().length === 2);
+        itvCache.setChannels(CACHED_CHANNELS);
+        await waitForCondition(
+            () => dataService.sendIpcEvent.mock.calls.length === 3
+        );
+        await flushResources();
+        expect(store.itvChannels().map((row) => row.name)).toEqual([
+            'Hidden 1',
+            'Hidden 2',
+        ]);
+        expect(store.hasMoreChannels()).toBe(true);
+        store.setPage(2);
+        await waitForCondition(() => store.itvChannels().length === 3);
+        expect(store.hasMoreChannels()).toBe(false);
+    });
+
+    it.each(['empty', 'repeated'])(
+        'stops uncached search pagination on an %s page',
+        async (ending) => {
+            setup(CACHED_CHANNELS);
+            dataService.sendIpcEvent.mockResolvedValue({
+                js: { data: [{ id: 'one', name: 'Hidden' }], total_items: 99 },
+            });
+            enterItvCategory('1099');
+            await waitForCondition(() => store.itvChannels().length === 1);
+            if (ending === 'empty')
+                dataService.sendIpcEvent.mockResolvedValue({
+                    js: { data: [], total_items: 99 },
+                });
+            store.setPage(1);
+            await waitForCondition(() => !store.hasMoreChannels());
+            expect(store.itvChannels()).toHaveLength(1);
+        }
+    );
+
+    it('rejects an abandoned category response even after navigating back to it', async () => {
+        setup(null);
+        const old = createDeferred<unknown>();
+        dataService.sendIpcEvent.mockReturnValueOnce(old.promise);
+        enterItvCategory('5');
+        await waitForCondition(
+            () => dataService.sendIpcEvent.mock.calls.length === 1
+        );
+        dataService.sendIpcEvent.mockResolvedValue(
+            createContentResponse('Current')
+        );
+        store.setSelectedCategory('9');
+        await waitForCondition(
+            () => store.itvChannels()[0]?.name === 'Current'
+        );
+        store.setSelectedCategory('5');
+        await waitForCondition(
+            () => dataService.sendIpcEvent.mock.calls.length === 3
+        );
+        await flushResources();
+        old.resolve(createContentResponse('Abandoned'));
+        await flushResources();
+        expect(store.itvChannels()[0].name).toBe('Current');
+    });
+
+    it('kicks off a background full-list load and swaps it in once ready', async () => {
+        setup(null);
+        dataService.sendIpcEvent.mockResolvedValue({
+            js: {
+                data: [
+                    {
+                        id: 'legacy-1',
+                        name: 'Legacy page one',
+                        cmd: 'ffrt http://x/legacy',
+                    },
+                ],
+                total_items: 28,
+            },
+        });
+
+        enterItvCategory('5');
+
+        await waitForCondition(() => store.itvChannels().length === 1);
+
+        // Legacy paged flow stays in charge while the cache is cold.
+        expect(store.itvChannels()[0]?.name).toBe('Legacy page one');
+        expect(store.hasMoreChannels()).toBe(true);
+        expect(itvCache.ensureLoaded).toHaveBeenCalledWith(PLAYLIST);
+
+        // Full list finished loading in the background.
+        itvCache.setChannels(CACHED_CHANNELS);
+
+        await waitForCondition(() => store.itvChannels().length === 2);
+
+        expect(store.itvChannels().map((channel) => channel.name)).toEqual([
+            'News One',
+            'News Two',
+        ]);
+        expect(store.hasMoreChannels()).toBe(false);
+    });
+});

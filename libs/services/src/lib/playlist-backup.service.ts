@@ -1,0 +1,1364 @@
+import { inject, Injectable } from '@angular/core';
+import { firstValueFrom } from 'rxjs';
+import { PlaylistsService } from './playlists.service';
+import { SettingsStore } from './settings-store.service';
+import { DatabaseService } from './database-electron.service';
+import { VodSourcePinService } from './vod-source-pin.service';
+import { RuntimeCapabilitiesService } from './runtime-capabilities.service';
+import { PlaybackPositionService } from './playback-position.service';
+import { PwaXtreamBackupStateService } from './pwa-xtream-backup-state.service';
+import { XtreamPendingRestoreService } from './xtream-pending-restore.service';
+import { ParentalLockService } from './parental-lock/parental-lock.service';
+import { removesParentalLocks } from './parental-lock/parental-lock-store.util';
+import {
+    isParentalLockPlaylistLocksEmpty,
+    isM3uRecentlyViewedItem,
+    normalizeXtreamPendingRestoreState,
+    M3uPlaylistBackupEntry,
+    M3uRecentlyViewedItem,
+    Playlist,
+    PlaylistBackupEntry,
+    PlaylistBackupManifestV1,
+    PlaylistBackupSettings,
+    PLAYLIST_BACKUP_KIND,
+    PLAYLIST_BACKUP_VERSION,
+    StalkerPlaylistBackupEntry,
+    StalkerPortalItem,
+    XtreamBackupCategoryType,
+    XtreamBackupContentType,
+    XtreamPlaylistBackupEntry,
+    XtreamBackupSourcePin,
+    XtreamPendingRestoreState,
+    createRandomId,
+    isWellFormedParentalLockGroupTitles,
+    isWellFormedParentalLockStalkerCategories,
+    isWellFormedParentalLockXtreamCategories,
+    normalizeParentalLockGroupTitles,
+    normalizeParentalLockStalkerCategories,
+    normalizeParentalLockXtreamCategories,
+    ParentalLockPlaylistLocks,
+    StalkerBackupLockedCategory,
+    XtreamBackupHiddenCategory,
+} from '@iptvnator/shared/interfaces';
+
+export interface PlaylistBackupExportPayload {
+    defaultFileName: string;
+    json: string;
+    manifest: PlaylistBackupManifestV1;
+}
+
+export interface PlaylistBackupImportSummary {
+    imported: number;
+    merged: number;
+    skipped: number;
+    failed: number;
+    errors: string[];
+}
+
+export class PlaylistBackupError extends Error {
+    constructor(message: string) {
+        super(message);
+        this.name = 'PlaylistBackupError';
+    }
+}
+
+type PlaylistPortalType = 'm3u' | 'xtream' | 'stalker';
+
+@Injectable({
+    providedIn: 'root',
+})
+export class PlaylistBackupService {
+    private readonly playlistsService = inject(PlaylistsService);
+    private readonly settingsStore = inject(SettingsStore);
+    private readonly databaseService = inject(DatabaseService);
+    private readonly playbackPositionService = inject(PlaybackPositionService);
+    private readonly vodSourcePinService = inject(VodSourcePinService);
+    private readonly pendingRestoreService = inject(
+        XtreamPendingRestoreService
+    );
+    private readonly parentalLock = inject(ParentalLockService);
+    private readonly pwaXtream = inject(PwaXtreamBackupStateService);
+    private readonly runtime = inject(RuntimeCapabilitiesService);
+    private backupImportTail?: Promise<void>;
+
+    async exportBackup(): Promise<PlaylistBackupExportPayload> {
+        // Locks are written only when present, and an absent field means
+        // "no opinion" on restore — so an export must never run against an
+        // empty in-memory store that merely has not loaded, or could not.
+        await this.parentalLock.initialize();
+        if (!this.parentalLock.locksReadable()) {
+            throw new Error(
+                'The parental lock store could not be read; the backup would omit its locks.'
+            );
+        }
+        const playlists = await firstValueFrom(
+            this.playlistsService.getAllData()
+        );
+        const settings = this.buildSettingsPayload();
+        const playlistEntries = await Promise.all(
+            playlists.map((playlist) => this.buildPlaylistEntry(playlist))
+        );
+        const exportedAt = new Date().toISOString();
+        const manifest: PlaylistBackupManifestV1 = {
+            kind: PLAYLIST_BACKUP_KIND,
+            version: PLAYLIST_BACKUP_VERSION,
+            exportedAt,
+            includeSecrets: true,
+            ...(settings ? { settings } : {}),
+            playlists: playlistEntries,
+        };
+
+        return {
+            defaultFileName: `iptvnator-playlist-backup-${exportedAt.slice(
+                0,
+                10
+            )}.json`,
+            json: JSON.stringify(manifest, null, 2),
+            manifest,
+        };
+    }
+
+    importBackup(json: string): Promise<PlaylistBackupImportSummary> {
+        const importResult = (this.backupImportTail ?? Promise.resolve()).then(
+            () => this.executeImportBackup(json)
+        );
+        this.backupImportTail = importResult.then(
+            () => undefined,
+            () => undefined
+        );
+        return importResult;
+    }
+
+    private async executeImportBackup(
+        json: string
+    ): Promise<PlaylistBackupImportSummary> {
+        const manifest = this.parseManifest(json);
+        // A backup carrying lock lists REPLACES the matching playlists'
+        // locks, possibly with an emptier set: that is a lock edit, and lock
+        // edits sit behind the PIN. Asked here, after the file was chosen.
+        const carriesLocks = manifest.playlists.some((entry) => {
+            const state = entry.userState as {
+                lockedCategories?: unknown;
+                lockedGroupTitles?: unknown;
+            };
+            return (
+                state?.lockedCategories !== undefined ||
+                state?.lockedGroupTitles !== undefined
+            );
+        });
+        if (carriesLocks && !(await this.parentalLock.requestUnlock())) {
+            throw new PlaylistBackupError(
+                'Enter the parental PIN to restore a backup that carries parental locks.'
+            );
+        }
+        const existingPlaylists = await firstValueFrom(
+            this.playlistsService.getAllData()
+        );
+        const existingIds = new Set(
+            existingPlaylists.map((playlist) => playlist._id)
+        );
+        const fingerprintMap =
+            await this.buildExistingFingerprintMap(existingPlaylists);
+        const seenBackupFingerprints = new Set<string>();
+        const summary: PlaylistBackupImportSummary = {
+            imported: 0,
+            merged: 0,
+            skipped: 0,
+            failed: 0,
+            errors: [],
+        };
+
+        await this.restoreSettings(manifest.settings);
+
+        for (const entry of manifest.playlists) {
+            const entryLabel =
+                entry.title || entry.exportedId || entry.portalType;
+
+            try {
+                const fingerprint = this.getEntryFingerprint(entry);
+
+                if (seenBackupFingerprints.has(fingerprint)) {
+                    summary.skipped += 1;
+                    summary.errors.push(
+                        `${entryLabel}: duplicate backup entry skipped`
+                    );
+                    continue;
+                }
+
+                seenBackupFingerprints.add(fingerprint);
+
+                const existingMatch = fingerprintMap.get(fingerprint);
+                const targetId = this.resolveTargetPlaylistId(
+                    entry,
+                    existingMatch?._id,
+                    existingIds
+                );
+                const isMerge = existingMatch != null;
+                const nextPlaylist = await this.buildImportedPlaylist(
+                    entry,
+                    targetId,
+                    existingMatch ?? null
+                );
+
+                await firstValueFrom(
+                    this.playlistsService.addPlaylist(nextPlaylist)
+                );
+
+                if (entry.portalType === 'xtream') {
+                    await this.restoreXtreamEntry(targetId, entry);
+                }
+
+                // Last: a failed Xtream restore above must leave the
+                // playlist's previous locks in place rather than commit the
+                // backup's (possibly smaller) lock set for a failed merge.
+                await this.restoreParentalLocks(targetId, entry, isMerge);
+
+                if (isMerge) {
+                    summary.merged += 1;
+                } else {
+                    summary.imported += 1;
+                    existingIds.add(targetId);
+                }
+            } catch (error) {
+                summary.failed += 1;
+                summary.errors.push(
+                    `${entryLabel}: ${this.getErrorMessage(error)}`
+                );
+            }
+        }
+
+        return summary;
+    }
+
+    private async buildPlaylistEntry(
+        playlist: Playlist
+    ): Promise<PlaylistBackupEntry> {
+        const portalType = this.getPlaylistPortalType(playlist);
+
+        switch (portalType) {
+            case 'xtream':
+                return this.buildXtreamEntry(playlist);
+            case 'stalker':
+                return this.buildStalkerEntry(playlist);
+            case 'm3u':
+            default:
+                return this.buildM3uEntry(playlist);
+        }
+    }
+
+    private async buildM3uEntry(
+        playlist: Playlist
+    ): Promise<M3uPlaylistBackupEntry> {
+        const rawM3u = await firstValueFrom(
+            this.playlistsService.getRawPlaylistById(playlist._id)
+        );
+        const favorites = Array.isArray(playlist.favorites)
+            ? playlist.favorites.filter(
+                  (item): item is string =>
+                      typeof item === 'string' && item.trim().length > 0
+              )
+            : [];
+        const recentlyViewed = Array.isArray(playlist.recentlyViewed)
+            ? playlist.recentlyViewed.filter(isM3uRecentlyViewedItem)
+            : [];
+
+        return {
+            portalType: 'm3u',
+            exportedId: playlist._id,
+            title: playlist.title,
+            autoRefresh: Boolean(playlist.autoRefresh),
+            position: playlist.position,
+            source: {
+                kind: this.resolveM3uSourceKind(playlist),
+                rawM3u,
+                ...(playlist.url ? { url: playlist.url } : {}),
+                ...(playlist.userAgent
+                    ? { userAgent: playlist.userAgent }
+                    : {}),
+                ...(playlist.referrer ? { referrer: playlist.referrer } : {}),
+                ...(playlist.origin ? { origin: playlist.origin } : {}),
+                ...(playlist.filePath
+                    ? { filePathHint: playlist.filePath }
+                    : {}),
+            },
+            userState: {
+                favorites: this.uniqueStrings(favorites),
+                recentlyViewed: recentlyViewed.map((item) => ({ ...item })),
+                hiddenGroupTitles: this.uniqueStrings(
+                    Array.isArray(playlist.hiddenGroupTitles)
+                        ? playlist.hiddenGroupTitles
+                        : []
+                ),
+                ...this.optionalLockedGroupTitles(playlist._id),
+            },
+        };
+    }
+
+    private async buildXtreamEntry(
+        playlist: Playlist
+    ): Promise<XtreamPlaylistBackupEntry> {
+        const entry: XtreamPlaylistBackupEntry = {
+            portalType: 'xtream',
+            exportedId: playlist._id,
+            title: playlist.title,
+            autoRefresh: Boolean(playlist.autoRefresh),
+            position: playlist.position,
+            connection: {
+                serverUrl: playlist.serverUrl ?? '',
+                username: playlist.username ?? '',
+                ...(playlist.password ? { password: playlist.password } : {}),
+            },
+            userState: {
+                hiddenCategories: [],
+                favorites: [],
+                recentlyViewed: [],
+                playbackPositions: [],
+                ...this.optionalLockedXtreamCategories(playlist._id),
+            },
+        };
+        const pending = this.pendingRestoreService.getOrThrow(playlist._id);
+        if (pending) {
+            // A parked import is authoritative, including empty collections.
+            // Reading the incomplete catalog instead would silently lose it.
+            const sourcePins =
+                pending.sourcePins ??
+                (await this.readSourcePinsForExport(playlist._id));
+            return {
+                ...entry,
+                userState: {
+                    ...pending,
+                    ...this.optionalLockedXtreamCategories(playlist._id),
+                    ...(sourcePins ? { sourcePins } : {}),
+                },
+            };
+        }
+        // An unavailable pin store is no opinion, never an authoritative [].
+        // Same choice as XTREAM_DATA_SOURCE: user state lives where it reads.
+        if (!this.runtime.supportsXtreamSqliteDataSource)
+            return this.pwaXtream.exportInto(entry);
+
+        const [
+            liveCategories,
+            movieCategories,
+            seriesCategories,
+            favorites,
+            recent,
+            playbackPositions,
+            sourcePins,
+        ] = await Promise.all([
+            this.databaseService.getAllXtreamCategories(playlist._id, 'live'),
+            this.databaseService.getAllXtreamCategories(playlist._id, 'movies'),
+            this.databaseService.getAllXtreamCategories(playlist._id, 'series'),
+            this.databaseService.getFavorites(playlist._id),
+            this.databaseService.getRecentItems(playlist._id),
+            this.playbackPositionService.getAllPlaybackPositionsOrThrow(
+                playlist._id
+            ),
+            // Throws rather than reading a failure as "no pins": restore
+            // treats this collection as authoritative and clears the
+            // playlist's pins before applying it, so an empty list born of a
+            // failed read would wipe them. `null` where the store is not
+            // reachable at all, which is a different answer again — see below.
+            this.readSourcePinsForExport(playlist._id),
+        ]);
+
+        return {
+            ...entry,
+            userState: {
+                hiddenCategories: [
+                    ...this.mapHiddenCategories(liveCategories, 'live'),
+                    ...this.mapHiddenCategories(movieCategories, 'movies'),
+                    ...this.mapHiddenCategories(seriesCategories, 'series'),
+                ],
+                ...this.optionalLockedXtreamCategories(playlist._id),
+                favorites: favorites.map((item) => ({
+                    xtreamId: item.xtream_id,
+                    contentType: item.type as XtreamBackupContentType,
+                    ...(item.added_at ? { addedAt: item.added_at } : {}),
+                    ...(item.position !== undefined
+                        ? { position: item.position }
+                        : {}),
+                })),
+                recentlyViewed: recent.map((item) => ({
+                    xtreamId: item.xtream_id,
+                    contentType: item.type as XtreamBackupContentType,
+                    viewedAt: item.viewed_at ?? new Date().toISOString(),
+                })),
+                playbackPositions: playbackPositions.map((item) => ({
+                    ...item,
+                })),
+                // Carried under the playlist they point AT, so a restore that
+                // does not include that portal cannot resurrect a preference
+                // for something the archive never had.
+                //
+                // Present ONLY when this runtime can actually read them. The
+                // collection is authoritative on restore, so stating `[]`
+                // where the answer is "could not look" turns the archive into
+                // an instruction to delete.
+                ...(sourcePins ? { sourcePins } : {}),
+            },
+        };
+    }
+
+    /**
+     * The playlist's pins for the archive, or `null` when this runtime cannot
+     * read them at all.
+     *
+     * Three outcomes, and conflating any two of them loses data: pins exist,
+     * there are none, and "could not look". Only the first two belong in an
+     * archive — the third has to leave `sourcePins` out entirely, so restore
+     * treats it as no opinion rather than as an instruction to delete. A read
+     * that FAILS is neither: it throws, and the export fails with it.
+     */
+    private async readSourcePinsForExport(
+        playlistId: string
+    ): Promise<XtreamBackupSourcePin[] | null> {
+        if (!this.vodSourcePinService.isAvailable) {
+            return null;
+        }
+
+        const pins =
+            await this.vodSourcePinService.listForPlaylistOrThrow(playlistId);
+
+        return pins.map((pin) => ({
+            matchKey: pin.matchKey,
+            contentId: pin.contentId,
+            ...(pin.updatedAt ? { updatedAt: pin.updatedAt } : {}),
+        }));
+    }
+
+    private buildStalkerEntry(playlist: Playlist): StalkerPlaylistBackupEntry {
+        return {
+            portalType: 'stalker',
+            exportedId: playlist._id,
+            title: playlist.title,
+            autoRefresh: Boolean(playlist.autoRefresh),
+            position: playlist.position,
+            connection: {
+                portalUrl: playlist.portalUrl ?? playlist.url ?? '',
+                macAddress: playlist.macAddress ?? '',
+                ...(playlist.isFullStalkerPortal !== undefined
+                    ? {
+                          isFullStalkerPortal: playlist.isFullStalkerPortal,
+                      }
+                    : {}),
+                ...(playlist.username ? { username: playlist.username } : {}),
+                ...(playlist.password ? { password: playlist.password } : {}),
+                ...(playlist.userAgent
+                    ? { userAgent: playlist.userAgent }
+                    : {}),
+                ...(playlist.referrer ? { referrer: playlist.referrer } : {}),
+                ...(playlist.origin ? { origin: playlist.origin } : {}),
+                ...(playlist.stalkerSerialNumber
+                    ? { stalkerSerialNumber: playlist.stalkerSerialNumber }
+                    : {}),
+                ...(playlist.stalkerDeviceId1
+                    ? { stalkerDeviceId1: playlist.stalkerDeviceId1 }
+                    : {}),
+                ...(playlist.stalkerDeviceId2
+                    ? { stalkerDeviceId2: playlist.stalkerDeviceId2 }
+                    : {}),
+                ...(playlist.stalkerSignature1
+                    ? { stalkerSignature1: playlist.stalkerSignature1 }
+                    : {}),
+                ...(playlist.stalkerSignature2
+                    ? { stalkerSignature2: playlist.stalkerSignature2 }
+                    : {}),
+            },
+            userState: {
+                ...this.optionalLockedStalkerCategories(playlist._id),
+                favorites: this.extractStalkerItems(playlist.favorites),
+                recentlyViewed: this.extractStalkerItems(
+                    playlist.recentlyViewed
+                ),
+            },
+        };
+    }
+
+    private buildSettingsPayload(): PlaylistBackupSettings | undefined {
+        const epgUrls = this.normalizeSettingsUrls(
+            this.settingsStore.getSettings().epgUrl ?? []
+        );
+
+        if (epgUrls.length === 0) {
+            return undefined;
+        }
+
+        return { epgUrls };
+    }
+
+    private parseManifest(json: string): PlaylistBackupManifestV1 {
+        let parsed: unknown;
+
+        try {
+            parsed = JSON.parse(json);
+        } catch (error) {
+            throw new PlaylistBackupError(
+                `Invalid backup JSON: ${this.getErrorMessage(error)}`
+            );
+        }
+
+        if (Array.isArray(parsed)) {
+            throw new PlaylistBackupError(
+                'Legacy playlist JSON exports are not supported. Create a versioned backup first.'
+            );
+        }
+
+        if (!parsed || typeof parsed !== 'object') {
+            throw new PlaylistBackupError('Backup file must be a JSON object.');
+        }
+
+        const manifest = parsed as Partial<PlaylistBackupManifestV1>;
+
+        if (manifest.kind !== PLAYLIST_BACKUP_KIND) {
+            throw new PlaylistBackupError('Unsupported backup file format.');
+        }
+
+        if (manifest.version !== PLAYLIST_BACKUP_VERSION) {
+            throw new PlaylistBackupError(
+                `Unsupported backup version: ${manifest.version ?? 'unknown'}`
+            );
+        }
+
+        if (!Array.isArray(manifest.playlists)) {
+            throw new PlaylistBackupError(
+                'Backup file must contain playlists.'
+            );
+        }
+
+        for (const entry of manifest.playlists) {
+            this.validateEntry(entry);
+        }
+
+        return manifest as PlaylistBackupManifestV1;
+    }
+
+    private validateEntry(entry: PlaylistBackupEntry): void {
+        if (!entry || typeof entry !== 'object') {
+            throw new PlaylistBackupError(
+                'Backup contains an invalid playlist entry.'
+            );
+        }
+
+        if (!entry.exportedId || !entry.title) {
+            throw new PlaylistBackupError(
+                'Backup contains a playlist entry without required metadata.'
+            );
+        }
+
+        switch (entry.portalType) {
+            case 'm3u':
+                if (!entry.source?.rawM3u) {
+                    throw new PlaylistBackupError(
+                        `M3U backup "${entry.title}" is missing raw playlist data.`
+                    );
+                }
+                // Restore replaces the playlist's locks with the archive's,
+                // and the normalizer drops what it does not understand — a
+                // damaged lock list would erase the persisted protection.
+                if (
+                    entry.userState?.lockedGroupTitles !== undefined &&
+                    !isWellFormedParentalLockGroupTitles(
+                        entry.userState.lockedGroupTitles
+                    )
+                ) {
+                    throw new PlaylistBackupError(
+                        `M3U backup "${entry.title}" has invalid parental locks.`
+                    );
+                }
+                break;
+            case 'xtream':
+                if (
+                    !entry.connection?.serverUrl ||
+                    !entry.connection?.username
+                ) {
+                    throw new PlaylistBackupError(
+                        `Xtream backup "${entry.title}" is missing connection metadata.`
+                    );
+                }
+
+                // Restore treats the backup's user state as authoritative and
+                // replaces the existing state with it. Every v1 export writes
+                // all four collections, so a missing one signals a damaged or
+                // hand-edited file — reject it instead of wiping user data
+                // with normalized empty arrays.
+                if (
+                    !Array.isArray(entry.userState?.hiddenCategories) ||
+                    !Array.isArray(entry.userState?.favorites) ||
+                    !Array.isArray(entry.userState?.recentlyViewed) ||
+                    !Array.isArray(entry.userState?.playbackPositions)
+                ) {
+                    throw new PlaylistBackupError(
+                        `Xtream backup "${entry.title}" has incomplete user state.`
+                    );
+                }
+
+                if (
+                    entry.userState.lockedCategories !== undefined &&
+                    !isWellFormedParentalLockXtreamCategories(
+                        entry.userState.lockedCategories
+                    )
+                ) {
+                    throw new PlaylistBackupError(
+                        `Xtream backup "${entry.title}" has invalid parental locks.`
+                    );
+                }
+
+                // Absent in archives written before multi-source existed, so
+                // its absence is not damage — only a wrong type is.
+                if (
+                    entry.userState.sourcePins !== undefined &&
+                    !Array.isArray(entry.userState.sourcePins)
+                ) {
+                    throw new PlaylistBackupError(
+                        `Xtream backup "${entry.title}" has incomplete user state.`
+                    );
+                }
+                break;
+            case 'stalker':
+                if (
+                    !entry.connection?.portalUrl ||
+                    !entry.connection?.macAddress
+                ) {
+                    throw new PlaylistBackupError(
+                        `Stalker backup "${entry.title}" is missing connection metadata.`
+                    );
+                }
+                if (
+                    entry.userState?.lockedCategories !== undefined &&
+                    !isWellFormedParentalLockStalkerCategories(
+                        entry.userState.lockedCategories
+                    )
+                ) {
+                    throw new PlaylistBackupError(
+                        `Stalker backup "${entry.title}" has invalid parental locks.`
+                    );
+                }
+                break;
+            default:
+                throw new PlaylistBackupError(
+                    `Unsupported backup playlist type: ${(entry as { portalType?: string }).portalType ?? 'unknown'}`
+                );
+        }
+    }
+
+    private async buildExistingFingerprintMap(
+        playlists: Playlist[]
+    ): Promise<Map<string, Playlist>> {
+        const map = new Map<string, Playlist>();
+
+        for (const playlist of playlists) {
+            const portalType = this.getPlaylistPortalType(playlist);
+
+            if (portalType === 'm3u' && !playlist.url) {
+                const rawM3u = await firstValueFrom(
+                    this.playlistsService.getRawPlaylistById(playlist._id)
+                );
+                map.set(this.buildM3uRawFingerprint(rawM3u), playlist);
+                continue;
+            }
+
+            map.set(this.getPlaylistFingerprint(playlist), playlist);
+        }
+
+        return map;
+    }
+
+    private getPlaylistFingerprint(playlist: Playlist): string {
+        const portalType = this.getPlaylistPortalType(playlist);
+
+        switch (portalType) {
+            case 'xtream':
+                return [
+                    'xtream',
+                    this.normalizeUrlIdentity(playlist.serverUrl ?? ''),
+                    this.normalizeIdentityValue(playlist.username ?? ''),
+                ].join('|');
+            case 'stalker':
+                return [
+                    'stalker',
+                    this.normalizeUrlIdentity(
+                        playlist.portalUrl ?? playlist.url ?? ''
+                    ),
+                    this.normalizeIdentityValue(
+                        playlist.macAddress ?? '',
+                        true
+                    ),
+                ].join('|');
+            case 'm3u':
+            default:
+                if (playlist.url) {
+                    return this.buildM3uUrlFingerprint(playlist.url);
+                }
+
+                throw new PlaylistBackupError(
+                    `Unable to fingerprint M3U playlist "${playlist.title}".`
+                );
+        }
+    }
+
+    private getEntryFingerprint(entry: PlaylistBackupEntry): string {
+        switch (entry.portalType) {
+            case 'xtream':
+                return [
+                    'xtream',
+                    this.normalizeUrlIdentity(entry.connection.serverUrl),
+                    this.normalizeIdentityValue(entry.connection.username),
+                ].join('|');
+            case 'stalker':
+                return [
+                    'stalker',
+                    this.normalizeUrlIdentity(entry.connection.portalUrl),
+                    this.normalizeIdentityValue(
+                        entry.connection.macAddress,
+                        true
+                    ),
+                ].join('|');
+            case 'm3u':
+            default:
+                if (entry.source.url) {
+                    return this.buildM3uUrlFingerprint(entry.source.url);
+                }
+
+                return this.buildM3uRawFingerprint(entry.source.rawM3u);
+        }
+    }
+
+    private buildM3uUrlFingerprint(url: string): string {
+        return ['m3u', 'url', this.normalizeUrlIdentity(url)].join('|');
+    }
+
+    private buildM3uRawFingerprint(rawM3u: string): string {
+        return [
+            'm3u',
+            'raw',
+            this.hashString(this.canonicalizeM3u(rawM3u)),
+        ].join('|');
+    }
+
+    private resolveTargetPlaylistId(
+        entry: PlaylistBackupEntry,
+        matchedId: string | undefined,
+        existingIds: Set<string>
+    ): string {
+        if (matchedId) {
+            return matchedId;
+        }
+
+        if (entry.exportedId && !existingIds.has(entry.exportedId)) {
+            return entry.exportedId;
+        }
+
+        let nextId = createRandomId();
+
+        while (existingIds.has(nextId)) {
+            nextId = createRandomId();
+        }
+
+        return nextId;
+    }
+
+    private async buildImportedPlaylist(
+        entry: PlaylistBackupEntry,
+        playlistId: string,
+        existing: Playlist | null
+    ): Promise<Playlist> {
+        switch (entry.portalType) {
+            case 'xtream':
+                return this.buildImportedXtreamPlaylist(
+                    entry,
+                    playlistId,
+                    existing
+                );
+            case 'stalker':
+                return this.buildImportedStalkerPlaylist(
+                    entry,
+                    playlistId,
+                    existing
+                );
+            case 'm3u':
+            default:
+                return this.buildImportedM3uPlaylist(
+                    entry,
+                    playlistId,
+                    existing
+                );
+        }
+    }
+
+    private async buildImportedM3uPlaylist(
+        entry: M3uPlaylistBackupEntry,
+        playlistId: string,
+        existing: Playlist | null
+    ): Promise<Playlist> {
+        const parsedPlaylist =
+            await this.playlistsService.handlePlaylistParsing(
+                'TEXT',
+                entry.source.rawM3u,
+                entry.title
+            );
+        const now = new Date().toISOString();
+
+        return {
+            ...existing,
+            ...parsedPlaylist,
+            _id: playlistId,
+            title: entry.title,
+            filename: entry.title,
+            importDate: existing?.importDate ?? now,
+            lastUsage: existing?.lastUsage ?? now,
+            autoRefresh: entry.autoRefresh,
+            position: entry.position,
+            favorites: this.uniqueStrings(entry.userState.favorites),
+            recentlyViewed: entry.userState.recentlyViewed.map((item) =>
+                this.normalizeM3uRecentlyViewedItem(item)
+            ),
+            hiddenGroupTitles: this.uniqueStrings(
+                entry.userState.hiddenGroupTitles
+            ),
+            ...(entry.source.url
+                ? { url: entry.source.url }
+                : { url: undefined }),
+            ...(entry.source.userAgent
+                ? { userAgent: entry.source.userAgent }
+                : { userAgent: undefined }),
+            ...(entry.source.referrer
+                ? { referrer: entry.source.referrer }
+                : { referrer: undefined }),
+            ...(entry.source.origin
+                ? { origin: entry.source.origin }
+                : { origin: undefined }),
+            filePath: undefined,
+        };
+    }
+
+    private buildImportedXtreamPlaylist(
+        entry: XtreamPlaylistBackupEntry,
+        playlistId: string,
+        existing: Playlist | null
+    ): Playlist {
+        const now = new Date().toISOString();
+
+        return {
+            ...existing,
+            _id: playlistId,
+            title: entry.title,
+            filename: entry.title,
+            count: existing?.count ?? 0,
+            importDate: existing?.importDate ?? now,
+            lastUsage: existing?.lastUsage ?? now,
+            autoRefresh: entry.autoRefresh,
+            position: entry.position,
+            serverUrl: entry.connection.serverUrl,
+            username: entry.connection.username,
+            password: entry.connection.password,
+            favorites: [],
+            recentlyViewed: [],
+        };
+    }
+
+    private buildImportedStalkerPlaylist(
+        entry: StalkerPlaylistBackupEntry,
+        playlistId: string,
+        existing: Playlist | null
+    ): Playlist {
+        const now = new Date().toISOString();
+
+        return {
+            ...existing,
+            _id: playlistId,
+            title: entry.title,
+            filename: entry.title,
+            count: existing?.count ?? 0,
+            importDate: existing?.importDate ?? now,
+            lastUsage: existing?.lastUsage ?? now,
+            autoRefresh: entry.autoRefresh,
+            position: entry.position,
+            portalUrl: entry.connection.portalUrl,
+            url: entry.connection.portalUrl,
+            macAddress: entry.connection.macAddress,
+            username: entry.connection.username,
+            password: entry.connection.password,
+            userAgent: entry.connection.userAgent,
+            referrer: entry.connection.referrer,
+            origin: entry.connection.origin,
+            isFullStalkerPortal: entry.connection.isFullStalkerPortal,
+            favorites: entry.userState.favorites.map((item) => ({ ...item })),
+            recentlyViewed: entry.userState.recentlyViewed.map((item) => ({
+                ...item,
+            })),
+            stalkerSerialNumber: entry.connection.stalkerSerialNumber,
+            stalkerDeviceId1: entry.connection.stalkerDeviceId1,
+            stalkerDeviceId2: entry.connection.stalkerDeviceId2,
+            stalkerSignature1: entry.connection.stalkerSignature1,
+            stalkerSignature2: entry.connection.stalkerSignature2,
+            stalkerToken: undefined,
+            stalkerAccountInfo: undefined,
+        };
+    }
+
+    private async restoreSettings(
+        settings: PlaylistBackupSettings | undefined
+    ): Promise<void> {
+        if (!settings?.epgUrls) {
+            return;
+        }
+
+        const existingSettings = this.settingsStore.getSettings();
+        const mergedEpgUrls = this.mergeUrls(
+            settings.epgUrls,
+            existingSettings.epgUrl ?? []
+        );
+
+        await this.settingsStore.updateSettings({
+            epgUrl: mergedEpgUrls,
+        });
+    }
+
+    private async restoreXtreamEntry(
+        playlistId: string,
+        entry: XtreamPlaylistBackupEntry
+    ): Promise<void> {
+        // Backup files are user-supplied JSON; normalization drops user-state
+        // entries without a usable numeric xtreamId (e.g. hiddenCategories
+        // exported by builds affected by issue #1017) so they cannot match
+        // arbitrary categories during restore.
+        const restoreState: XtreamPendingRestoreState =
+            normalizeXtreamPendingRestoreState(entry.userState);
+
+        const restoreSnapshot = this.pendingRestoreService.set(
+            playlistId,
+            restoreState
+        );
+        if (!restoreSnapshot) {
+            throw new PlaylistBackupError(
+                `Parking pending restore state for "${playlistId}" failed.`
+            );
+        }
+
+        // Browser storage has no catalog cache to wait for: apply at once.
+        const sqlite = this.runtime.supportsXtreamSqliteDataSource;
+        if (sqlite) {
+            this.playbackPositionService.assertSupportsAtomicReplacement();
+            if (!(await this.hasCompletedOfflineCache(playlistId))) return;
+        }
+
+        const restoreResult = await this.pendingRestoreService.applyAndConsume(
+            playlistId,
+            restoreSnapshot,
+            async (state) =>
+                sqlite
+                    ? this.applyXtreamRestoreState(playlistId, state)
+                    : this.pwaXtream.restore(playlistId, state, entry)
+        );
+        if (restoreResult !== 'consumed') {
+            throw new PlaylistBackupError(
+                `Clearing pending restore state for "${playlistId}" failed.`
+            );
+        }
+    }
+
+    private async hasCompletedOfflineCache(
+        playlistId: string
+    ): Promise<boolean> {
+        const checks = await Promise.all(
+            [
+                {
+                    categoryType: 'live' as const,
+                    contentType: 'live' as const,
+                },
+                {
+                    categoryType: 'movies' as const,
+                    contentType: 'movie' as const,
+                },
+                {
+                    categoryType: 'series' as const,
+                    contentType: 'series' as const,
+                },
+            ].map(async ({ categoryType, contentType }) => {
+                const [importStatus, hasCategories, hasContent] =
+                    await Promise.all([
+                        this.databaseService.getXtreamImportStatus(
+                            playlistId,
+                            contentType
+                        ),
+                        this.databaseService.hasXtreamCategories(
+                            playlistId,
+                            categoryType
+                        ),
+                        this.databaseService.hasXtreamContent(
+                            playlistId,
+                            contentType
+                        ),
+                    ]);
+
+                return (
+                    importStatus === 'completed' && hasCategories && hasContent
+                );
+            })
+        );
+
+        return checks.every(Boolean);
+    }
+
+    private async applyXtreamRestoreState(
+        playlistId: string,
+        state: XtreamPendingRestoreState
+    ): Promise<void> {
+        this.playbackPositionService.assertSupportsAtomicReplacement();
+        await this.restoreXtreamCategoryVisibility(playlistId, state);
+        await this.databaseService.restoreXtreamUserData(
+            playlistId,
+            state.favorites,
+            state.recentlyViewed
+        );
+
+        await this.playbackPositionService.replaceAllPlaybackPositions(
+            playlistId,
+            state.playbackPositions
+        );
+
+        // Present-but-empty is an answer, like the positions cleared above: a
+        // backup that holds no pin for this playlist means the user had none,
+        // so leaving the current ones would resurrect preferences the archive
+        // deliberately does not contain. Absent (an older archive) means "no
+        // opinion", and those are left alone.
+        if (!state.sourcePins) {
+            return;
+        }
+
+        // ONE call, not a clear followed by writes. Split up, a write that
+        // fails partway leaves the previous pins already deleted and only part
+        // of the archive applied — a state belonging to neither, reported as a
+        // failure the user has no way to undo. The match key identifies the
+        // film and survives untouched; only the playlist has a new id here.
+        const replaced = await this.vodSourcePinService.replaceForPlaylist(
+            playlistId,
+            state.sourcePins.map((pin) => ({
+                matchKey: pin.matchKey,
+                playlistId,
+                contentId: pin.contentId,
+                portalType: 'xtream' as const,
+                ...(pin.updatedAt ? { updatedAt: pin.updatedAt } : {}),
+            }))
+        );
+
+        // Reported rather than thrown, so ignoring it would drop every
+        // preference while the summary claims the import succeeded.
+        if (!replaced) {
+            throw new PlaylistBackupError(
+                `Restoring the pinned sources for "${playlistId}" failed.`
+            );
+        }
+    }
+
+    private async restoreXtreamCategoryVisibility(
+        playlistId: string,
+        state: XtreamPendingRestoreState
+    ): Promise<void> {
+        const categoriesByType = await Promise.all([
+            this.databaseService.getAllXtreamCategories(playlistId, 'live'),
+            this.databaseService.getAllXtreamCategories(playlistId, 'movies'),
+            this.databaseService.getAllXtreamCategories(playlistId, 'series'),
+        ]);
+
+        for (const categories of categoriesByType) {
+            if (categories.length === 0) {
+                continue;
+            }
+
+            await this.databaseService.updateCategoryVisibility(
+                categories.map((category) => category.id),
+                false
+            );
+
+            const hiddenCategoryIds = categories
+                .filter((category) =>
+                    state.hiddenCategories.some(
+                        (hiddenCategory) =>
+                            hiddenCategory.categoryType === category.type &&
+                            hiddenCategory.xtreamId === category.xtream_id
+                    )
+                )
+                .map((category) => category.id);
+
+            if (hiddenCategoryIds.length > 0) {
+                await this.databaseService.updateCategoryVisibility(
+                    hiddenCategoryIds,
+                    true
+                );
+            }
+        }
+    }
+
+    // Parental locks are written only when the playlist has some: an archive
+    // without the field says nothing about locks (older builds wrote none),
+    // so an unlocked playlist stays byte-identical to a pre-lock export.
+    private optionalLockedXtreamCategories(playlistId: string): {
+        lockedCategories?: XtreamBackupHiddenCategory[];
+    } {
+        const locked = this.parentalLock
+            .locksFor(playlistId)
+            .xtream.map((entry) => ({
+                categoryType: entry.categoryType,
+                xtreamId: entry.xtreamId,
+            }));
+        return locked.length > 0 ? { lockedCategories: locked } : {};
+    }
+
+    private optionalLockedStalkerCategories(playlistId: string): {
+        lockedCategories?: StalkerBackupLockedCategory[];
+    } {
+        const locked = this.parentalLock
+            .locksFor(playlistId)
+            .stalker.map((entry) => ({ ...entry }));
+        return locked.length > 0 ? { lockedCategories: locked } : {};
+    }
+
+    private optionalLockedGroupTitles(playlistId: string): {
+        lockedGroupTitles?: string[];
+    } {
+        // Exact titles: M3U locks match `channel.group.title` verbatim, so
+        // the trimming `uniqueStrings` would turn a lock on " Adult " into
+        // one on "Adult" and weaken the restored lock.
+        const locked = normalizeParentalLockGroupTitles(
+            this.parentalLock.locksFor(playlistId).m3u
+        );
+        return locked.length > 0 ? { lockedGroupTitles: locked } : {};
+    }
+
+    /**
+     * Parental locks travel next to the hidden state of each entry. Absent
+     * fields mean the archive predates the lock (or was written by a build
+     * that could not read it) and leave the playlist's locks alone.
+     */
+    private async restoreParentalLocks(
+        playlistId: string,
+        entry: PlaylistBackupEntry,
+        isMerge: boolean
+    ): Promise<void> {
+        // The stale-id check below and the merge base both read the store; an
+        // empty fail-closed snapshot would let a reused id keep a deleted
+        // playlist's locks once a later read recovers them.
+        if (!(await this.parentalLock.ensureLocksReadable())) {
+            throw new PlaylistBackupError(
+                `Restoring the parental locks for "${playlistId}" failed: the lock store could not be read.`
+            );
+        }
+        // A playlist created by this restore owns no locks yet: whatever the
+        // store holds under a reused id belongs to a deleted playlist (a
+        // cleanup that failed), and must not be inherited.
+        const current = isMerge
+            ? this.parentalLock.locksFor(playlistId)
+            : { xtream: [], stalker: [], m3u: [] };
+        const staleOnNewId =
+            !isMerge &&
+            !isParentalLockPlaylistLocksEmpty(
+                this.parentalLock.locksFor(playlistId)
+            );
+        let next: ParentalLockPlaylistLocks | null = staleOnNewId
+            ? current
+            : null;
+
+        if (entry.portalType === 'm3u') {
+            const titles = entry.userState.lockedGroupTitles;
+            if (Array.isArray(titles)) {
+                next = {
+                    ...current,
+                    m3u: normalizeParentalLockGroupTitles(titles),
+                };
+            }
+        } else if (entry.portalType === 'xtream') {
+            const categories = entry.userState.lockedCategories;
+            if (Array.isArray(categories)) {
+                next = {
+                    ...current,
+                    xtream: normalizeParentalLockXtreamCategories(categories),
+                };
+            }
+        } else if (Array.isArray(entry.userState.lockedCategories)) {
+            next = {
+                ...current,
+                stalker: normalizeParentalLockStalkerCategories(
+                    entry.userState.lockedCategories
+                ),
+            };
+        }
+
+        // Taking a lock away needs an unlocked session when it commits. The
+        // PIN asked at the start may be stale by now (idle relock or "Lock
+        // now" during a long import): ask again if the session relocked.
+        // A restore that only adds locks is not asked.
+        if (
+            next &&
+            removesParentalLocks(
+                this.parentalLock.locksFor(playlistId),
+                next
+            ) &&
+            !(await this.parentalLock.requestUnlock())
+        ) {
+            throw new PlaylistBackupError(
+                `Restoring the parental locks for "${playlistId}" needs the parental PIN: the app locked again during the restore.`
+            );
+        }
+        if (
+            next &&
+            !(await this.parentalLock.replacePlaylistLocks(playlistId, next))
+        ) {
+            throw new PlaylistBackupError(
+                `Restoring the parental locks for "${playlistId}" failed.`
+            );
+        }
+    }
+
+    private mapHiddenCategories(
+        categories: Array<{
+            hidden: boolean;
+            xtream_id: number;
+            type: XtreamBackupCategoryType;
+        }>,
+        categoryType: XtreamBackupCategoryType
+    ): XtreamPendingRestoreState['hiddenCategories'] {
+        return categories
+            .filter((category) => category.hidden)
+            .map((category) => ({
+                categoryType,
+                xtreamId: category.xtream_id,
+            }));
+    }
+
+    private getPlaylistPortalType(playlist: Playlist): PlaylistPortalType {
+        if (playlist.serverUrl && playlist.username) {
+            return 'xtream';
+        }
+
+        if (playlist.macAddress && (playlist.portalUrl || playlist.url)) {
+            return 'stalker';
+        }
+
+        return 'm3u';
+    }
+
+    private resolveM3uSourceKind(playlist: Playlist): 'url' | 'file' | 'text' {
+        if (playlist.url) {
+            return 'url';
+        }
+
+        if (playlist.filePath) {
+            return 'file';
+        }
+
+        return 'text';
+    }
+
+    private extractStalkerItems(items: unknown): StalkerPortalItem[] {
+        if (!Array.isArray(items)) {
+            return [];
+        }
+
+        return items.filter(
+            (item): item is StalkerPortalItem =>
+                !!item && typeof item === 'object' && !Array.isArray(item)
+        );
+    }
+
+    private normalizeM3uRecentlyViewedItem(
+        item: M3uRecentlyViewedItem
+    ): M3uRecentlyViewedItem {
+        return {
+            ...item,
+            source: 'm3u',
+            id: String(item.id ?? item.url),
+            url: String(item.url),
+            title: String(item.title ?? ''),
+            category_id: 'live',
+            added_at: item.added_at ?? new Date().toISOString(),
+        };
+    }
+
+    private normalizeSettingsUrls(urls: string[]): string[] {
+        return this.uniqueStrings(
+            urls
+                .map((url) => String(url ?? '').trim())
+                .filter((url) => url.length > 0)
+        );
+    }
+
+    private mergeUrls(primary: string[], secondary: string[]): string[] {
+        const merged = new Map<string, string>();
+
+        for (const url of [...primary, ...secondary]) {
+            const normalized = this.normalizeUrlIdentity(url);
+
+            if (!normalized || merged.has(normalized)) {
+                continue;
+            }
+
+            merged.set(normalized, url.trim());
+        }
+
+        return [...merged.values()];
+    }
+
+    private uniqueStrings(values: string[]): string[] {
+        const seen = new Set<string>();
+        const result: string[] = [];
+
+        for (const value of values) {
+            const normalized = value.trim();
+
+            if (!normalized || seen.has(normalized)) {
+                continue;
+            }
+
+            seen.add(normalized);
+            result.push(normalized);
+        }
+
+        return result;
+    }
+
+    private normalizeUrlIdentity(value: string): string {
+        const trimmed = value.trim();
+
+        if (!trimmed) {
+            return '';
+        }
+
+        try {
+            const url = new URL(trimmed);
+            const pathname =
+                url.pathname === '/'
+                    ? '/'
+                    : url.pathname.replace(/\/+$/, '') || '/';
+
+            return `${url.protocol.toLowerCase()}//${url.host.toLowerCase()}${pathname}${url.search}${url.hash}`;
+        } catch {
+            return trimmed.toLowerCase();
+        }
+    }
+
+    private normalizeIdentityValue(value: string, toLowerCase = false): string {
+        const trimmed = value.trim();
+        return toLowerCase ? trimmed.toLowerCase() : trimmed;
+    }
+
+    private canonicalizeM3u(rawM3u: string): string {
+        return rawM3u.replace(/\r\n?/g, '\n').trim();
+    }
+
+    private hashString(value: string): string {
+        let hash = 0x811c9dc5;
+
+        for (let index = 0; index < value.length; index += 1) {
+            hash ^= value.charCodeAt(index);
+            hash = Math.imul(hash, 0x01000193);
+        }
+
+        return (hash >>> 0).toString(16);
+    }
+
+    private getErrorMessage(error: unknown): string {
+        return error instanceof Error ? error.message : String(error);
+    }
+}

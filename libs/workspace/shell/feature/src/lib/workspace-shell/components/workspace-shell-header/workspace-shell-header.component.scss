@@ -1,0 +1,617 @@
+@use '../../../../../../../../ui/styles/focus-ring';
+
+:host {
+    display: block;
+    min-width: 0;
+}
+
+.workspace-header {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    // The shell's header band: 56px, taller on macOS when zoomed out.
+    height: 100%;
+    padding: 0 24px;
+    // macOS: app zoom does not scale the traffic lights, so zoomed out the
+    // leading controls keep their 100 % distance from them (see the shell).
+    padding-inline-start: max(24px, var(--workspace-header-lights-inset, 0px));
+    border-bottom: 1px solid var(--mat-sys-outline-variant);
+    background: var(--app-header-bg, var(--mat-sys-surface-container-low));
+    app-region: drag;
+}
+
+.zenplay-brand,
+.zenplay-header-actions,
+.zenplay-mobile-search {
+    display: none;
+}
+
+.zenplay-brand {
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    color: var(--app-on-surface);
+    font-size: 1rem;
+    font-weight: 700;
+    text-decoration: none;
+    app-region: no-drag;
+
+    img {
+        width: 40px;
+        height: 40px;
+        border: 1px solid var(--app-glass-border);
+        border-radius: 13px;
+        box-shadow: 0 8px 22px -14px var(--app-selection-glow);
+        object-fit: cover;
+    }
+}
+
+.zenplay-header-actions {
+    align-items: center;
+    gap: 2px;
+    margin-left: auto;
+    app-region: no-drag;
+
+    button,
+    a {
+        color: var(--app-eyebrow-color);
+
+        &:hover:not(:disabled) {
+            color: var(--app-on-surface);
+            background: var(--app-hover-overlay);
+        }
+    }
+
+    .is-spinning {
+        animation: zenplay-refresh-spin 900ms linear infinite;
+    }
+}
+
+.zenplay-mobile-search {
+    position: absolute;
+    inset: 6px 8px;
+    z-index: 2;
+    align-items: center;
+    gap: 8px;
+    padding: 0 6px 0 12px;
+    border: 1px solid var(--app-selection-border);
+    border-radius: 16px;
+    background: var(--app-glass-fallback-bg);
+    background: var(--app-glass-bg-strong);
+    box-shadow: var(--app-glass-shadow);
+    -webkit-backdrop-filter: blur(var(--app-glass-blur));
+    backdrop-filter: blur(var(--app-glass-blur));
+    app-region: no-drag;
+
+    > mat-icon {
+        flex: 0 0 auto;
+        color: var(--app-selection-color);
+    }
+
+    input {
+        flex: 1;
+        min-width: 0;
+        border: 0;
+        outline: 0;
+        background: transparent;
+        color: var(--app-on-surface);
+        font: inherit;
+
+        &::placeholder {
+            color: var(--app-eyebrow-color);
+        }
+    }
+}
+
+@keyframes zenplay-refresh-spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .zenplay-header-actions .is-spinning {
+        animation: none;
+    }
+}
+
+.playlist-switcher {
+    width: min(260px, 32vw);
+    flex-shrink: 0;
+    app-region: no-drag;
+}
+
+// Pulled toward the edge so the arrow glyph, not the button's padding, sits
+// on the header's inset.
+.header-back {
+    flex-shrink: 0;
+    margin-inline-start: -8px;
+    app-region: no-drag;
+    // Fades in while the controls after it slide aside (LayoutSlideDirective)
+    // instead of showing under the switcher that is still moving away.
+    animation: header-back-enter 180ms ease;
+
+    @media (prefers-reduced-motion: reduce) {
+        animation: none;
+    }
+}
+
+@keyframes header-back-enter {
+    from {
+        opacity: 0;
+    }
+}
+
+// Above the phone breakpoint the context panel is always visible beside the
+// content, so its drawer toggle would open nothing — it exists only at ≤640px.
+.context-drawer-toggle {
+    display: none;
+    app-region: no-drag;
+}
+
+.search-field {
+    flex: 1;
+    min-width: 160px;
+    max-width: 560px;
+    height: 36px;
+    border-radius: 10px;
+    border: 1px solid var(--app-search-border, var(--mat-sys-outline-variant));
+    background: var(--app-search-bg, var(--mat-sys-surface-container));
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 12px;
+    transition:
+        border-color 0.15s ease,
+        background-color 0.15s ease,
+        box-shadow 0.15s ease;
+    app-region: no-drag;
+
+    &:focus-within {
+        border-color: var(--app-focus-ring);
+        box-shadow: 0 0 0 3px
+            color-mix(in srgb, var(--app-focus-ring) 12%, transparent);
+    }
+
+    mat-icon {
+        font-size: 18px;
+        width: 18px;
+        height: 18px;
+        color: var(--mat-sys-on-surface-variant);
+        flex-shrink: 0;
+    }
+
+    .search-chip {
+        max-width: 200px;
+        padding: 0 10px;
+        height: 24px;
+        border-radius: 999px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--mat-sys-on-surface-variant);
+        background: color-mix(
+            in srgb,
+            var(--mat-sys-surface-container-high) 76%,
+            transparent
+        );
+        border: 1px solid
+            color-mix(in srgb, var(--mat-sys-outline-variant) 82%, transparent);
+        font-size: 0.75rem;
+        font-weight: 600;
+        line-height: 1;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        flex-shrink: 1;
+        min-width: 48px;
+    }
+
+    .search-chip--scope {
+        color: var(--mat-sys-on-surface);
+    }
+
+    .search-chip--status {
+        color: var(--app-selection-color, var(--mat-sys-primary));
+        background: color-mix(
+            in srgb,
+            var(--app-selection-surface, var(--mat-sys-primary-container)) 70%,
+            transparent
+        );
+        border-color: color-mix(
+            in srgb,
+            var(--app-selection-border, var(--mat-sys-primary)) 52%,
+            transparent
+        );
+    }
+
+    input {
+        flex: 1;
+        border: none;
+        outline: none;
+        background: transparent;
+        color: var(--mat-sys-on-surface);
+        font: inherit;
+        font-size: 0.875rem;
+
+        &:disabled {
+            cursor: not-allowed;
+            opacity: 0.5;
+        }
+
+        &::placeholder {
+            color: var(--mat-sys-on-surface-variant);
+            opacity: 0.7;
+        }
+    }
+
+    .command-trigger__icon {
+        display: none;
+        font-size: 16px;
+        width: 16px;
+        height: 16px;
+    }
+
+    .command-trigger {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        height: 22px;
+        min-width: 36px;
+        padding: 0 6px;
+        margin-right: -2px;
+        color: var(--mat-sys-on-surface-variant);
+        background: color-mix(
+            in srgb,
+            var(--mat-sys-surface-container-high) 76%,
+            transparent
+        );
+        border: 1px solid
+            color-mix(in srgb, var(--mat-sys-outline-variant) 70%, transparent);
+        border-radius: 5px;
+        font-family: inherit;
+        font-size: 0.7rem;
+        font-weight: 600;
+        letter-spacing: 0.02em;
+        line-height: 1;
+        cursor: pointer;
+        flex-shrink: 0;
+        transition:
+            color 0.15s ease,
+            background 0.15s ease,
+            border-color 0.15s ease;
+
+        &:hover {
+            background: var(--mat-sys-surface-container-highest);
+            color: var(--mat-sys-on-surface);
+            border-color: color-mix(
+                in srgb,
+                var(--mat-sys-outline-variant) 100%,
+                transparent
+            );
+        }
+
+        &:focus-visible {
+            @include focus-ring.focus-ring-declarations($offset: 1px);
+        }
+    }
+}
+
+.header-actions {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    app-region: no-drag;
+
+    button,
+    a {
+        color: var(--mat-sys-on-surface-variant);
+        border-radius: 8px;
+        transition:
+            color 0.15s ease,
+            background 0.15s ease;
+
+        &:hover {
+            color: var(--mat-sys-on-surface);
+            background: var(--mat-sys-surface-container);
+        }
+
+        &.is-active {
+            color: var(--app-selection-color);
+            background: linear-gradient(
+                145deg,
+                var(--app-selection-surface-strong),
+                var(--app-selection-surface)
+            );
+            box-shadow:
+                inset 0 0 0 1px var(--app-selection-border),
+                0 10px 20px -16px var(--app-selection-glow);
+        }
+    }
+}
+
+// The rail is visible most of the time, so the toggle stays neutral then and
+// only tints once the rail is hidden: the exception is what deserves the cue.
+.header-sidebar-toggle--collapsed {
+    color: var(--mat-sys-primary);
+}
+
+.header-actions--leading {
+    margin-left: -4px;
+}
+
+.header-actions--trailing {
+    margin-left: auto;
+    padding-left: 8px;
+    border-left: 1px solid var(--mat-sys-outline-variant);
+    app-region: no-drag;
+}
+
+// ─── Download Activity Indicator ─────────────────────────────────────────────
+.download-btn-wrap {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.download-count-badge {
+    position: absolute;
+    top: -2px;
+    right: -4px;
+    z-index: 11;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    border: 1px solid var(--mat-sys-surface-container-low);
+    border-radius: 999px;
+    color: var(--mat-sys-on-primary);
+    background: var(--mat-sys-primary);
+    box-shadow: 0 2px 8px var(--app-selection-glow);
+    font-size: 0.6875rem;
+    font-weight: 700;
+    line-height: 1;
+    pointer-events: none;
+}
+
+.download-activity-bar {
+    position: absolute;
+    bottom: 2px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 18px;
+    height: 2px;
+    border-radius: 1px;
+    background: color-mix(in srgb, var(--app-on-surface) 8%, transparent);
+    overflow: hidden;
+    pointer-events: none;
+    z-index: 10;
+}
+
+.download-activity-bar__fill {
+    display: block;
+    position: absolute;
+    top: 0;
+    left: -50%;
+    width: 50%;
+    height: 100%;
+    border-radius: inherit;
+    background: var(--app-selection-color, #78adff);
+    animation: download-bar-slide 1.4s ease-in-out infinite;
+}
+
+@keyframes download-bar-slide {
+    0% {
+        left: -50%;
+    }
+
+    50% {
+        left: 100%;
+    }
+
+    100% {
+        left: -50%;
+    }
+}
+
+@media (max-width: 960px) {
+    .search-field {
+        min-width: 120px;
+        flex: 1 1 150px;
+
+        .search-chip {
+            max-width: 150px;
+        }
+    }
+}
+
+@media (max-width: 1366px) {
+    .workspace-header {
+        gap: 8px;
+        padding-inline-start: max(
+            12px,
+            env(safe-area-inset-left, 0px)
+        );
+        padding-inline-end: max(12px, env(safe-area-inset-right, 0px));
+        border-bottom-color: var(--app-glass-border);
+        background: var(--app-glass-fallback-bg);
+        background: linear-gradient(
+            90deg,
+            var(--app-glass-bg-strong),
+            var(--app-glass-bg)
+        );
+    }
+
+    .playlist-switcher,
+    .search-field,
+    .header-actions {
+        display: none;
+    }
+
+    .zenplay-brand,
+    .zenplay-header-actions,
+    .zenplay-mobile-search {
+        display: flex;
+    }
+}
+
+@media (max-width: 780px) {
+    .workspace-header {
+        padding-inline: 10px;
+        padding-inline-start: max(
+            10px,
+            var(--workspace-header-lights-inset, 0px)
+        );
+        gap: 10px;
+    }
+
+    .playlist-switcher {
+        width: 190px;
+    }
+
+    .header-actions {
+        gap: 0;
+    }
+
+    .search-field {
+        gap: 6px;
+        padding-inline: 10px;
+
+        .search-chip {
+            max-width: 116px;
+            padding-inline: 8px;
+        }
+    }
+}
+
+@media (max-width: 640px) {
+    .workspace-header {
+        box-sizing: border-box;
+        padding-inline: 8px;
+        padding-top: env(safe-area-inset-top, 0px);
+        gap: 8px;
+    }
+
+    .context-drawer-toggle {
+        display: inline-flex;
+        flex-shrink: 0;
+    }
+
+    // The history fallback must not cost a list its only way into the
+    // drawer, and two navigation icons do not fit beside the switcher.
+    .header-back--yields {
+        display: none;
+    }
+
+    .playlist-switcher {
+        width: auto;
+        // Fixed at 140px this crowded the search field off a 320px header
+        // whenever a route contributed its shortcut button; the switcher is
+        // the one region whose content can ellipsize, so it is what shrinks.
+        min-width: 88px;
+        flex: 0 1 140px;
+    }
+
+    .zenplay-brand {
+        flex: 0 1 auto;
+
+        img {
+            width: 36px;
+            height: 36px;
+            border-radius: 12px;
+        }
+    }
+
+    .zenplay-header-actions {
+        flex: 0 0 auto;
+        gap: 0;
+
+        button,
+        a {
+            width: 38px;
+            height: 38px;
+            padding: 7px;
+        }
+
+        mat-icon {
+            width: 20px;
+            height: 20px;
+            font-size: 20px;
+        }
+    }
+
+    .zenplay-mobile-search {
+        inset-block-start: calc(env(safe-area-inset-top, 0px) + 5px);
+        inset-block-end: 5px;
+    }
+
+    .search-field {
+        // The floor is the field's own chrome — icon, palette trigger, gaps
+        // and padding. Below it the contents spill onto the buttons beside
+        // the field; above it the input just gets whatever space remains.
+        // Zero basis, not auto: the input's intrinsic size would otherwise
+        // count as content and squeeze the switcher even when room is ample.
+        min-width: 74px;
+        flex: 1 1 0;
+        padding-inline: 8px;
+
+        .search-chip--status,
+        .search-chip--scope {
+            display: none;
+        }
+
+        // An <input> carries an intrinsic min-width from its `size`, and
+        // `min-width: auto` on a flex item honours it — so the input refused
+        // to shrink and pushed the trigger out of the field and onto the
+        // buttons beside it.
+        input {
+            min-width: 0;
+        }
+
+        // This button is the only pointer-driven way into the command
+        // palette, so it stays; only its keyboard-shortcut label is swapped
+        // for an icon that means something without a keyboard.
+        .command-trigger {
+            min-width: 28px;
+            padding: 0 4px;
+        }
+
+        .command-trigger__shortcut {
+            display: none;
+        }
+
+        .command-trigger__icon {
+            display: inline-flex;
+        }
+    }
+
+    .header-actions--leading {
+        margin-left: 0;
+
+        .shortcuts-trigger {
+            display: none;
+        }
+
+        // At the phone breakpoint the live rail is a bottom drawer with its
+        // own toggle, and the header has no room left for another permanent
+        // icon: it already holds the drawer toggle, switcher, search and Add.
+        .header-sidebar-toggle {
+            display: none;
+        }
+    }
+}
+
+@media (max-width: 430px) {
+    .zenplay-brand span {
+        display: none;
+    }
+}
+
+.header-shortcut.is-active {
+    background: var(--app-selection-surface);
+    color: var(--app-selection-color);
+}

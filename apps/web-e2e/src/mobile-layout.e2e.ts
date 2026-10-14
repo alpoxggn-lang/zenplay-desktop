@@ -1,0 +1,284 @@
+import type { Locator, Page } from '@playwright/test';
+import { expect, test } from './fixtures';
+import {
+    addXtreamPortal,
+    interceptPwaProviderRequests,
+    resetPwaMockServers,
+} from './sources-pwa.helpers';
+
+/**
+ * Mobile Layout Smoke Tests
+ *
+ * PR #1326 made the workspace usable on phone-sized screens (issue #1100);
+ * the follow-up drawer PR turned the phone context panel into an off-canvas
+ * drawer. These tests pin the invariants that regressed before:
+ *
+ *   1. No horizontal overflow — document.documentElement.scrollWidth stays
+ *      within the viewport on dashboard, Xtream VOD/live, and settings.
+ *   2. ZenPlay's five destinations render in a glass bottom bar on phones
+ *      and in the compact left rail on iPad-sized viewports.
+ *   3. On a portal route the context panel is an off-canvas drawer: hidden
+ *      by default so the content keeps the full viewport width, opened from
+ *      the header toggle (winning over the persisted desktop inline width),
+ *      and closed again by picking a category or tapping the backdrop.
+ *   4. Settings keeps its drawer toggle beside the header Back (the drawer
+ *      holds the sections), and the section list scrolls inside the drawer.
+ *      On a portal list, the header's history Back yields to the toggle.
+ *   5. On a 640x360 landscape phone the live route keeps the channel
+ *      sidebar at least 72px tall and the player container inside the
+ *      viewport.
+ *
+ * Conventions: docs/architecture/iptvnator-ui-guidelines.md, "Phone Layout"
+ * (640px breakpoint, resizable rails stack full-width via `!important`).
+ *
+ * Tag: @mobile — run only this spec with:
+ *   pnpm nx run web-e2e:e2e-ci--src/mobile-layout.e2e.ts
+ */
+
+const PHONE = { width: 375, height: 812 };
+const LANDSCAPE_PHONE = { width: 640, height: 360 };
+const IPAD_PORTRAIT = { width: 768, height: 1024 };
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+async function expectNoHorizontalOverflow(
+    page: Page,
+    viewportWidth: number
+): Promise<void> {
+    await expect
+        .poll(() => page.evaluate(() => document.documentElement.scrollWidth))
+        .toBeLessThanOrEqual(viewportWidth);
+}
+
+async function boxOf(
+    locator: Locator
+): Promise<{ x: number; y: number; width: number; height: number }> {
+    const box = await locator.boundingBox();
+    expect(box, 'expected element to have a bounding box').not.toBeNull();
+    return box as NonNullable<typeof box>;
+}
+
+/**
+ * The phone navigation is one fixed row below the content. Every destination
+ * keeps both its icon and short label inside that surface.
+ */
+async function expectZenPlayBottomNavigation(
+    page: Page,
+    viewportHeight: number
+): Promise<void> {
+    const rail = page.locator('.zenplay-nav');
+    await expect(rail).toBeVisible();
+
+    const railBox = await boxOf(rail);
+    expect(railBox.y + railBox.height).toBeLessThanOrEqual(viewportHeight + 1);
+    await expect(page.locator('.zenplay-nav__list')).toHaveCSS('display', 'grid');
+
+    const links = page.locator('.zenplay-nav__item:visible');
+    expect(await links.count()).toBe(5);
+    await expect(links.nth(0)).toContainText(/Home|Dashboard|Panel|Inicio/i);
+
+    for (let i = 0; i < 5; i++) {
+        const linkBox = await boxOf(links.nth(i));
+        expect(linkBox.y).toBeGreaterThanOrEqual(railBox.y - 1);
+        expect(linkBox.y + linkBox.height).toBeLessThanOrEqual(
+            railBox.y + railBox.height + 1
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Portrait phone — no imported sources needed, app boots at phone size
+// ---------------------------------------------------------------------------
+
+test.describe('portrait phone 375x812', () => {
+    test.use({ viewport: PHONE });
+
+    test('@mobile dashboard fits the viewport and keeps the ZenPlay nav at the bottom', async ({
+        page,
+    }) => {
+        await page.goto('/workspace/dashboard');
+        await expect(page.locator('.zenplay-brand')).toBeVisible();
+
+        await expectNoHorizontalOverflow(page, PHONE.width);
+        await expectZenPlayBottomNavigation(page, PHONE.height);
+    });
+
+    test('@mobile settings keeps the drawer toggle beside the header Back and the section list inside the drawer', async ({
+        page,
+    }) => {
+        await page.goto('/workspace/settings');
+
+        // Back is the header's leading button. The drawer holds the section
+        // list, so its toggle stays beside Back instead of giving way.
+        const back = page.locator('[data-test-id="workspace-header-back"]');
+        const toggle = page.locator('[data-test-id="context-drawer-toggle"]');
+        await expect(back).toBeVisible();
+        await expect(toggle).toBeVisible();
+        expect((await boxOf(back)).x).toBeLessThan((await boxOf(toggle)).x);
+
+        // The phone context panel is an off-canvas drawer: hidden until the
+        // header toggle opens it, so the settings content owns the pane.
+        const panel = page.locator('.context-panel--settings');
+        await expect(panel).toBeHidden();
+
+        await toggle.click();
+        await expect(panel).toBeVisible();
+
+        // Narrower than the viewport so the backdrop stays tappable, and
+        // wider than the persisted desktop inline width would leave it.
+        const panelBox = await boxOf(panel);
+        expect(panelBox.width).toBeGreaterThanOrEqual(300);
+        expect(panelBox.width).toBeLessThanOrEqual(PHONE.width - 20);
+
+        // No footer Back any more; the list scrolls and ends inside the
+        // panel instead of painting past it (#1326).
+        await expect(panel.locator('button:has-text("Back")')).toHaveCount(0);
+        const listBox = await boxOf(panel.locator('.settings-nav'));
+        expect(listBox.y + listBox.height).toBeLessThanOrEqual(
+            panelBox.y + panelBox.height + 1
+        );
+
+        // Tapping the backdrop (right of the drawer) closes it.
+        await page
+            .locator('[data-test-id="context-drawer-backdrop"]')
+            .click({ position: { x: PHONE.width - 10, y: 400 } });
+        await expect(panel).toBeHidden();
+
+        await expectNoHorizontalOverflow(page, PHONE.width);
+    });
+});
+
+test.describe('iPad portrait 768x1024', () => {
+    test.use({ viewport: IPAD_PORTRAIT });
+
+    test('@mobile keeps the ZenPlay destinations in a compact left rail', async ({
+        page,
+    }) => {
+        await page.goto('/workspace/dashboard');
+
+        const rail = page.locator('.zenplay-nav');
+        await expect(rail).toBeVisible();
+        await expect(page.locator('.app-rail')).toBeHidden();
+        await expect(page.locator('.zenplay-brand')).toBeVisible();
+        expect((await boxOf(rail)).width).toBeLessThanOrEqual(76);
+        expect(await page.locator('.zenplay-nav__item:visible').count()).toBe(5);
+        await expectNoHorizontalOverflow(page, IPAD_PORTRAIT.width);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Xtream portal routes — the portal is imported at the default desktop
+// viewport (which persists desktop rail widths, the exact regression
+// scenario from #1100), then the window shrinks to phone size.
+// ---------------------------------------------------------------------------
+
+test.describe('xtream portal routes on a phone', () => {
+    test.beforeEach(async ({ page, request }) => {
+        await resetPwaMockServers(request);
+        await interceptPwaProviderRequests(page);
+        await page.goto('/');
+        await addXtreamPortal(page, 'Mobile Layout Portal');
+    });
+
+    test('@mobile @xtream vod route keeps the context panel in a drawer behind the header toggle', async ({
+        page,
+    }) => {
+        // The import navigated here from the dashboard, so the header offers
+        // the history Back on wide screens...
+        const back = page.locator('[data-test-id="workspace-header-back"]');
+        await expect(back).toBeVisible();
+
+        await page.setViewportSize(PHONE);
+        // ...and on a phone it yields to the drawer toggle, the list's only
+        // way into its categories.
+        await expect(back).toBeHidden();
+        await expect(
+            page.locator('[data-test-id="context-drawer-toggle"]')
+        ).toBeVisible();
+
+        // Hidden by default — the content owns the full pane. This is the
+        // successor to the #1326 stacked layout, which left the content
+        // only the leftover under a 30vh panel.
+        const panel = page.locator('.context-panel');
+        await expect(panel).toBeHidden();
+
+        const content = page.locator('main.workspace-content');
+        const contentWidth = await content.evaluate((el) => el.clientWidth);
+        expect(contentWidth).toBeGreaterThanOrEqual(PHONE.width - 20);
+
+        // The header toggle slides the drawer in. The persisted desktop
+        // width is written as an inline style; the drawer rule must win
+        // with `width: 100% !important` of its ~320px surface, otherwise
+        // the panel keeps its desktop width fraction.
+        await page.locator('[data-test-id="context-drawer-toggle"]').click();
+        await expect(panel).toBeVisible();
+        await expect
+            .poll(async () => (await panel.boundingBox())?.width ?? 0)
+            .toBeGreaterThanOrEqual(300);
+
+        // Picking a category both filters the route and closes the drawer.
+        const firstCategory = page
+            .locator('.context-panel .category-item')
+            .first();
+        await expect(firstCategory).toBeVisible();
+        await firstCategory.click();
+        await expect(panel).toBeHidden();
+
+        await expectNoHorizontalOverflow(page, PHONE.width);
+        await expectZenPlayBottomNavigation(page, PHONE.height);
+    });
+
+    test('@mobile @xtream landscape live route keeps the channel list and the player inside the viewport', async ({
+        page,
+    }) => {
+        // Select a category at desktop width so the channel sidebar renders
+        // (`showLiveChannelSidebar` requires a selected category). On the
+        // live root the click updates store state without navigating, so the
+        // sidebar appearing is the completion signal — not a URL change.
+        await page.goto(page.url().replace(/\/vod.*$/, '/live'));
+        const firstCategory = page
+            .locator('.context-panel .category-item')
+            .first();
+        await expect(firstCategory).toBeVisible();
+        await firstCategory.click();
+
+        const sidebar = page.locator('app-live-stream-layout .sidebar');
+        await expect(sidebar).toBeVisible();
+
+        // The workspace header carries the live rail toggle at desktop
+        // width only; on the phone the rail is a bottom drawer with its own
+        // toggle and the header has no room for another permanent icon.
+        const headerRailToggle = page.locator(
+            'app-workspace-shell-header .header-sidebar-toggle'
+        );
+        await expect(headerRailToggle).toBeVisible();
+
+        await page.setViewportSize(LANDSCAPE_PHONE);
+        await expect(headerRailToggle).toBeHidden();
+
+        // The sidebar stacks at full width above the player.
+        await expect
+            .poll(async () => (await sidebar.boundingBox())?.width ?? 0)
+            .toBeGreaterThanOrEqual(LANDSCAPE_PHONE.width - 2);
+
+        // Before the follow-up fix in #1326 the player's 240px floor drove
+        // the still-expanded sidebar to zero height on a 640x360 screen,
+        // leaving no way to pick another channel.
+        const sidebarBox = await boxOf(sidebar);
+        expect(sidebarBox.height).toBeGreaterThanOrEqual(71);
+
+        // ...and pushed the layout past the viewport. The player container
+        // has to end inside it.
+        const contentBox = await boxOf(
+            page.locator('app-live-stream-layout .content-container')
+        );
+        expect(contentBox.y + contentBox.height).toBeLessThanOrEqual(
+            LANDSCAPE_PHONE.height + 1
+        );
+        expect(contentBox.width).toBeLessThanOrEqual(LANDSCAPE_PHONE.width);
+
+        await expectNoHorizontalOverflow(page, LANDSCAPE_PHONE.width);
+    });
+});

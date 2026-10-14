@@ -1,0 +1,61 @@
+<main class="zenplay-auth-page">
+    <section
+        class="zenplay-auth-card zenplay-profile-card"
+        aria-labelledby="profiles-title"
+    >
+        <img
+            class="zenplay-auth-logo zenplay-auth-logo--small"
+            src="assets/branding/zenplay-logo.png"
+            alt="ZenPlay"
+        />
+        <div class="zenplay-auth-copy">
+            <h1 id="profiles-title">
+                {{
+                    profileService.profiles().length
+                        ? '¿Quién está viendo?'
+                        : 'Crea tu perfil'
+                }}
+            </h1>
+            <p>Elige el perfil con el que quieres entrar a ZenPlay.</p>
+        </div>
+
+        @if (profileService.profiles().length) {
+            <div class="zenplay-profile-list" aria-label="Perfiles disponibles">
+                @for (profile of profileService.profiles(); track profile.id) {
+                    <button
+                        class="zenplay-profile-option"
+                        type="button"
+                        (click)="chooseProfile(profile.id)"
+                    >
+                        <span class="zenplay-profile-avatar" aria-hidden="true">
+                            {{ initial(profile.name) }}
+                        </span>
+                        <span>{{ profile.name }}</span>
+                    </button>
+                }
+            </div>
+        }
+
+        @if (profileService.canAddProfile()) {
+            <form [formGroup]="form" (ngSubmit)="createProfile()" novalidate>
+                <label for="zenplay-profile-name">
+                    {{
+                        profileService.profiles().length
+                            ? 'Nuevo perfil'
+                            : 'Nombre del perfil'
+                    }}
+                </label>
+                <input
+                    id="zenplay-profile-name"
+                    type="text"
+                    formControlName="name"
+                    maxlength="24"
+                    autocomplete="off"
+                />
+                <button class="zenplay-primary-action" type="submit">
+                    Crear y continuar
+                </button>
+            </form>
+        }
+    </section>
+</main>

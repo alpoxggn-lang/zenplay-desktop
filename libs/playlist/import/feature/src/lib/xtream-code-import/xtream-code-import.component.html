@@ -1,0 +1,58 @@
+<form [formGroup]="form">
+    <mat-form-field class="w-full">
+        <mat-label for="title">{{
+            'HOME.XTREAM_PLAYLIST.TITLE' | translate
+        }}</mat-label>
+        <input matInput type="text" id="title" formControlName="title" />
+    </mat-form-field>
+    <mat-form-field class="w-full" subscriptSizing="dynamic">
+        <mat-label for="serverUrl">{{
+            'HOME.XTREAM_PLAYLIST.SERVER_URL' | translate
+        }}</mat-label>
+        <input
+            matInput
+            type="text"
+            id="serverUrl"
+            formControlName="serverUrl"
+            (input)="extractParams(form.value.serverUrl ?? '')"
+        />
+        <mat-hint>{{ 'HOME.XTREAM_PLAYLIST.URL_HINT' | translate }}</mat-hint>
+        <mat-error>{{
+            'HOME.XTREAM_PLAYLIST.URL_VALIDATION_ERROR' | translate
+        }}</mat-error>
+    </mat-form-field>
+    @if (connectionTest.messageKey()) {
+        <p role="status" aria-live="polite">
+            {{
+                connectionTest.messageKey()
+                    | translate: connectionTest.messageParams()
+            }}
+        </p>
+    }
+    <mat-form-field class="w-full">
+        <mat-label for="username">{{
+            'HOME.XTREAM_PLAYLIST.USERNAME' | translate
+        }}</mat-label>
+        <input matInput type="text" id="username" formControlName="username" />
+    </mat-form-field>
+    <mat-form-field class="w-full">
+        <mat-label for="password">{{
+            'HOME.XTREAM_PLAYLIST.PASSWORD' | translate
+        }}</mat-label>
+        <input
+            matInput
+            [type]="passwordToggle.inputType()"
+            id="password"
+            formControlName="password"
+        />
+        <button
+            mat-icon-button
+            matSuffix
+            appPasswordVisibilityToggle
+            #passwordToggle="appPasswordVisibilityToggle"
+            [attr.aria-label]="'HOME.SHOW_PASSWORD' | translate"
+        >
+            <mat-icon>{{ passwordToggle.icon() }}</mat-icon>
+        </button>
+    </mat-form-field>
+</form>

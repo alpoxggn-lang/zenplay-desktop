@@ -1,0 +1,29 @@
+{
+    "name": "components",
+    "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+    "sourceRoot": "libs/ui/components/src",
+    "prefix": "lib",
+    "projectType": "library",
+    "tags": ["scope:shared", "domain:shared-ui", "type:ui"],
+    "implicitDependencies": ["ui-styles"],
+    "targets": {
+        "test": {
+            "executor": "nx:run-commands",
+            "outputs": ["{workspaceRoot}/coverage/{projectRoot}"],
+            "options": {
+                "command": [
+                    "node",
+                    "./tools/testing/run-web-esm-lib-tests.mjs",
+                    "libs/ui/components/src"
+                ],
+                "env": {
+                    "NODE_OPTIONS": "--experimental-vm-modules"
+                },
+                "forwardAllArgs": true
+            }
+        },
+        "lint": {
+            "executor": "@nx/eslint:lint"
+        }
+    }
+}

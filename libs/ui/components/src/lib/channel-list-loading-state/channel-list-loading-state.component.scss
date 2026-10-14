@@ -1,0 +1,225 @@
+// Headers, rails and list paddings come from the same mixins and classes as
+// the loaded views (`all-channels-view`, `groups-view`, the context header),
+// so the list starts at the same height before and after the channels load.
+@use '../../../../../portal/shared/ui/src/lib/styles/skeleton';
+@use '../../../../styles/nav-list';
+@use '../../../../styles/panel-header' as panel;
+@use '../styles/channel-list-layout' as layout;
+
+:host {
+    display: block;
+    height: 100%;
+    width: 100%;
+    min-height: 0;
+    container-type: inline-size;
+}
+
+.channel-list-loading-state {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 0;
+}
+
+.visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+}
+
+// A text placeholder: the line box of the text it stands in for, with the
+// shimmer bar centred in it.
+%line-placeholder {
+    @include layout.empty-line-box;
+
+    > .grid-skeleton-line {
+        position: absolute;
+        top: 50%;
+        left: 0;
+        translate: 0 -50%;
+    }
+}
+
+.loading-header-action {
+    flex-shrink: 0;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+}
+
+// ── All channels and the favorites/recent views ────────────────────────────
+.channels-loading-state {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 0;
+}
+
+.channels-loading-header {
+    @include layout.list-header-box;
+}
+
+.channels-loading-header__row {
+    @include layout.list-header-row;
+
+    &--actions {
+        min-height: layout.$header-action-size;
+    }
+}
+
+.channels-loading-header__title {
+    @include layout.list-header-title-type;
+    @extend %line-placeholder;
+    flex: 1;
+    min-width: 0;
+
+    > .grid-skeleton-line {
+        width: min(132px, 60%);
+        height: 11px;
+    }
+}
+
+.channels-loading-divider {
+    @include layout.list-divider;
+}
+
+.channels-loading-state__list,
+.groups-loading-content__list {
+    min-height: 0;
+    overflow: hidden;
+}
+
+.channels-loading-state__list {
+    flex: 1;
+}
+
+// ── Groups view ────────────────────────────────────────────────────────────
+.groups-loading-layout {
+    display: flex;
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    overflow: hidden;
+    background: var(--app-content-bg, var(--mat-sys-surface));
+}
+
+.groups-loading-nav {
+    width: 208px;
+    min-width: 164px;
+    max-width: 320px;
+    flex-shrink: 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    background: var(--app-rail-bg, var(--mat-sys-surface-container-low));
+    padding: 12px 10px 10px 12px;
+    box-sizing: border-box;
+}
+
+.groups-loading-nav__header {
+    @include layout.groups-nav-header-box;
+}
+
+.groups-loading-nav__header-row {
+    @include layout.groups-nav-header-row;
+}
+
+.groups-loading-nav__title {
+    @include layout.groups-nav-title-type;
+    color: var(--mat-sys-on-surface);
+}
+
+// The rail's own `.nav-list` / `.nav-item` boxes, without their hover and
+// pointer states.
+.groups-loading-nav__list {
+    padding-top: 0;
+    padding-inline: 0 2px;
+    overflow: hidden;
+    pointer-events: none;
+}
+
+.groups-loading-nav__label {
+    @extend %line-placeholder;
+
+    > .grid-skeleton-line {
+        height: 9px;
+    }
+}
+
+// Outranks `.nav-item span`, which gives every span `flex: 1`.
+.groups-loading-nav__item > .groups-loading-nav__count {
+    @extend %line-placeholder;
+    flex: 0 0 22px;
+
+    > .grid-skeleton-line {
+        width: 100%;
+        height: 9px;
+    }
+}
+
+.groups-loading-content {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    background: var(--app-content-bg, var(--mat-sys-surface));
+    border-top-left-radius: 16px;
+}
+
+.groups-loading-content__header {
+    @include layout.groups-content-header-box;
+    border-top-left-radius: inherit;
+}
+
+.groups-loading-content__meta {
+    @include panel.standard-panel-meta();
+    @include layout.groups-content-meta-stacked;
+}
+
+.groups-loading-content__title {
+    @include panel.standard-panel-title(0.94rem);
+    @extend %line-placeholder;
+    width: 100%;
+    max-width: 156px;
+
+    > .grid-skeleton-line {
+        width: 100%;
+        height: 12px;
+    }
+}
+
+.groups-loading-content__subtitle {
+    @include panel.standard-panel-subtitle($background: transparent);
+    @extend %line-placeholder;
+    width: 64px;
+
+    > .grid-skeleton-line {
+        inset: 0;
+        height: auto;
+        translate: none;
+    }
+}
+
+// The loaded rows ignore their viewport's padding: the virtual scroll
+// wrapper is positioned at its top-left corner. The skeleton rows start
+// there too.
+.groups-loading-content__list {
+    flex: 1;
+}
+
+@container (max-width: 380px) {
+    .groups-loading-nav {
+        min-width: 136px;
+        width: 42%;
+        padding-inline: 8px;
+    }
+}

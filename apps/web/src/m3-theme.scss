@@ -1,0 +1,411 @@
+@use 'sass:map';
+@use '@angular/material' as mat;
+@use 'styles';
+
+@include mat.elevation-classes();
+@include mat.app-background();
+
+// ─── Typography ─────────────────────────────────────────────────────────────
+// The stack is declared once on html; every Material typography token and the
+// typography hierarchy read it through the variable. Inlined, the 103-char
+// stack was copied into ~90 declarations (about 7 KB of the initial CSS).
+$app-font-stack-value:
+    "'DM Sans', 'Roboto', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif";
+$app-font-stack: var(--app-font-family);
+
+html {
+    --app-font-family: #{$app-font-stack-value};
+}
+
+$my-typography: mat.m2-define-typography-config(
+    $font-family: $app-font-stack,
+);
+@include mat.typography-hierarchy($my-typography);
+
+// ─── M3 Themes ───────────────────────────────────────────────────────────────
+// One primary color across the app. Azure is the closest M3 prebuilt to
+// ZenPlay's electric blue (#5b8cff), so checkboxes, radio buttons and raised
+// CTAs stay in the same family as the app-owned selection tokens below.
+//
+// Cyan stays on tertiary so the EPG "now" indicator (which uses Material
+// tertiary surfaces) keeps its existing visual role.
+$light-theme: mat.define-theme(
+    (
+        color: (
+            theme-type: light,
+            primary: mat.$azure-palette,
+            tertiary: mat.$cyan-palette,
+        ),
+        typography: (
+            plain-family: $app-font-stack,
+            brand-family: $app-font-stack,
+        ),
+    )
+);
+
+$dark-theme: mat.define-theme(
+    (
+        color: (
+            theme-type: dark,
+            primary: mat.$azure-palette,
+            tertiary: mat.$cyan-palette,
+        ),
+        typography: (
+            plain-family: $app-font-stack,
+            brand-family: $app-font-stack,
+        ),
+    )
+);
+
+// ─── Apply Themes ────────────────────────────────────────────────────────────
+html {
+    @include mat.all-component-themes($light-theme);
+
+    // The theme is built with the legacy `define-theme` config, whose
+    // component mixins emit resolved component tokens but never declare the
+    // `--mat-sys-*` system variables. App styles reference those variables
+    // directly, so declare them explicitly for each theme context; without
+    // this every such reference silently resolves to nothing.
+    @include mat.system-level-colors($light-theme);
+    @include mat.system-level-typography($light-theme);
+    @include mat.system-level-elevation($light-theme);
+    @include mat.system-level-shape($light-theme);
+    @include mat.system-level-state($light-theme);
+
+    // ── Light theme design tokens ─────────────────────────────────────────
+    // The daylight variant keeps the blue/violet identity without putting
+    // muted text on a saturated surface. Every text pair remains >= 4.5:1.
+    --app-brand-blue: #315fc7;
+    --app-brand-violet: #5125b7;
+    --app-brand-lavender: #7457b8;
+    --app-brand-cyan: #007c99;
+    --app-favorite-color: #c03069;
+    --app-shell-bg: #f1f4ff;
+    --app-rail-bg: #e9eeff;
+    --app-header-bg: #f1f4ff;
+    --app-content-bg: #f8f9ff;
+    --app-rail-border: transparent;
+    --app-on-surface: #11162c;
+    --app-hover-overlay: rgba(49, 95, 199, 0.08);
+    --app-search-bg: rgba(255, 255, 255, 0.76);
+    --app-search-border: rgba(49, 95, 199, 0.16);
+    --app-selection-color: #315fc7;
+    --app-selection-on-color: #ffffff;
+    --app-selection-surface: color-mix(
+        in srgb,
+        var(--app-selection-color) 14%,
+        transparent
+    );
+    --app-selection-surface-strong: color-mix(
+        in srgb,
+        var(--app-selection-color) 22%,
+        transparent
+    );
+    --app-selection-border: color-mix(
+        in srgb,
+        var(--app-selection-color) 52%,
+        transparent
+    );
+    --app-selection-glow: color-mix(
+        in srgb,
+        var(--app-selection-color) 34%,
+        transparent
+    );
+    // Watch progress in app chrome (rail cards, catalog capsules, the hero).
+    // Over video the player's fixed `--pc-progress` applies instead.
+    --app-progress-color: var(--app-selection-color);
+    // Keyboard focus ring (`libs/ui/styles/_focus-ring.scss`), drawn 2px
+    // outside the focused element. The deeper brand blue keeps at least
+    // 4.8:1 against every light surface and the strongest selection tint.
+    --app-focus-ring: #174bb8;
+
+    // Live / on-air accent (broadcast indicator)
+    --app-live-color: #b42336;
+
+    // Done / watched status (episode watched toggle)
+    --app-success-color: #137a3d;
+
+    // Content area
+    --app-content-shadow: -2px 6px 18px rgba(29, 45, 92, 0.1);
+
+    // Widget surfaces — no borders, layered backgrounds
+    --app-widget-bg: #ffffff;
+    --app-widget-header-bg: #f1f4ff;
+    --app-widget-border: transparent;
+    --app-widget-shadow: 0 2px 8px rgba(29, 45, 92, 0.08),
+        0 12px 32px rgba(49, 95, 199, 0.06);
+    --app-widget-header-border: rgba(49, 95, 199, 0.08);
+    --app-card-hover-bg: #e8edff;
+    --app-separator: rgba(49, 95, 199, 0.18);
+
+    // Typography — subdued, not pure black
+    --app-heading-color: #11162c;
+    --app-body-color: #3e4768;
+    --app-muted-color: #66708f;
+    --app-eyebrow-color: #596481;
+
+    // Provider accent colors
+    --app-provider-xtream: #315fc7;
+    --app-provider-stalker: #087f5b;
+    --app-provider-m3u: #9a5b00;
+
+    // Subscription-expiry chips (dashboard source cards). Text/surface pairs
+    // are picked per theme to keep >= 4.5:1 small-text contrast against the
+    // composited chip background.
+    --app-expiry-warn-text: #7a4700;
+    --app-expiry-warn-surface: color-mix(in srgb, #d99000 16%, transparent);
+    --app-expiry-expired-text: #a91f39;
+    --app-expiry-expired-surface: color-mix(in srgb, #d43c5a 14%, transparent);
+
+    // Hero
+    --app-accent-gradient: linear-gradient(
+        135deg,
+        rgba(91, 140, 255, 0.13) 0%,
+        rgba(90, 50, 200, 0.08) 52%,
+        rgba(69, 214, 255, 0.08) 100%
+    );
+    --app-hero-surface: rgba(91, 140, 255, 0.07);
+
+    // Shared glass material inputs. Components can consume these variables
+    // without each inventing a tint; blur remains opt-in so large scrolling
+    // surfaces do not accidentally consume the compositing budget.
+    --app-glass-bg: rgba(255, 255, 255, 0.68);
+    --app-glass-bg-strong: rgba(255, 255, 255, 0.88);
+    --app-glass-fallback-bg: #f1f4ff;
+    --app-glass-border: rgba(49, 95, 199, 0.18);
+    --app-glass-highlight: rgba(255, 255, 255, 0.72);
+    --app-glass-accent: rgba(91, 140, 255, 0.16);
+    --app-glass-shadow: 0 18px 48px rgba(29, 45, 92, 0.16);
+    --app-glass-blur: 18px;
+
+    // Detail / hero call to action. The dark theme's light primary (#f2f4f8
+    // on #0a0e14) inverts to a dark button on the light theme, so it reads as
+    // the one solid CTA on either page background.
+    --app-cta-bg: #11162c;
+    --app-cta-fg: #ffffff;
+    --app-cta-hover-bg: #202a52;
+    --app-cta-meta-fg: rgba(255, 255, 255, 0.72);
+    // Star rating chip: a deep amber, since the chip's 12px text needs
+    // 4.5:1 over hero artwork under the light scrim (#a16207 measured 3.4:1).
+    --app-rating-color: #6a4400;
+
+    .dark-theme {
+        @include mat.all-component-colors($dark-theme);
+        // Only the color roles differ per theme: the elevation shadows are
+        // the same black in both, so html's declarations already apply here.
+        @include mat.system-level-colors($dark-theme);
+
+        // ── Dark graphite theme ────────────────────────────────────────────
+        // Deep navy surfaces echo the Android product while distinct steps
+        // keep navigation, content and raised cards readable on every screen.
+
+        // App shell & navigation
+        --app-brand-blue: #5b8cff;
+        --app-brand-violet: #5a32c8;
+        --app-brand-lavender: #b89dff;
+        --app-brand-cyan: #45d6ff;
+        --app-favorite-color: #ff6fa3;
+        --app-shell-bg: #070b1a;
+        --app-rail-bg: #0b1024;
+        --app-header-bg: #0b1024;
+        --app-content-bg: #0d132b;
+        --app-rail-border: transparent;
+        --app-on-surface: #e9ebff;
+        --app-hover-overlay: rgba(184, 157, 255, 0.1);
+        --app-search-bg: rgba(19, 26, 58, 0.72);
+        --app-search-border: rgba(184, 157, 255, 0.16);
+        --app-selection-color: #78a3ff;
+        --app-selection-on-color: #070b1a;
+        --app-selection-surface: color-mix(
+            in srgb,
+            var(--app-selection-color) 18%,
+            transparent
+        );
+        --app-selection-surface-strong: color-mix(
+            in srgb,
+            var(--app-selection-color) 28%,
+            transparent
+        );
+        --app-selection-border: color-mix(
+            in srgb,
+            var(--app-selection-color) 62%,
+            transparent
+        );
+        --app-selection-glow: color-mix(
+            in srgb,
+            var(--app-selection-color) 44%,
+            transparent
+        );
+        // Re-declared so it resolves against this context's selection colour
+        // rather than inheriting the light value computed on `html`.
+        --app-progress-color: var(--app-selection-color);
+        // Keyboard focus ring: at least 4.5:1 on every dark surface and the
+        // strongest selection tint.
+        --app-focus-ring: #a8c2ff;
+
+        // Live / on-air accent (broadcast indicator)
+        --app-live-color: #ff8eaa;
+
+        // Done / watched status (episode watched toggle)
+        --app-success-color: #55dc91;
+
+        // Content area
+        --app-content-shadow: -4px 10px 28px rgba(0, 0, 0, 0.3);
+
+        // Widget surfaces — NO border, surface contrast does the work
+        // Widgets sit above the content navy, so widget-bg is notably lighter.
+        --app-widget-bg: #131a3a;
+        --app-widget-header-bg: #1a2249;
+        --app-widget-border: transparent;
+        --app-widget-shadow: none;
+        --app-widget-header-border: rgba(184, 157, 255, 0.08);
+        --app-card-hover-bg: #222b58;
+        --app-separator: rgba(184, 157, 255, 0.18);
+
+        // Typography — blue-tinted whites from the ZenPlay visual system.
+        --app-heading-color: #e9ebff;
+        --app-body-color: #b0b7e2;
+        --app-muted-color: #858dba;
+        --app-eyebrow-color: #98a1ce;
+
+        // Provider accents (slightly brighter for dark bg)
+        --app-provider-xtream: #78a3ff;
+        --app-provider-stalker: #55dc91;
+        --app-provider-m3u: #ffc75a;
+
+        // Subscription-expiry chips — brighter text for the dark surfaces;
+        // expired matches the --app-live-color accent family.
+        --app-expiry-warn-text: #ffd36a;
+        --app-expiry-warn-surface: color-mix(in srgb, #ffd36a 16%, transparent);
+        --app-expiry-expired-text: #ff8eaa;
+        --app-expiry-expired-surface: color-mix(
+            in srgb,
+            #ff8eaa 16%,
+            transparent
+        );
+
+        // Hero section
+        --app-accent-gradient: linear-gradient(
+            135deg,
+            rgba(91, 140, 255, 0.2) 0%,
+            rgba(90, 50, 200, 0.16) 52%,
+            rgba(69, 214, 255, 0.1) 100%
+        );
+        --app-hero-surface: rgba(19, 26, 58, 0.9);
+
+        // Shared glass material inputs. No backdrop-filter is applied here.
+        --app-glass-bg: rgba(19, 26, 58, 0.64);
+        --app-glass-bg-strong: rgba(26, 34, 73, 0.84);
+        --app-glass-fallback-bg: #131a3a;
+        --app-glass-border: rgba(184, 157, 255, 0.24);
+        --app-glass-highlight: rgba(69, 214, 255, 0.22);
+        --app-glass-accent: rgba(91, 140, 255, 0.2);
+        --app-glass-shadow: 0 18px 48px rgba(0, 0, 0, 0.38);
+        --app-glass-blur: 18px;
+
+        // Detail / hero call to action (light primary) and rating accent
+        --app-cta-bg: #e9ebff;
+        --app-cta-fg: #070b1a;
+        --app-cta-hover-bg: #ffffff;
+        --app-cta-meta-fg: #535d88;
+        --app-rating-color: #ffd36a;
+    }
+}
+
+// ─── Global refined outlined inputs ──────────────────────────────────────────
+// Applied app-wide AFTER mat.all-component-themes so these overrides win the
+// cascade. Pairs with MAT_FORM_FIELD_DEFAULT_OPTIONS (outline + dynamic) set
+// in app.config.ts.
+$app-refined-input-density: mat.define-theme((
+    density: (scale: -2),
+));
+
+html {
+    @include mat.form-field-density($app-refined-input-density);
+
+    // Declared on the field itself (not on html) so the var(--app-*) values
+    // resolve inside .dark-theme instead of being inherited as light values.
+    // The resting and hover outlines keep the theme's outline roles: the app
+    // hairline tokens fall far under the 3:1 boundary contrast a field needs.
+    // Labels use the body token, which clears 4.5:1 in both themes.
+    // Text sizes stay on the theme defaults: this theme leaves the floated
+    // label's size token undeclared, so it inherits the field's text size and
+    // scales it to 75%; a 13px field would float a 10px label.
+    .mat-mdc-form-field {
+        @include mat.form-field-overrides(
+            (
+                outlined-focus-outline-color: var(--app-selection-color),
+                outlined-container-shape: 10px,
+                outlined-label-text-color: var(--app-body-color),
+                outlined-hover-label-text-color: var(--app-body-color),
+                outlined-focus-label-text-color: var(--app-selection-color),
+                outlined-input-text-color: var(--app-heading-color),
+                outlined-caret-color: var(--app-selection-color),
+            )
+        );
+    }
+
+    // Inputs sit slightly above the surrounding surface. color-mix is inlined
+    // here (not via a custom property on html) so var(--app-widget-bg)
+    // resolves at the wrapper — inside .dark-theme — rather than being
+    // locked to the light-mode value at html-level inheritance.
+    .mat-form-field-appearance-outline .mat-mdc-text-field-wrapper {
+        background: color-mix(in srgb, var(--app-widget-bg) 85%, white 7%);
+        border-radius: 10px;
+    }
+
+    .mat-mdc-form-field .mat-mdc-input-element,
+    .mat-mdc-form-field .mat-mdc-select-value {
+        font-size: 13.5px;
+    }
+
+    // ─── Destructive actions ───────────────────────────────────────────────
+    // Material only emits `.mat-warn` button colors for M2 themes, so the
+    // `warn` color input is a no-op with this M3 theme. Buttons that remove or
+    // discard user data opt in with this class instead; the error tokens are
+    // declared per theme context above, so light and dark each get their own
+    // error/on-error pair.
+    .app-destructive-button {
+        @include mat.button-overrides(
+            (
+                filled-container-color: var(--mat-sys-error),
+                filled-label-text-color: var(--mat-sys-on-error),
+                filled-state-layer-color: var(--mat-sys-on-error),
+                filled-ripple-color:
+                    color-mix(in srgb, var(--mat-sys-on-error) 12%, transparent),
+                text-label-text-color: var(--mat-sys-error),
+                text-state-layer-color: var(--mat-sys-error),
+                text-ripple-color:
+                    color-mix(in srgb, var(--mat-sys-error) 12%, transparent),
+                outlined-label-text-color: var(--mat-sys-error),
+                outlined-outline-color: var(--mat-sys-error),
+                outlined-state-layer-color: var(--mat-sys-error),
+                outlined-ripple-color:
+                    color-mix(in srgb, var(--mat-sys-error) 12%, transparent),
+            )
+        );
+        @include mat.icon-button-overrides(
+            (
+                icon-color: var(--mat-sys-error),
+                state-layer-color: var(--mat-sys-error),
+                ripple-color:
+                    color-mix(in srgb, var(--mat-sys-error) 12%, transparent),
+            )
+        );
+    }
+
+    .mat-mdc-form-field-subscript-wrapper {
+        font-size: 11px;
+        letter-spacing: 0.01em;
+        margin-top: 2px;
+
+        .mat-mdc-form-field-hint-wrapper,
+        .mat-mdc-form-field-error-wrapper {
+            padding: 0 12px;
+        }
+
+        .mat-mdc-form-field-hint {
+            color: var(--app-muted-color);
+        }
+    }
+}

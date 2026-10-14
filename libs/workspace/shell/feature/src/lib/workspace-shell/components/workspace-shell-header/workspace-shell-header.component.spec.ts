@@ -1,0 +1,632 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import {
+    Component,
+    input,
+    output,
+    signal,
+    ChangeDetectionStrategy,
+} from '@angular/core';
+import { ComponentFixture, TestBed } from '@angular/core/testing';
+import { NoopAnimationsModule } from '@angular/platform-browser/animations';
+import { MatIconButton } from '@angular/material/button';
+import { MatIcon } from '@angular/material/icon';
+import { MatTooltip } from '@angular/material/tooltip';
+import { provideRouter, RouterLink } from '@angular/router';
+import { TranslateService } from '@ngx-translate/core';
+import { of } from 'rxjs';
+import { TranslatePipe } from '@ngx-translate/core';
+import {
+    WorkspaceBackPhoneSlot,
+    WorkspaceBackTarget,
+} from '@iptvnator/portal/shared/util';
+import { WorkspaceShellHeaderComponent } from './workspace-shell-header.component';
+import { LayoutSlideDirective } from '../../layout-slide.directive';
+
+@Component({
+    selector: 'app-playlist-switcher',
+    template: '',
+    changeDetection: ChangeDetectionStrategy.Eager,
+    standalone: true,
+})
+class MockPlaylistSwitcherComponent {
+    readonly currentTitle = input.required<string>();
+    readonly subtitle = input('');
+    readonly showPlaylistInfo = input(false);
+    readonly showAccountInfo = input(false);
+    readonly showAddPlaylist = input(false);
+    readonly canRefreshActivePlaylist = input(false);
+    readonly isRefreshingActivePlaylist = input(false);
+    readonly playlistInfoRequested = output<void>();
+    readonly accountInfoRequested = output<void>();
+    readonly addPlaylistRequested = output<void>();
+    readonly refreshPlaylistRequested = output<void>();
+}
+
+describe('WorkspaceShellHeaderComponent', () => {
+    let fixture: ComponentFixture<WorkspaceShellHeaderComponent>;
+    let component: WorkspaceShellHeaderComponent;
+
+    beforeEach(async () => {
+        await TestBed.configureTestingModule({
+            imports: [WorkspaceShellHeaderComponent, NoopAnimationsModule],
+            providers: [
+                provideRouter([]),
+                {
+                    provide: TranslateService,
+                    useValue: {
+                        instant: (key: string) => key,
+                        get: (key: string) => of(key),
+                        stream: (key: string) => of(key),
+                        onLangChange: of(null),
+                        onTranslationChange: of(null),
+                        onDefaultLangChange: of(null),
+                        currentLang: 'en',
+                        defaultLang: 'en',
+                    },
+                },
+            ],
+        })
+            .overrideComponent(WorkspaceShellHeaderComponent, {
+                set: {
+                    imports: [
+                        LayoutSlideDirective,
+                        MatIcon,
+                        MatIconButton,
+                        MatTooltip,
+                        MockPlaylistSwitcherComponent,
+                        RouterLink,
+                        TranslatePipe,
+                    ],
+                },
+            })
+            .compileComponents();
+
+        fixture = TestBed.createComponent(WorkspaceShellHeaderComponent);
+        component = fixture.componentInstance;
+        fixture.componentRef.setInput('playlistTitle', 'Playlist A');
+        fixture.componentRef.setInput('playlistSubtitle', 'Subtitle');
+        fixture.componentRef.setInput('searchQuery', 'neo');
+        fixture.componentRef.setInput('canUseSearch', true);
+        fixture.componentRef.setInput(
+            'searchPlaceholder',
+            'WORKSPACE.SHELL.SEARCH_PLAYLIST_PLACEHOLDER'
+        );
+        fixture.detectChanges();
+    });
+
+    it('emits search input changes as user types', () => {
+        const emitted: string[] = [];
+        component.searchChanged.subscribe((value) => emitted.push(value));
+        const input: HTMLInputElement = fixture.nativeElement.querySelector(
+            'input[type="search"]'
+        );
+
+        input.value = 'matrix';
+        input.dispatchEvent(new Event('input'));
+
+        expect(emitted).toEqual(['matrix']);
+    });
+
+    it('renders the ZenPlay compact header actions', () => {
+        fixture.detectChanges();
+
+        expect(
+            fixture.nativeElement.querySelector('.zenplay-brand img')
+        ).not.toBeNull();
+        expect(
+            fixture.nativeElement.querySelector(
+                '[data-test-id="zenplay-refresh"]'
+            )
+        ).not.toBeNull();
+        expect(
+            fixture.nativeElement.querySelector(
+                '[data-test-id="zenplay-search"]'
+            )
+        ).not.toBeNull();
+        expect(
+            fixture.nativeElement.querySelector(
+                '[data-test-id="zenplay-settings"]'
+            )
+        ).not.toBeNull();
+        expect(
+            fixture.nativeElement.querySelector(
+                '[data-test-id="zenplay-account"]'
+            )
+        ).not.toBeNull();
+    });
+
+    it('runs the managed content refresh from the ZenPlay header button', () => {
+        fixture.componentRef.setInput('canRefreshPlaylist', true);
+        fixture.detectChanges();
+        const requested = jest.fn();
+        component.refreshPlaylistRequested.subscribe(requested);
+
+        const button: HTMLButtonElement = fixture.nativeElement.querySelector(
+            '[data-test-id="zenplay-refresh"]'
+        );
+        button.click();
+
+        expect(requested).toHaveBeenCalledTimes(1);
+    });
+
+    it('disables and animates the refresh action while content is refreshing', () => {
+        fixture.componentRef.setInput('canRefreshPlaylist', true);
+        fixture.componentRef.setInput('isRefreshingPlaylist', true);
+        fixture.detectChanges();
+
+        const button: HTMLButtonElement = fixture.nativeElement.querySelector(
+            '[data-test-id="zenplay-refresh"]'
+        );
+        expect(button.disabled).toBe(true);
+        expect(button.querySelector('mat-icon')?.classList).toContain(
+            'is-spinning'
+        );
+    });
+
+    it('opens and closes the compact search surface', async () => {
+        component.openMobileSearch();
+        fixture.detectChanges();
+        await fixture.whenStable();
+
+        expect(component.mobileSearchOpen()).toBe(true);
+        expect(
+            fixture.nativeElement.querySelector(
+                '[data-test-id="zenplay-mobile-search-input"]'
+            )
+        ).not.toBeNull();
+
+        component.closeMobileSearch();
+        fixture.detectChanges();
+        expect(component.mobileSearchOpen()).toBe(false);
+    });
+
+    it('focuses and selects the search input on request', () => {
+        const input: HTMLInputElement = fixture.nativeElement.querySelector(
+            'input[type="search"]'
+        );
+        input.value = 'matrix';
+        input.blur();
+
+        component.focusSearchInput({ select: true });
+
+        expect(document.activeElement).toBe(input);
+        expect(input.selectionStart).toBe(0);
+        expect(input.selectionEnd).toBe('matrix'.length);
+    });
+
+    it('does not expose controls for adding external playlists', () => {
+        expect(
+            fixture.nativeElement.querySelector(
+                'button[aria-label="WORKSPACE.SHELL.ADD_PLAYLIST"]'
+            )
+        ).toBeNull();
+    });
+
+    it('emits keyboard shortcuts requests from the help button', () => {
+        const requested = jest.fn();
+        component.shortcutsRequested.subscribe(requested);
+
+        const button: HTMLButtonElement = fixture.nativeElement.querySelector(
+            'button[aria-label="WORKSPACE.SHORTCUTS.OPEN_ARIA"]'
+        );
+        button.click();
+
+        expect(requested).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not render the removed global favorites shortcut', () => {
+        const button: HTMLButtonElement | null =
+            fixture.nativeElement.querySelector(
+                'button[aria-label="WORKSPACE.SHELL.OPEN_GLOBAL_FAVORITES"]'
+            );
+
+        expect(button).toBeNull();
+    });
+
+    it('emits contextual header shortcut requests when configured', () => {
+        const requested = jest.fn();
+        component.headerShortcutRequested.subscribe(requested);
+        fixture.componentRef.setInput('headerShortcut', {
+            icon: 'tune',
+            tooltipKey: 'shortcut.tooltip',
+            ariaLabelKey: 'shortcut.aria',
+            run: () => undefined,
+        });
+        fixture.detectChanges();
+
+        const button: HTMLButtonElement = fixture.nativeElement.querySelector(
+            'button[aria-label="shortcut.aria"]'
+        );
+        button.click();
+
+        expect(requested).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not render the live rail toggle when the route has no rail', () => {
+        expect(
+            fixture.nativeElement.querySelector('.header-sidebar-toggle')
+        ).toBeNull();
+    });
+
+    it('renders the live rail toggle in both rail states and emits toggle requests', () => {
+        const requested = jest.fn();
+        component.headerSidebarToggleRequested.subscribe(requested);
+        fixture.componentRef.setInput('headerSidebarToggle', {
+            expanded: true,
+            tooltip: 'LAYOUT.TOGGLE_SIDEBAR_TOOLTIP',
+            ariaLabel: 'LAYOUT.HIDE_CHANNELS_LIST',
+        });
+        fixture.detectChanges();
+
+        const button: HTMLButtonElement = fixture.nativeElement.querySelector(
+            '.header-sidebar-toggle'
+        );
+        expect(button.getAttribute('aria-pressed')).toBe('true');
+        expect(button.getAttribute('aria-label')).toBe(
+            'LAYOUT.HIDE_CHANNELS_LIST'
+        );
+        expect(button.classList).not.toContain(
+            'header-sidebar-toggle--collapsed'
+        );
+
+        button.click();
+        expect(requested).toHaveBeenCalledTimes(1);
+
+        // The control stays in place once the rail is hidden; only its
+        // pressed state, label and tint change.
+        fixture.componentRef.setInput('headerSidebarToggle', {
+            expanded: false,
+            tooltip: 'LAYOUT.TOGGLE_SIDEBAR_TOOLTIP',
+            ariaLabel: 'LAYOUT.SHOW_CHANNELS_LIST',
+        });
+        fixture.detectChanges();
+
+        const collapsedButton: HTMLButtonElement =
+            fixture.nativeElement.querySelector('.header-sidebar-toggle');
+        expect(collapsedButton).toBe(button);
+        expect(collapsedButton.getAttribute('aria-pressed')).toBe('false');
+        expect(collapsedButton.getAttribute('aria-label')).toBe(
+            'LAYOUT.SHOW_CHANNELS_LIST'
+        );
+        expect(collapsedButton.classList).toContain(
+            'header-sidebar-toggle--collapsed'
+        );
+    });
+
+    it('hides the live rail toggle on the settings route', () => {
+        fixture.componentRef.setInput('headerSidebarToggle', {
+            expanded: true,
+            tooltip: 'tooltip',
+            ariaLabel: 'aria',
+        });
+        fixture.componentRef.setInput('isSettingsRoute', true);
+        fixture.detectChanges();
+
+        expect(
+            fixture.nativeElement.querySelector('.header-sidebar-toggle')
+        ).toBeNull();
+    });
+
+    it('hides search without playlists except on the settings route', () => {
+        const searchInput = () =>
+            fixture.nativeElement.querySelector('input[type="search"]');
+
+        fixture.componentRef.setInput('hasNoPlaylists', true);
+        fixture.detectChanges();
+        expect(searchInput()).toBeNull();
+
+        // Settings search needs no playlist: a fresh user can still search.
+        fixture.componentRef.setInput('isSettingsRoute', true);
+        fixture.detectChanges();
+        expect(searchInput()).not.toBeNull();
+        expect(searchInput().disabled).toBe(false);
+    });
+
+    it('renders scope and status chips when search metadata is provided', () => {
+        fixture.componentRef.setInput('searchScopeLabel', 'Movies / All Items');
+        fixture.componentRef.setInput(
+            'searchStatusLabel',
+            'Loaded channels only'
+        );
+        fixture.detectChanges();
+
+        const chips = Array.from(
+            (fixture.nativeElement as HTMLElement).querySelectorAll(
+                '.search-chip'
+            )
+        ).map((element: Element) => element.textContent?.trim());
+
+        expect(chips).toEqual(['Movies / All Items', 'Loaded channels only']);
+    });
+
+    it('renders the global active download count without duplicating the button name', () => {
+        fixture.componentRef.setInput('supportsDownloads', true);
+        fixture.componentRef.setInput('activeDownloadsCount', 3);
+        fixture.detectChanges();
+
+        const badge: HTMLElement | null = fixture.nativeElement.querySelector(
+            '[data-test-id="global-download-count"]'
+        );
+
+        expect(badge?.textContent?.trim()).toBe('3');
+        expect(badge?.getAttribute('aria-hidden')).toBe('true');
+        expect(
+            fixture.nativeElement.querySelector('.download-activity-bar')
+        ).not.toBeNull();
+    });
+
+    it('does not render a global download badge when no downloads are active', () => {
+        fixture.componentRef.setInput('supportsDownloads', true);
+        fixture.componentRef.setInput('activeDownloadsCount', 0);
+        fixture.detectChanges();
+
+        expect(
+            fixture.nativeElement.querySelector(
+                '[data-test-id="global-download-count"]'
+            )
+        ).toBeNull();
+    });
+
+    it.each([
+        [0, 'WORKSPACE.SHELL.OPEN_DOWNLOADS'],
+        [1, 'WORKSPACE.SHELL.OPEN_DOWNLOADS (1)'],
+        [3, 'WORKSPACE.SHELL.OPEN_DOWNLOADS (3)'],
+    ])(
+        'exposes %i active downloads in the downloads button accessible name',
+        (activeDownloadsCount, expectedLabel) => {
+            fixture.componentRef.setInput('supportsDownloads', true);
+            fixture.componentRef.setInput(
+                'activeDownloadsCount',
+                activeDownloadsCount
+            );
+            fixture.detectChanges();
+
+            const button: HTMLButtonElement =
+                fixture.nativeElement.querySelector(
+                    '.download-btn-wrap button'
+                );
+
+            expect(button.getAttribute('aria-label')).toBe(expectedLabel);
+        }
+    );
+
+    it('hides the global downloads shortcut when downloads are unsupported', () => {
+        fixture.componentRef.setInput('isElectron', true);
+        fixture.componentRef.setInput('supportsDownloads', false);
+        fixture.detectChanges();
+
+        expect(
+            fixture.nativeElement.querySelector('.download-btn-wrap')
+        ).toBeNull();
+    });
+
+    it('does not render the context drawer toggle by default', () => {
+        expect(
+            fixture.nativeElement.querySelector(
+                '[data-test-id="context-drawer-toggle"]'
+            )
+        ).toBeNull();
+    });
+
+    it('emits context drawer toggle requests when the route has a panel', () => {
+        const requested = jest.fn();
+        component.contextDrawerToggleRequested.subscribe(requested);
+        fixture.componentRef.setInput('showContextDrawerToggle', true);
+        fixture.detectChanges();
+
+        const button: HTMLButtonElement = fixture.nativeElement.querySelector(
+            '[data-test-id="context-drawer-toggle"]'
+        );
+        button.click();
+
+        expect(requested).toHaveBeenCalledTimes(1);
+    });
+
+    it('reflects the drawer state through aria-expanded', () => {
+        fixture.componentRef.setInput('showContextDrawerToggle', true);
+        fixture.componentRef.setInput('isContextDrawerOpen', true);
+        fixture.detectChanges();
+
+        const button: HTMLButtonElement = fixture.nativeElement.querySelector(
+            '[data-test-id="context-drawer-toggle"]'
+        );
+
+        expect(button.getAttribute('aria-expanded')).toBe('true');
+    });
+
+    it('labels the drawer toggle from the variant-aware keys', () => {
+        fixture.componentRef.setInput('showContextDrawerToggle', true);
+        fixture.componentRef.setInput(
+            'contextDrawerToggleAriaKey',
+            'WORKSPACE.SHELL.CONTEXT_DRAWER_SETTINGS_TOGGLE'
+        );
+        fixture.detectChanges();
+
+        const button: HTMLButtonElement = fixture.nativeElement.querySelector(
+            '[data-test-id="context-drawer-toggle"]'
+        );
+
+        expect(button.getAttribute('aria-label')).toBe(
+            'WORKSPACE.SHELL.CONTEXT_DRAWER_SETTINGS_TOGGLE'
+        );
+    });
+
+    it('focuses the drawer toggle on request', () => {
+        fixture.componentRef.setInput('showContextDrawerToggle', true);
+        fixture.detectChanges();
+
+        component.focusContextDrawerToggle();
+
+        expect(document.activeElement).toBe(
+            fixture.nativeElement.querySelector(
+                '[data-test-id="context-drawer-toggle"]'
+            )
+        );
+    });
+
+    describe('page Back', () => {
+        const backButton = (): HTMLButtonElement | null =>
+            fixture.nativeElement.querySelector(
+                '[data-test-id="workspace-header-back"]'
+            );
+
+        const drawerToggle = (): HTMLButtonElement | null =>
+            fixture.nativeElement.querySelector(
+                '[data-test-id="context-drawer-toggle"]'
+            );
+
+        function setBackTarget(
+            label: string | null,
+            escapeShortcut: boolean,
+            phoneDrawerToggle?: WorkspaceBackPhoneSlot
+        ): WorkspaceBackTarget {
+            const target: WorkspaceBackTarget = {
+                label: signal(label),
+                escapeShortcut: signal(escapeShortcut),
+                phoneDrawerToggle,
+                run: jest.fn(),
+            };
+            fixture.componentRef.setInput('backTarget', target);
+            fixture.detectChanges();
+            return target;
+        }
+
+        it('renders nothing while the page has no Back', () => {
+            expect(backButton()).toBeNull();
+        });
+
+        it('leads the header and emits Back requests', () => {
+            const requested = jest.fn();
+            component.backRequested.subscribe(requested);
+            setBackTarget('Back to Downloads', true);
+
+            const button = backButton();
+            expect(
+                fixture.nativeElement.querySelector('header')?.firstElementChild
+            ).toBe(button);
+            expect(button?.type).toBe('button');
+            button?.click();
+
+            expect(requested).toHaveBeenCalledTimes(1);
+        });
+
+        it('names the page Back and announces Escape only while it applies', () => {
+            setBackTarget('Back to Downloads', true);
+            expect(backButton()?.getAttribute('aria-label')).toBe(
+                'Back to Downloads'
+            );
+            expect(backButton()?.getAttribute('aria-keyshortcuts')).toBe(
+                'Escape'
+            );
+
+            setBackTarget(null, false);
+            // No host label: the generic translated Back.
+            expect(backButton()?.getAttribute('aria-label')).toBe('BACK');
+            expect(backButton()?.hasAttribute('aria-keyshortcuts')).toBe(false);
+        });
+
+        it('runs the advertised Escape from the focused Back only while it applies', () => {
+            const requested = jest.fn();
+            component.backRequested.subscribe(requested);
+            const press = (init: KeyboardEventInit = {}) => {
+                const event = new KeyboardEvent('keydown', {
+                    key: 'Escape',
+                    bubbles: true,
+                    cancelable: true,
+                    ...init,
+                });
+                backButton()?.dispatchEvent(event);
+                return event;
+            };
+
+            setBackTarget(null, true);
+            press({ repeat: true });
+            press({ shiftKey: true });
+            expect(requested).not.toHaveBeenCalled();
+            expect(press().defaultPrevented).toBe(true);
+            expect(requested).toHaveBeenCalledTimes(1);
+
+            // In watch, Escape belongs to the player's close shortcut.
+            setBackTarget(null, false);
+            expect(press().defaultPrevented).toBe(false);
+            expect(requested).toHaveBeenCalledTimes(1);
+        });
+
+        it('takes the drawer toggle slot while the page offers Back', () => {
+            fixture.componentRef.setInput('showContextDrawerToggle', true);
+            setBackTarget(null, true);
+
+            expect(
+                fixture.nativeElement.querySelector(
+                    '[data-test-id="context-drawer-toggle"]'
+                )
+            ).toBeNull();
+
+            fixture.componentRef.setInput('backTarget', null);
+            fixture.detectChanges();
+
+            expect(backButton()).toBeNull();
+            expect(
+                fixture.nativeElement.querySelector(
+                    '[data-test-id="context-drawer-toggle"]'
+                )
+            ).not.toBeNull();
+        });
+
+        it('keeps the drawer toggle after Back for a page whose sections live in the drawer', () => {
+            fixture.componentRef.setInput('showContextDrawerToggle', true);
+            setBackTarget(null, false, 'beside');
+
+            expect(drawerToggle()).not.toBeNull();
+            expect(backButton()?.nextElementSibling).toBe(drawerToggle());
+            expect(backButton()?.classList).not.toContain(
+                'header-back--yields'
+            );
+        });
+
+        it('lets the history fallback yield to the drawer toggle at phone width', () => {
+            fixture.componentRef.setInput('showContextDrawerToggle', true);
+            setBackTarget(null, false, 'yield');
+
+            expect(drawerToggle()).not.toBeNull();
+            // Hidden by the ≤640px rule; above it the toggle itself is hidden.
+            expect(backButton()?.classList).toContain('header-back--yields');
+
+            // Routes without a drawer keep the fallback at every width.
+            fixture.componentRef.setInput('showContextDrawerToggle', false);
+            fixture.detectChanges();
+            expect(backButton()?.classList).not.toContain(
+                'header-back--yields'
+            );
+        });
+    });
+
+    it('hides a yielding Back only in the phone layout', () => {
+        const styleSource = readFileSync(
+            join(__dirname, 'workspace-shell-header.component.scss'),
+            'utf8'
+        );
+        const phoneStart = styleSource.indexOf('@media (max-width: 640px)');
+
+        expect(styleSource.indexOf('.header-back--yields')).toBeGreaterThan(
+            phoneStart
+        );
+        expect(styleSource.slice(phoneStart)).toMatch(
+            /\.header-back--yields\s*\{\s*display:\s*none;/
+        );
+    });
+
+    it('uses the paired Material primary tokens for the download badge', () => {
+        const styleSource = readFileSync(
+            join(__dirname, 'workspace-shell-header.component.scss'),
+            'utf8'
+        );
+        const badgeStyles = styleSource.match(
+            /\.download-count-badge\s*\{([^}]*)\}/
+        )?.[1];
+
+        expect(badgeStyles).toContain('color: var(--mat-sys-on-primary);');
+        expect(badgeStyles).toContain('background: var(--mat-sys-primary);');
+    });
+});

@@ -1,0 +1,55 @@
+{
+    "$schema": "../../node_modules/nx/schemas/project-schema.json",
+    "name": "release-tools",
+    "projectType": "library",
+    "sourceRoot": "tools/release",
+    "targets": {
+        "test": {
+            "executor": "nx:run-commands",
+            "cache": true,
+            "inputs": [
+                "{workspaceRoot}/tools/release/release-notes.mjs",
+                "{workspaceRoot}/tools/release/release-notes-render.mjs",
+                "{workspaceRoot}/tools/release/release-notes-blog.mjs",
+                "{workspaceRoot}/tools/release/release-announcements.mjs",
+                "{workspaceRoot}/tools/release/verify-draft-release.mjs",
+                "{workspaceRoot}/tools/release/highlight-cards.mjs",
+                "{workspaceRoot}/tools/release/generate-highlight-cards.mjs",
+                "{workspaceRoot}/tools/release/extract-changelog-section.mjs",
+                "{workspaceRoot}/tools/release/check-release-note-gate.mjs",
+                "{workspaceRoot}/tools/release/build-release-notes.mjs",
+                "{workspaceRoot}/tools/release/nightly-version.mjs",
+                "{workspaceRoot}/tools/release/screenshot-guards.mjs",
+                "{workspaceRoot}/tools/release/screenshots.manifest.json",
+                "{workspaceRoot}/tools/release/capture-navigation-*-actions.ts",
+                "{workspaceRoot}/.github/workflows/build-and-make.yaml",
+                "{workspaceRoot}/tools/release/release-notes.test.mjs",
+                "{workspaceRoot}/tools/release/release-note-gate.test.mjs",
+                "{workspaceRoot}/tools/release/build-release-notes.test.mjs",
+                "{workspaceRoot}/tools/release/release-announcements.test.mjs",
+                "{workspaceRoot}/tools/release/verify-draft-release.test.mjs",
+                "{workspaceRoot}/tools/release/highlight-cards.test.mjs",
+                "{workspaceRoot}/tools/release/screenshot-guards.test.mjs",
+                "{workspaceRoot}/tools/release/nightly-version.test.mjs"
+            ],
+            "options": {
+                "command": "node --test tools/release/release-notes.test.mjs tools/release/release-note-gate.test.mjs tools/release/build-release-notes.test.mjs tools/release/release-announcements.test.mjs tools/release/verify-draft-release.test.mjs tools/release/highlight-cards.test.mjs tools/release/screenshot-guards.test.mjs tools/release/nightly-version.test.mjs",
+                "cwd": "{workspaceRoot}"
+            }
+        },
+        "lint": {
+            "inputs": [
+                "default",
+                "{workspaceRoot}/eslint.config.mjs",
+                "{workspaceRoot}/tools/eslint-rules/**/*",
+                "{workspaceRoot}/tools/eslint/**/*"
+            ],
+            "command": "eslint \"tools/release/*.mjs\" \"tools/release/capture-release-screenshots.ts\" \"tools/release/capture-app-driver.ts\" \"tools/release/capture-fixtures.ts\" \"tools/release/capture-navigation.ts\" \"tools/release/capture-navigation-helpers.ts\" \"tools/release/capture-navigation-setup-actions.ts\" \"tools/release/capture-navigation-portal-actions.ts\" \"tools/release/capture-navigation-download-actions.ts\" \"tools/release/capture-network-gate.ts\" \"tools/release/capture-tmdb-check.ts\""
+        }
+    },
+    "tags": [
+        "scope:tools",
+        "domain:release",
+        "type:tool"
+    ]
+}

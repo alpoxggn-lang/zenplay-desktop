@@ -1,0 +1,266 @@
+import { computed, effect, inject, Injectable, signal } from '@angular/core';
+import { TranslateService } from '@ngx-translate/core';
+import { PlaylistRefreshActionService } from '@iptvnator/playlist/shared/ui';
+import { XtreamStore } from '@iptvnator/portal/xtream/data-access';
+import {
+    RuntimeCapabilitiesService,
+    injectTranslationTick,
+} from '@iptvnator/services';
+import {
+    XTREAM_LOCAL_LOAD_OVERLAY_DELAY_MS,
+    type XtreamImportPhaseTone,
+} from './helpers/workspace-shell-constants';
+import {
+    buildXtreamImportDetailLabel,
+    buildXtreamImportPhaseLabel,
+    buildXtreamImportPhaseTone,
+    buildXtreamImportProgressLabel,
+    buildXtreamImportSourceLabel,
+    buildXtreamImportTypeLabel,
+    buildXtreamRefreshPreparationPhaseLabel,
+    buildXtreamRefreshPreparationProgressLabel,
+    formatLocalizedNumber,
+} from './helpers/workspace-shell-import-labels';
+import { WorkspaceShellRouteStateService } from './workspace-shell-route-state.service';
+
+@Injectable()
+export class WorkspaceShellXtreamImportService {
+    private readonly xtreamStore = inject(XtreamStore);
+    private readonly playlistRefreshAction = inject(
+        PlaylistRefreshActionService
+    );
+    private readonly runtime = inject(RuntimeCapabilitiesService);
+    private readonly translate = inject(TranslateService);
+    private readonly routeState = inject(WorkspaceShellRouteStateService);
+
+    private readonly languageTick = injectTranslationTick();
+
+    isSourceBusy(playlistId: string): boolean {
+        return (
+            this.refreshPreparation()?.playlistId === playlistId ||
+            (this.xtreamStore.isImporting() &&
+                this.xtreamStore.playlistId() === playlistId)
+        );
+    }
+
+    private get isElectron(): boolean {
+        return this.runtime.isElectron;
+    }
+
+    private readonly translateText = (
+        key: string,
+        params?: Record<string, string | number>
+    ): string => this.translate.instant(key, params);
+
+    readonly xtreamImportCount = this.xtreamStore.getImportCount;
+    readonly xtreamItemsToImport = this.xtreamStore.itemsToImport;
+    readonly refreshPreparation = this.playlistRefreshAction.refreshPreparation;
+    readonly activeRefreshPreparation = computed(
+        () => this.refreshPreparation() ?? null
+    );
+    readonly xtreamActiveImportCount = computed(() => {
+        const preparation = this.activeRefreshPreparation();
+        return preparation
+            ? (preparation.current ?? 0)
+            : this.xtreamStore.activeImportCurrentCount();
+    });
+    readonly xtreamActiveItemsToImport = computed(() => {
+        const preparation = this.activeRefreshPreparation();
+        return preparation
+            ? (preparation.total ?? 0)
+            : this.xtreamStore.activeImportTotalCount();
+    });
+    readonly xtreamImportPhase = this.xtreamStore.currentImportPhase;
+    readonly isCancellingXtreamImport = this.xtreamStore.isCancellingImport;
+
+    readonly canCancelXtreamImport = computed(
+        () =>
+            this.isElectron &&
+            Boolean(this.xtreamStore.activeImportSessionId()) &&
+            !this.xtreamStore.isCancellingImport()
+    );
+    /** Whether the current route is waiting on an import or refresh. */
+    private readonly isOverlayWanted = computed(() => {
+        const route = this.routeState.currentRoute();
+        const context = this.routeState.currentContext();
+        const section = this.routeState.currentSection();
+        const hasRefreshPreparation = Boolean(this.refreshPreparation());
+
+        if (route.kind === 'dashboard') {
+            return hasRefreshPreparation;
+        }
+
+        if (context?.provider !== 'xtreams') {
+            return false;
+        }
+
+        const isPreparingCurrentPlaylist =
+            this.isRefreshPreparationRunningForPlaylist(context.playlistId);
+
+        return (
+            (this.isImportRunning() || isPreparingCurrentPlaylist) &&
+            (section === 'vod' ||
+                section === 'live' ||
+                section === 'series' ||
+                section === 'search' ||
+                section === 'recently-added')
+        );
+    });
+
+    /**
+     * Remote imports (the store flags `isImporting` for every phase except
+     * `loading-cached`) and refresh preparation of the shown playlist (any
+     * on the dashboard) show the overlay at once. A session that has only
+     * read the saved catalog so far waits `XTREAM_LOCAL_LOAD_OVERLAY_DELAY_MS`,
+     * so a warm open never flashes it, even while another playlist prepares
+     * a refresh.
+     */
+    private readonly isOverlayImmediate = computed(() => {
+        if (this.xtreamStore.isImporting()) {
+            return true;
+        }
+        if (this.routeState.currentRoute().kind === 'dashboard') {
+            return Boolean(this.refreshPreparation());
+        }
+        const playlistId = this.routeState.currentContext()?.playlistId;
+        return (
+            playlistId !== undefined &&
+            this.isRefreshPreparationRunningForPlaylist(playlistId)
+        );
+    });
+    private readonly localLoadDelayElapsed = signal(false);
+
+    readonly showXtreamImportOverlay = computed(
+        () =>
+            this.isOverlayWanted() &&
+            (this.isOverlayImmediate() || this.localLoadDelayElapsed())
+    );
+
+    readonly xtreamImportTitleLabel = computed(() => {
+        this.languageTick();
+        if (this.activeRefreshPreparation()) {
+            return this.translateText('WORKSPACE.SHELL.XTREAM_REFRESH_TITLE');
+        }
+
+        return this.translateText('WORKSPACE.SHELL.XTREAM_IMPORT_TITLE');
+    });
+
+    readonly xtreamImportTypeLabel = computed(() => {
+        this.languageTick();
+        return buildXtreamImportTypeLabel(
+            this.xtreamStore.activeImportContentType(),
+            this.translateText
+        );
+    });
+
+    readonly xtreamImportProgressLabel = computed(() => {
+        this.languageTick();
+        const formatNumber = (value: number): string =>
+            formatLocalizedNumber(
+                value,
+                this.translate.currentLang,
+                this.translate.defaultLang
+            );
+        const preparation = this.activeRefreshPreparation();
+
+        if (preparation) {
+            return buildXtreamRefreshPreparationProgressLabel(
+                this.xtreamActiveImportCount(),
+                this.xtreamActiveItemsToImport(),
+                this.translateText,
+                formatNumber
+            );
+        }
+
+        return buildXtreamImportProgressLabel(
+            this.xtreamImportTypeLabel(),
+            this.xtreamActiveImportCount(),
+            this.xtreamActiveItemsToImport(),
+            this.translateText,
+            formatNumber
+        );
+    });
+
+    readonly xtreamImportPhaseTone = computed<XtreamImportPhaseTone>(() => {
+        if (this.activeRefreshPreparation()) {
+            return 'local';
+        }
+
+        return buildXtreamImportPhaseTone(
+            this.xtreamStore.currentImportPhase()
+        );
+    });
+
+    readonly xtreamImportSourceLabel = computed(() => {
+        this.languageTick();
+        return buildXtreamImportSourceLabel(
+            this.xtreamImportPhaseTone(),
+            this.translateText
+        );
+    });
+
+    readonly xtreamImportPhaseLabel = computed(() => {
+        this.languageTick();
+        const preparation = this.activeRefreshPreparation();
+
+        if (preparation) {
+            return buildXtreamRefreshPreparationPhaseLabel(
+                preparation.phase,
+                this.translateText
+            );
+        }
+
+        return buildXtreamImportPhaseLabel(
+            this.xtreamStore.currentImportPhase(),
+            this.translateText
+        );
+    });
+
+    readonly xtreamImportDetailLabel = computed(() => {
+        this.languageTick();
+        if (this.activeRefreshPreparation()) {
+            return this.translateText(
+                'WORKSPACE.SHELL.XTREAM_REFRESH_DETAIL_LOCAL'
+            );
+        }
+
+        return buildXtreamImportDetailLabel(
+            this.xtreamStore.currentImportPhase(),
+            this.xtreamImportPhaseTone(),
+            this.translateText
+        );
+    });
+
+    constructor() {
+        // Restart the delay for every wait: it runs from the moment the
+        // route starts waiting and resets as soon as the wait ends.
+        effect((onCleanup) => {
+            if (!this.isOverlayWanted()) {
+                this.localLoadDelayElapsed.set(false);
+                return;
+            }
+            const timer = setTimeout(
+                () => this.localLoadDelayElapsed.set(true),
+                XTREAM_LOCAL_LOAD_OVERLAY_DELAY_MS
+            );
+            onCleanup(() => clearTimeout(timer));
+        });
+    }
+
+    readonly isImportRunning = computed(
+        () =>
+            !this.xtreamStore.contentInitBlockReason() &&
+            Boolean(this.xtreamStore.activeImportSessionId())
+    );
+    readonly isRefreshPreparationRunning = computed(() =>
+        Boolean(this.activeRefreshPreparation())
+    );
+
+    isRefreshPreparationRunningForPlaylist(playlistId: string): boolean {
+        return this.refreshPreparation()?.playlistId === playlistId;
+    }
+
+    cancelXtreamImport(): void {
+        void this.xtreamStore.cancelImport();
+    }
+}

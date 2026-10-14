@@ -1,0 +1,44 @@
+{
+    "name": "repository-skills",
+    "$schema": "../../node_modules/nx/schemas/project-schema.json",
+    "projectType": "library",
+    "sourceRoot": "tools/skills",
+    "tags": ["scope:tools", "domain:skills", "type:tool"],
+    "targets": {
+        "test": {
+            "executor": "nx:run-commands",
+            "cache": true,
+            "inputs": [
+                "{projectRoot}/*.mjs",
+                "{projectRoot}/project.json",
+                {
+                    "externalDependencies": [
+                        "marked",
+                        "parse5",
+                        "github-slugger",
+                        "parse-srcset",
+                        "typescript"
+                    ]
+                }
+            ],
+            "options": {
+                "command": "node --test tools/skills/validate-repository-skills.test.mjs tools/skills/validate-agent-guidance.test.mjs",
+                "cwd": "{workspaceRoot}"
+            }
+        },
+        "lint": {
+            "executor": "nx:run-commands",
+            "options": {
+                "commands": [
+                    "node --check tools/skills/validate-repository-skills.mjs",
+                    "node --check tools/skills/validate-repository-skills.test.mjs",
+                    "node --check tools/skills/validate-agent-guidance.mjs",
+                    "node --check tools/skills/validate-agent-guidance.test.mjs",
+                    "node --check tools/skills/agent-guidance-markdown.mjs"
+                ],
+                "cwd": "{workspaceRoot}"
+            },
+            "inputs": ["{projectRoot}/*.mjs", "{projectRoot}/project.json"]
+        }
+    }
+}

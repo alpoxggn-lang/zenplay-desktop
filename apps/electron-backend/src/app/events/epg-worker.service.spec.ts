@@ -1,0 +1,388 @@
+/**
+ * Worker lifecycle and in-flight deduplication coverage for EpgWorkerService.
+ * Timeout and renderer progress reporting live in
+ * `epg-worker.service.progress.spec.ts`.
+ */
+const mockWorkerInstances: any[] = [];
+const mockResolveWorkerRuntimeBootstrap = jest.fn();
+
+jest.mock('electron', () => ({
+    app: {
+        isPackaged: false,
+        getAppPath: () => '/mock/app.asar',
+    },
+    BrowserWindow: {
+        getAllWindows: () => [],
+    },
+}));
+
+jest.mock('worker_threads', () => {
+    const { EventEmitter } = require('events');
+
+    class MockWorker extends EventEmitter {
+        postMessage = jest.fn();
+        terminate = jest.fn().mockResolvedValue(0);
+    }
+
+    return {
+        Worker: jest.fn().mockImplementation(() => {
+            const worker = new MockWorker();
+            mockWorkerInstances.push(worker);
+            return worker;
+        }),
+    };
+});
+
+jest.mock('../workers/worker-runtime-paths', () => ({
+    resolveWorkerRuntimeBootstrap: (...args: unknown[]) =>
+        mockResolveWorkerRuntimeBootstrap(...args),
+}));
+
+import { retireEpgSource } from './epg-source-generation';
+import { EpgWorkerService } from './epg-worker.service';
+
+describe('EpgWorkerService worker lifecycle', () => {
+    let service: EpgWorkerService;
+    let consoleLogSpy: jest.SpyInstance;
+    let consoleErrorSpy: jest.SpyInstance;
+
+    const url = 'https://example.com/guide.xml';
+
+    beforeEach(() => {
+        jest.clearAllMocks();
+        mockWorkerInstances.length = 0;
+        consoleLogSpy = jest.spyOn(console, 'log').mockImplementation();
+        consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation();
+        mockResolveWorkerRuntimeBootstrap.mockReturnValue({
+            workerPath: '/mock/workers/epg-parser.worker.js',
+            workerPathCandidates: ['/mock/workers/epg-parser.worker.js'],
+            nativeModuleSearchPaths: [
+                '/mock/resources/app.asar.unpacked/node_modules',
+            ],
+        });
+        service = new EpgWorkerService('[Test EPG]', 1000);
+    });
+
+    afterEach(() => {
+        consoleLogSpy.mockRestore();
+        consoleErrorSpy.mockRestore();
+    });
+
+    it('keeps source credentials out of completion, reuse, cache and cleanup logs', async () => {
+        const secretUrl =
+            'https://secret-user:secret-password@example.com/private-key/guide.xml?custom=secret-query#secret-fragment';
+        const first = service.fetchEpgFromUrl(secretUrl);
+        const reused = service.fetchEpgFromUrl(secretUrl);
+        mockWorkerInstances[0].emit('message', {
+            type: 'EPG_COMPLETE',
+            stats: { totalChannels: 1, totalPrograms: 2 },
+        });
+        await Promise.all([first, reused]);
+        await service.fetchEpgFromUrl(secretUrl);
+        const clear = service.clearEpgDataForSource(secretUrl);
+        mockWorkerInstances[1].emit('message', { type: 'CLEAR_COMPLETE' });
+        await clear;
+        const output = JSON.stringify(consoleLogSpy.mock.calls);
+        for (const secret of [
+            'secret-user',
+            'secret-password',
+            'private-key',
+            'secret-query',
+            'secret-fragment',
+        ]) {
+            expect(output).not.toContain(secret);
+        }
+        expect(output).toContain('EPG parsing complete');
+    });
+
+    it('redacts worker errors without changing the rejected error', async () => {
+        const secretUrl =
+            'https://user:password@example.com/path-token/guide.xml?custom=query-token';
+        const error = Object.assign(new Error(`Request failed: ${secretUrl}`), {
+            config: {
+                url: secretUrl,
+                headers: { Authorization: 'Bearer header-secret' },
+            },
+            cause: new Error(
+                'Redirect failed: https://example.org/redirect-token?custom=redirect-query'
+            ),
+        });
+        const pending = service.fetchEpgFromUrl(secretUrl);
+        mockWorkerInstances[0].emit('error', error);
+        await expect(pending).rejects.toBe(error);
+        const output = JSON.stringify(consoleErrorSpy.mock.calls);
+        for (const secret of [
+            'password',
+            'path-token',
+            'query-token',
+            'header-secret',
+            'redirect-token',
+            'redirect-query',
+        ]) {
+            expect(output).not.toContain(secret);
+        }
+        expect(output).toContain('Request failed');
+    });
+
+    describe('worker lifecycle', () => {
+        it('spawns the worker with bootstrap paths and drives the FETCH_EPG flow', async () => {
+            const options = { manuallyTrustedHosts: ['example.com'] } as any;
+            const fetchPromise = service.fetchEpgFromUrl(url, options);
+            const worker = mockWorkerInstances[0];
+            const { Worker } = jest.requireMock('worker_threads');
+
+            expect(mockResolveWorkerRuntimeBootstrap).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    isPackaged: false,
+                    workerFilename: 'epg-parser.worker.js',
+                    appPath: '/mock/app.asar',
+                })
+            );
+            expect(Worker).toHaveBeenCalledWith(expect.any(URL), {
+                resourceLimits: {
+                    maxOldGenerationSizeMb: 4096,
+                    maxYoungGenerationSizeMb: 512,
+                },
+                workerData: {
+                    nativeModuleSearchPaths: [
+                        '/mock/resources/app.asar.unpacked/node_modules',
+                    ],
+                },
+            });
+
+            worker.emit('message', { type: 'READY' });
+            expect(worker.postMessage).toHaveBeenCalledWith({
+                type: 'FETCH_EPG',
+                url,
+                options,
+            });
+
+            worker.emit('message', {
+                type: 'EPG_COMPLETE',
+                stats: { totalChannels: 3, totalPrograms: 42 },
+            });
+
+            await expect(fetchPromise).resolves.toBeUndefined();
+            expect(worker.terminate).toHaveBeenCalledTimes(1);
+            expect(service.hasFetchedUrl(url)).toBe(true);
+        });
+
+        it('refuses a local file the authorizer denies without spawning a worker', async () => {
+            const localPath = '/home/user/epg/guide.xml.gz';
+            const progressSpy = jest.spyOn(service, 'sendProgressToRenderer');
+            service.localSourceAuthorizer = {
+                authorize: jest.fn(),
+                ensureAllowed: jest.fn().mockResolvedValue(false),
+            };
+
+            await expect(
+                service.fetchEpgFromUrl(localPath, {
+                    allowLocalFile: true,
+                } as any)
+            ).rejects.toThrow('was not allowed');
+
+            expect(
+                service.localSourceAuthorizer.ensureAllowed
+            ).toHaveBeenCalledWith(localPath);
+            expect(mockWorkerInstances).toHaveLength(0);
+            expect(progressSpy).toHaveBeenCalledWith(
+                localPath,
+                'error',
+                undefined,
+                expect.stringContaining('was not allowed')
+            );
+            expect(service.hasFetchedUrl(localPath)).toBe(false);
+        });
+
+        it('cancels a local source retired while its authorization prompt is open', async () => {
+            const localPath = '/home/user/epg/retired.xml.gz';
+            const progressSpy = jest.spyOn(service, 'sendProgressToRenderer');
+            let answer: (allowed: boolean) => void = () => undefined;
+            service.localSourceAuthorizer = {
+                authorize: jest.fn(),
+                ensureAllowed: jest.fn(
+                    () =>
+                        new Promise<boolean>((resolve) => {
+                            answer = resolve;
+                        })
+                ),
+            };
+
+            const fetchPromise = service.fetchEpgFromUrl(localPath);
+            await Promise.resolve();
+            retireEpgSource(localPath);
+            answer(true);
+
+            await expect(fetchPromise).resolves.toBeUndefined();
+            expect(mockWorkerInstances).toHaveLength(0);
+            expect(progressSpy).toHaveBeenCalledWith(
+                localPath,
+                'cancelled',
+                undefined,
+                undefined,
+                undefined,
+                undefined,
+                undefined,
+                0
+            );
+        });
+
+        it('unlocks the worker local branch only for an allowed file', async () => {
+            const localPath = '/home/user/epg/guide.xml.gz';
+            service.localSourceAuthorizer = {
+                authorize: jest.fn(),
+                ensureAllowed: jest.fn().mockResolvedValue(true),
+            };
+
+            const fetchPromise = service.fetchEpgFromUrl(localPath, {
+                trustedInsecureTlsHosts: ['example.com'],
+            });
+            await Promise.resolve();
+            const worker = mockWorkerInstances[0];
+            worker.emit('message', { type: 'READY' });
+
+            expect(worker.postMessage).toHaveBeenCalledWith({
+                type: 'FETCH_EPG',
+                url: localPath,
+                options: {
+                    trustedInsecureTlsHosts: ['example.com'],
+                    allowLocalFile: true,
+                },
+            });
+
+            worker.emit('message', {
+                type: 'EPG_COMPLETE',
+                stats: { totalChannels: 1, totalPrograms: 1 },
+            });
+            await expect(fetchPromise).resolves.toBeUndefined();
+        });
+
+        it('never forwards a renderer-supplied allowLocalFile flag for remote sources', async () => {
+            const fetchPromise = service.fetchEpgFromUrl(url, {
+                allowLocalFile: true,
+            } as any);
+            await Promise.resolve();
+            const worker = mockWorkerInstances[0];
+            worker.emit('message', { type: 'READY' });
+
+            expect(worker.postMessage).toHaveBeenCalledWith({
+                type: 'FETCH_EPG',
+                url,
+                options: {},
+            });
+            worker.emit('message', {
+                type: 'EPG_COMPLETE',
+                stats: { totalChannels: 1, totalPrograms: 1 },
+            });
+            await expect(fetchPromise).resolves.toBeUndefined();
+        });
+
+        it('rejects when the worker emits an error event', async () => {
+            const fetchPromise = service.fetchEpgFromUrl(url);
+            const worker = mockWorkerInstances[0];
+
+            worker.emit('error', new Error('worker crashed'));
+
+            await expect(fetchPromise).rejects.toThrow('worker crashed');
+            expect(worker.terminate).toHaveBeenCalledTimes(1);
+            expect(service.hasFetchedUrl(url)).toBe(false);
+        });
+
+        it('rejects when the worker exits before settling', async () => {
+            const fetchPromise = service.fetchEpgFromUrl(url);
+            const worker = mockWorkerInstances[0];
+
+            worker.emit('exit', 7);
+
+            await expect(fetchPromise).rejects.toThrow(
+                'Worker exited unexpectedly (code 7)'
+            );
+        });
+
+        it('rejects and clears the in-flight entry when worker construction fails', async () => {
+            const { Worker } = jest.requireMock('worker_threads');
+            Worker.mockImplementationOnce(() => {
+                throw new Error('cannot spawn worker');
+            });
+
+            await expect(service.fetchEpgFromUrl(url)).rejects.toThrow(
+                'cannot spawn worker'
+            );
+
+            // The failed fetch must not poison future fetches for the URL.
+            const retryPromise = service.fetchEpgFromUrl(url);
+            expect(mockWorkerInstances).toHaveLength(1);
+
+            const worker = mockWorkerInstances[0];
+            worker.emit('message', { type: 'READY' });
+            worker.emit('message', {
+                type: 'EPG_COMPLETE',
+                stats: { totalChannels: 1, totalPrograms: 1 },
+            });
+            await expect(retryPromise).resolves.toBeUndefined();
+        });
+    });
+
+    describe('in-flight deduplication', () => {
+        it('shares one worker between concurrent fetches of the same URL', async () => {
+            const firstPromise = service.fetchEpgFromUrl(url);
+            const secondPromise = service.fetchEpgFromUrl(url);
+
+            expect(mockWorkerInstances).toHaveLength(1);
+
+            const worker = mockWorkerInstances[0];
+            worker.emit('message', { type: 'READY' });
+            worker.emit('message', {
+                type: 'EPG_COMPLETE',
+                stats: { totalChannels: 1, totalPrograms: 1 },
+            });
+
+            await expect(firstPromise).resolves.toBeUndefined();
+            await expect(secondPromise).resolves.toBeUndefined();
+            expect(mockWorkerInstances).toHaveLength(1);
+        });
+
+        it('spawns separate workers for different URLs fetched concurrently', async () => {
+            const otherUrl = 'https://example.org/other-guide.xml';
+            const firstPromise = service.fetchEpgFromUrl(url);
+            const secondPromise = service.fetchEpgFromUrl(otherUrl);
+
+            expect(mockWorkerInstances).toHaveLength(2);
+
+            for (const worker of mockWorkerInstances) {
+                worker.emit('message', { type: 'READY' });
+                worker.emit('message', {
+                    type: 'EPG_COMPLETE',
+                    stats: { totalChannels: 1, totalPrograms: 1 },
+                });
+            }
+
+            await expect(firstPromise).resolves.toBeUndefined();
+            await expect(secondPromise).resolves.toBeUndefined();
+        });
+
+        it('skips already fetched URLs until they are invalidated', async () => {
+            const firstPromise = service.fetchEpgFromUrl(url);
+            const worker = mockWorkerInstances[0];
+            worker.emit('message', { type: 'READY' });
+            worker.emit('message', {
+                type: 'EPG_COMPLETE',
+                stats: { totalChannels: 1, totalPrograms: 1 },
+            });
+            await firstPromise;
+
+            await expect(service.fetchEpgFromUrl(url)).resolves.toBeUndefined();
+            expect(mockWorkerInstances).toHaveLength(1);
+
+            service.deleteFetchedUrl(url);
+            const refetchPromise = service.fetchEpgFromUrl(url);
+            expect(mockWorkerInstances).toHaveLength(2);
+
+            // Settle the refetch so no timeout leaks past the test.
+            mockWorkerInstances[1].emit('exit', 0);
+            await expect(refetchPromise).rejects.toThrow(
+                'Worker exited unexpectedly'
+            );
+        });
+    });
+});

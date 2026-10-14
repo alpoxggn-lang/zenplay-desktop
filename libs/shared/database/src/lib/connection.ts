@@ -1,0 +1,1297 @@
+import {
+    DOWNLOADS_TABLE_SQL,
+    DOWNLOADS_INDEX_STATEMENTS,
+    ensureDownloadsCatchupSchema,
+} from './download-schema';
+import {
+    ensurePlaylistsPayloadLast,
+    playlistsTableSql,
+} from './playlists-table';
+import { xtreamCacheUniqueIndexesExist } from './xtream-cache-unique-indexes';
+/**
+ * Database connection and initialization for IPTVnator
+ * Uses Drizzle ORM with better-sqlite3
+ * Stores database file under ~/.iptvnator/databases/ by default.
+ * E2E tests can override the root with IPTVNATOR_E2E_DATA_DIR.
+ *
+ * Provides two connection modes:
+ * - Full access (for electron-backend): creates tables, read-write
+ * - Read-only access (for agent-backend): no table creation, read-only queries
+ */
+
+import Database from 'better-sqlite3';
+import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
+import { drizzle } from 'drizzle-orm/better-sqlite3';
+import {
+    redactSensitiveData,
+    summarizeSqlStatementForTrace,
+} from '@iptvnator/shared/logging';
+import * as schema from './schema';
+import { getIptvnatorDatabasePath } from './path-utils';
+import { notifyDatabaseConnectionOpened } from './connection-observer';
+
+export type DatabaseInstance = BetterSQLite3Database<typeof schema>;
+
+const TRACE_ENV_TRUE_VALUES = new Set(['1', 'true', 'yes', 'on']);
+
+let db: DatabaseInstance | null = null;
+let sqlite: Database.Database | null = null;
+let initPromise: Promise<DatabaseInstance> | null = null;
+
+const XTREAM_ADDED_EPOCH_MILLISECONDS_THRESHOLD = 10_000_000_000;
+const XTREAM_ADDED_EPOCH_SECONDS_MIGRATION_KEY =
+    'migration:xtream-content-added-epoch-seconds:v1';
+const CONTENT_TITLE_FTS_MIGRATION_KEY =
+    'migration:content-title-fts-trigram:v1';
+const CONTENT_TITLE_FTS_DIACRITICS_MIGRATION_KEY =
+    'migration:content-title-fts-remove-diacritics:v1';
+const EPG_PROGRAM_SOURCE_URL_BACKFILL_MIGRATION_KEY =
+    'migration:epg-program-source-url-backfill:v1';
+const TMDB_SEARCH_LOOKUP_V2_CACHE_CLEANUP_MIGRATION_KEY =
+    'migration:tmdb-search-lookup-v2-cache-cleanup:v1';
+const TMDB_SEARCH_LOOKUP_V3_CACHE_CLEANUP_MIGRATION_KEY =
+    'migration:tmdb-search-lookup-v3-cache-cleanup:v1';
+const TMDB_SEARCH_LOOKUP_V4_CACHE_CLEANUP_MIGRATION_KEY =
+    'migration:tmdb-search-lookup-v4-cache-cleanup:v1';
+const EPG_PROGRAM_SOURCE_URL_BACKFILL_BATCH_SIZE = 50_000;
+
+function readTraceFlag(name: string): boolean {
+    const value = process.env[name]?.trim().toLowerCase();
+    return value ? TRACE_ENV_TRUE_VALUES.has(value) : false;
+}
+
+function isSqlTraceEnabled(): boolean {
+    return (
+        readTraceFlag('IPTVNATOR_TRACE_STARTUP') ||
+        readTraceFlag('IPTVNATOR_TRACE_DB') ||
+        readTraceFlag('IPTVNATOR_TRACE_SQL')
+    );
+}
+
+function traceSql(scope: string, message: string, payload?: unknown): void {
+    if (payload === undefined) {
+        console.log(`[IPTVnator Trace][${scope}] ${message}`);
+        return;
+    }
+
+    console.log(
+        `[IPTVnator Trace][${scope}] ${message} ${JSON.stringify(
+            redactSensitiveData(payload)
+        )}`
+    );
+}
+
+function traceSqlStatement(sql: unknown): void {
+    traceSql('sql-main', 'query', summarizeSqlStatementForTrace(sql));
+}
+
+/**
+ * Get the database file path
+ */
+export function getDatabasePath(): string {
+    return getIptvnatorDatabasePath();
+}
+
+/**
+ * SQL statements for creating all tables
+ */
+const TMDB_METADATA_TABLE_SQL = `CREATE TABLE IF NOT EXISTS tmdb_metadata (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      media_type TEXT NOT NULL CHECK (media_type IN ('movie', 'tv', 'person')),
+      lookup_key TEXT NOT NULL,
+      language TEXT NOT NULL,
+      tmdb_id INTEGER,
+      payload TEXT,
+      fetched_at TEXT DEFAULT (datetime('now'))
+  )`;
+const TMDB_METADATA_INDEX_SQL = `CREATE UNIQUE INDEX IF NOT EXISTS tmdb_metadata_lookup_unique ON tmdb_metadata(media_type, lookup_key, language)`;
+// No unique index: re-recording the same channel is a normal workflow, and
+// playlist_id carries no FK so recordings survive source deletion.
+const RECORDINGS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS recordings (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id TEXT,
+      owner_pid INTEGER,
+      status TEXT NOT NULL DEFAULT 'recording' CHECK (status IN ('recording', 'completed', 'interrupted', 'failed')),
+      file_path TEXT NOT NULL,
+      file_size_bytes INTEGER,
+      channel_name TEXT NOT NULL,
+      channel_logo_url TEXT,
+      playlist_id TEXT,
+      playlist_name TEXT,
+      source_type TEXT CHECK (source_type IN ('m3u', 'xtream', 'stalker')),
+      epg_channel_id TEXT,
+      program_title TEXT,
+      program_description TEXT,
+      program_start TEXT,
+      program_stop TEXT,
+      programs_json TEXT,
+      error_message TEXT,
+      started_at TEXT NOT NULL,
+      ended_at TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+  )`;
+const RECORDINGS_INDEX_STATEMENTS = [
+    `CREATE INDEX IF NOT EXISTS recordings_status_idx ON recordings(status)`,
+    `CREATE INDEX IF NOT EXISTS recordings_file_path_idx ON recordings(file_path)`,
+    `CREATE INDEX IF NOT EXISTS recordings_playlist_idx ON recordings(playlist_id)`,
+];
+
+const CREATE_TABLE_STATEMENTS = [
+    playlistsTableSql('playlists'),
+    `CREATE TABLE IF NOT EXISTS app_state (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at TEXT DEFAULT (datetime('now'))
+  )`,
+    `CREATE TABLE IF NOT EXISTS categories (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      playlist_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      type TEXT NOT NULL CHECK (type IN ('live', 'movies', 'series')),
+      xtream_id INTEGER NOT NULL,
+      hidden INTEGER DEFAULT 0,
+      locked INTEGER DEFAULT 0,
+      UNIQUE(playlist_id, type, xtream_id),
+      FOREIGN KEY (playlist_id) REFERENCES playlists (id) ON DELETE CASCADE
+  )`,
+    `CREATE TABLE IF NOT EXISTS content (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      category_id INTEGER NOT NULL,
+      title TEXT NOT NULL,
+      rating TEXT,
+      added TEXT,
+      poster_url TEXT,
+      backdrop_url TEXT,
+      tmdb_id INTEGER,
+      release_year INTEGER,
+      original_title TEXT,
+      epg_channel_id TEXT,
+      tv_archive INTEGER,
+      tv_archive_duration INTEGER,
+      direct_source TEXT,
+      xtream_id INTEGER NOT NULL,
+      type TEXT NOT NULL CHECK (type IN ('live', 'movie', 'series')),
+      UNIQUE(category_id, type, xtream_id),
+      FOREIGN KEY (category_id) REFERENCES categories (id) ON DELETE CASCADE
+  )`,
+    `CREATE TABLE IF NOT EXISTS recently_viewed (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      content_id INTEGER NOT NULL,
+      playlist_id TEXT NOT NULL,
+      viewed_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (content_id) REFERENCES content (id) ON DELETE CASCADE,
+      FOREIGN KEY (playlist_id) REFERENCES playlists (id) ON DELETE CASCADE
+  )`,
+    `CREATE TABLE IF NOT EXISTS favorites (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      content_id INTEGER NOT NULL,
+      playlist_id TEXT NOT NULL,
+      added_at TEXT DEFAULT (datetime('now')),
+      position INTEGER DEFAULT 0,
+      FOREIGN KEY (content_id) REFERENCES content(id) ON DELETE CASCADE,
+      FOREIGN KEY (playlist_id) REFERENCES playlists(id) ON DELETE CASCADE
+  )`,
+    `CREATE INDEX IF NOT EXISTS idx_content_type ON content(type)`,
+    `CREATE INDEX IF NOT EXISTS idx_content_category ON content(category_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_categories_playlist ON categories(playlist_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_content_title ON content(title)`,
+    `CREATE INDEX IF NOT EXISTS idx_content_xtream ON content(xtream_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_content_type_added ON content(type, added)`,
+    `CREATE INDEX IF NOT EXISTS idx_categories_type ON categories(type)`,
+    // Partial covering index for visible categories — supports the dashboard's
+    // getGlobalRecentlyAdded plus searchContent/globalSearch when excludeHidden
+    // is set. SQLite can satisfy the join (category_id PK lookup) plus the
+    // hidden = 0 filter directly from this index without touching the
+    // categories row, and hidden categories are absent so they're skipped
+    // before any row lookup.
+    `CREATE INDEX IF NOT EXISTS idx_categories_visible ON categories(id, playlist_id, type) WHERE hidden = 0`,
+    // Trigram FTS index for global Xtream title search. It supports fast
+    // contains matches such as "max" -> "beIN MAX" and "Cinemax" without
+    // scanning the full content table.
+    `CREATE VIRTUAL TABLE IF NOT EXISTS content_title_fts USING fts5(
+      title,
+      content='content',
+      content_rowid='id',
+      tokenize='trigram'
+  )`,
+    `CREATE TRIGGER IF NOT EXISTS content_title_fts_ai AFTER INSERT ON content BEGIN
+      INSERT INTO content_title_fts(rowid, title)
+      VALUES (new.id, new.title);
+  END`,
+    `CREATE TRIGGER IF NOT EXISTS content_title_fts_ad AFTER DELETE ON content BEGIN
+      INSERT INTO content_title_fts(content_title_fts, rowid, title)
+      VALUES ('delete', old.id, old.title);
+  END`,
+    `CREATE TRIGGER IF NOT EXISTS content_title_fts_au AFTER UPDATE ON content BEGIN
+      INSERT INTO content_title_fts(content_title_fts, rowid, title)
+      VALUES ('delete', old.id, old.title);
+      INSERT INTO content_title_fts(rowid, title)
+      VALUES (new.id, new.title);
+  END`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS favorites_content_playlist_unique ON favorites(content_id, playlist_id)`,
+    `CREATE INDEX IF NOT EXISTS favorites_playlist_idx ON favorites(playlist_id)`,
+    `CREATE INDEX IF NOT EXISTS favorites_content_idx ON favorites(content_id)`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS recently_viewed_content_playlist_unique ON recently_viewed(content_id, playlist_id)`,
+    `CREATE INDEX IF NOT EXISTS recently_viewed_playlist_idx ON recently_viewed(playlist_id)`,
+    `CREATE INDEX IF NOT EXISTS recently_viewed_viewed_at_idx ON recently_viewed(viewed_at)`,
+    `CREATE INDEX IF NOT EXISTS recently_viewed_playlist_viewed_idx ON recently_viewed(playlist_id, viewed_at DESC)`,
+    // EPG tables
+    `CREATE TABLE IF NOT EXISTS epg_channels (
+      id TEXT PRIMARY KEY,
+      display_name TEXT NOT NULL,
+      icon_url TEXT,
+      url TEXT,
+      source_url TEXT NOT NULL,
+      updated_at TEXT DEFAULT (datetime('now'))
+  )`,
+    `CREATE TABLE IF NOT EXISTS epg_channel_sources (
+      channel_id TEXT NOT NULL,
+      source_url TEXT NOT NULL,
+      display_name TEXT NOT NULL,
+      icon_url TEXT,
+      url TEXT,
+      updated_at TEXT DEFAULT (datetime('now')),
+      write_order INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (channel_id, source_url),
+      FOREIGN KEY (channel_id) REFERENCES epg_channels(id) ON DELETE CASCADE
+  )`,
+    `CREATE INDEX IF NOT EXISTS idx_epg_channel_sources_source ON epg_channel_sources(source_url)`,
+    `CREATE TABLE IF NOT EXISTS epg_programs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      channel_id TEXT NOT NULL,
+      start TEXT NOT NULL,
+      stop TEXT NOT NULL,
+      title TEXT NOT NULL,
+      description TEXT,
+      category TEXT,
+      icon_url TEXT,
+      rating TEXT,
+      episode_num TEXT,
+      source_url TEXT,
+      FOREIGN KEY (channel_id) REFERENCES epg_channels(id) ON DELETE CASCADE
+  )`,
+    // EPG indexes
+    `CREATE INDEX IF NOT EXISTS idx_epg_channels_source ON epg_channels(source_url)`,
+    `CREATE INDEX IF NOT EXISTS idx_epg_channels_name ON epg_channels(display_name)`,
+    `CREATE INDEX IF NOT EXISTS idx_epg_programs_channel ON epg_programs(channel_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_epg_programs_start ON epg_programs(start)`,
+    `CREATE INDEX IF NOT EXISTS idx_epg_programs_stop ON epg_programs(stop)`,
+    `CREATE INDEX IF NOT EXISTS idx_epg_programs_time_range ON epg_programs(channel_id, start, stop)`,
+    // FTS5 virtual table for full-text search on EPG programs
+    `CREATE VIRTUAL TABLE IF NOT EXISTS epg_programs_fts USING fts5(
+      title,
+      description,
+      category,
+      content='epg_programs',
+      content_rowid='id'
+  )`,
+    // Triggers to keep FTS index in sync with epg_programs table
+    `CREATE TRIGGER IF NOT EXISTS epg_programs_ai AFTER INSERT ON epg_programs BEGIN
+      INSERT INTO epg_programs_fts(rowid, title, description, category)
+      VALUES (new.id, new.title, new.description, new.category);
+  END`,
+    `CREATE TRIGGER IF NOT EXISTS epg_programs_ad AFTER DELETE ON epg_programs BEGIN
+      INSERT INTO epg_programs_fts(epg_programs_fts, rowid, title, description, category)
+      VALUES ('delete', old.id, old.title, old.description, old.category);
+  END`,
+    `CREATE TRIGGER IF NOT EXISTS epg_programs_au AFTER UPDATE ON epg_programs BEGIN
+      INSERT INTO epg_programs_fts(epg_programs_fts, rowid, title, description, category)
+      VALUES ('delete', old.id, old.title, old.description, old.category);
+      INSERT INTO epg_programs_fts(rowid, title, description, category)
+      VALUES (new.id, new.title, new.description, new.category);
+  END`,
+    // EPG channel mappings (manual user overrides)
+    `CREATE TABLE IF NOT EXISTS epg_channel_mappings (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      channel_key TEXT NOT NULL UNIQUE,
+      epg_channel_id TEXT NOT NULL,
+      playlist_id TEXT,
+      updated_at TEXT DEFAULT (datetime('now'))
+  )`,
+    `CREATE INDEX IF NOT EXISTS idx_epg_channel_mappings_playlist ON epg_channel_mappings(playlist_id)`,
+    // VOD multi-source pins — the per-movie preferred playlist. Keyed by a
+    // portal-agnostic match key, since the same film has a different provider
+    // id in every portal.
+    `CREATE TABLE IF NOT EXISTS vod_source_pins (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      match_key TEXT NOT NULL UNIQUE,
+      playlist_id TEXT NOT NULL REFERENCES playlists(id) ON DELETE CASCADE,
+      content_id INTEGER NOT NULL,
+      portal_type TEXT NOT NULL CHECK (portal_type IN ('xtream', 'stalker', 'm3u')),
+      updated_at TEXT DEFAULT (datetime('now'))
+  )`,
+    `CREATE INDEX IF NOT EXISTS idx_vod_source_pins_playlist ON vod_source_pins(playlist_id)`,
+    // Playback Positions table
+    `CREATE TABLE IF NOT EXISTS playback_positions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      playlist_id TEXT NOT NULL,
+      content_xtream_id INTEGER NOT NULL,
+      content_type TEXT NOT NULL CHECK (content_type IN ('vod', 'episode')),
+      series_xtream_id INTEGER,
+      season_number INTEGER,
+      episode_number INTEGER,
+      position_seconds INTEGER NOT NULL DEFAULT 0,
+      duration_seconds INTEGER,
+      updated_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (playlist_id) REFERENCES playlists (id) ON DELETE CASCADE
+  )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS playback_positions_content_playlist_unique ON playback_positions(content_xtream_id, playlist_id, content_type)`,
+    `CREATE INDEX IF NOT EXISTS playback_positions_playlist_idx ON playback_positions(playlist_id)`,
+    `CREATE INDEX IF NOT EXISTS playback_positions_series_idx ON playback_positions(series_xtream_id)`,
+    `CREATE INDEX IF NOT EXISTS playback_positions_updated_idx ON playback_positions(updated_at)`,
+    `CREATE INDEX IF NOT EXISTS playback_positions_playlist_updated_idx ON playback_positions(playlist_id, updated_at DESC)`,
+    // Downloads table
+    DOWNLOADS_TABLE_SQL,
+    ...DOWNLOADS_INDEX_STATEMENTS,
+    // Live-TV recordings table
+    RECORDINGS_TABLE_SQL,
+    ...RECORDINGS_INDEX_STATEMENTS,
+    // TMDB metadata cache (details payloads + search match resolutions)
+    TMDB_METADATA_TABLE_SQL,
+    TMDB_METADATA_INDEX_SQL,
+];
+
+/**
+ * Migration statements that may fail if already applied
+ * These are run with try-catch to handle existing columns
+ */
+const COLUMN_MIGRATION_STATEMENTS = [
+    // v1.0.0 -> v1.1.0: Add hidden column to categories for category management
+    `ALTER TABLE categories ADD COLUMN hidden INTEGER DEFAULT 0`,
+    // Parental lock: per-category lock index (issue #285)
+    `ALTER TABLE categories ADD COLUMN locked INTEGER DEFAULT 0`,
+    // v1.1.0 -> v1.2.0: Add playlist metadata/payload columns for M3U + unified playlist persistence
+    `ALTER TABLE playlists ADD COLUMN portal_url TEXT`,
+    `ALTER TABLE playlists ADD COLUMN count INTEGER`,
+    `ALTER TABLE playlists ADD COLUMN import_date TEXT`,
+    `ALTER TABLE playlists ADD COLUMN update_date INTEGER`,
+    `ALTER TABLE playlists ADD COLUMN position INTEGER`,
+    `ALTER TABLE playlists ADD COLUMN favorites TEXT`,
+    `ALTER TABLE playlists ADD COLUMN recently_viewed TEXT`,
+    `ALTER TABLE playlists ADD COLUMN payload TEXT`,
+    // v1.2.1: Keep M3U-detected EPG URLs available in lightweight playlist metadata
+    `ALTER TABLE playlists ADD COLUMN epg_urls TEXT`,
+    `ALTER TABLE playlists ADD COLUMN detected_epg_urls TEXT`,
+    `ALTER TABLE playlists ADD COLUMN manual_epg_urls TEXT`,
+    `ALTER TABLE playlists ADD COLUMN disabled_epg_urls TEXT`,
+    // v1.2.0 -> v1.3.0: Add position column to favorites for global favorites ordering
+    `ALTER TABLE favorites ADD COLUMN position INTEGER DEFAULT 0`,
+    // v1.4.0 -> v1.5.0: Preserve Xtream live metadata required for EPG/catch-up
+    `ALTER TABLE content ADD COLUMN epg_channel_id TEXT`,
+    `ALTER TABLE content ADD COLUMN tv_archive INTEGER`,
+    `ALTER TABLE content ADD COLUMN tv_archive_duration INTEGER`,
+    `ALTER TABLE content ADD COLUMN direct_source TEXT`,
+    // v1.5.0 -> v1.6.0: Cinematic backdrop persisted on first detail fetch
+    `ALTER TABLE content ADD COLUMN backdrop_url TEXT`,
+    // Identity resolved by a detail view, so activity rows can repeat that
+    // lookup instead of rebuilding a weaker one from the display title
+    `ALTER TABLE content ADD COLUMN tmdb_id INTEGER`,
+    `ALTER TABLE content ADD COLUMN release_year INTEGER`,
+    `ALTER TABLE content ADD COLUMN original_title TEXT`,
+    // v1.7.1: Scope XMLTV programs to their source URL for playlist-local EPG lookup
+    `ALTER TABLE epg_programs ADD COLUMN source_url TEXT`,
+    // Preserve writer order independently of wall-clock precision or changes.
+    `ALTER TABLE epg_channel_sources ADD COLUMN write_order INTEGER NOT NULL DEFAULT 0`,
+    // Pause/resume: entity validator (ETag/Last-Modified) sent as If-Range on resume
+    `ALTER TABLE downloads ADD COLUMN resume_validator TEXT`,
+    // Offline details: provider-neutral display metadata captured at download time
+    `ALTER TABLE downloads ADD COLUMN metadata_snapshot TEXT`,
+    // Series queue: scope coordinate compatibility across provider series modes
+    `ALTER TABLE downloads ADD COLUMN episode_identity_scope TEXT`,
+];
+
+const INDEX_MIGRATION_STATEMENTS = [
+    // Existing v0.19 content tables gain this column above, after CREATE TABLE.
+    `CREATE INDEX IF NOT EXISTS idx_content_epg_channel ON content(epg_channel_id)`,
+    // v1.3.0 -> v1.4.0: Prevent duplicate Xtream categories/content rows
+    `CREATE UNIQUE INDEX IF NOT EXISTS categories_playlist_type_xtream_unique ON categories(playlist_id, type, xtream_id)`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS content_category_type_xtream_unique ON content(category_id, type, xtream_id)`,
+    // v1.6.0 -> v1.7.0: Query global favorites in stable display order
+    `CREATE INDEX IF NOT EXISTS favorites_playlist_position_idx ON favorites(playlist_id, position, added_at DESC)`,
+    // v1.7.1 -> v1.7.2: Query playlist-scoped EPG by source URL and channel/time
+    `CREATE INDEX IF NOT EXISTS idx_epg_programs_source ON epg_programs(source_url)`,
+    `CREATE INDEX IF NOT EXISTS idx_epg_programs_source_time_range ON epg_programs(source_url, channel_id, start, stop)`,
+];
+
+export const __databaseConnectionTestHooks = {
+    createTables,
+    createTableStatements: CREATE_TABLE_STATEMENTS,
+    columnMigrationStatements: COLUMN_MIGRATION_STATEMENTS,
+    indexMigrationStatements: INDEX_MIGRATION_STATEMENTS,
+    ensureDownloadsPauseResumeSchema,
+    deduplicateXtreamCache,
+    normalizeXtreamContentAddedEpochs,
+    ensureContentTitleFts,
+    upgradeContentTitleFtsTokenizer,
+    contentTitleFtsStatement,
+    backfillEpgProgramSourceUrls,
+    cleanupLegacyTmdbSearchCache,
+    runMigrations,
+    traceSqlStatement,
+} as const;
+
+/**
+ * Create tables if they don't exist
+ */
+function createTables(sqliteDb: Database.Database): void {
+    for (const stmt of CREATE_TABLE_STATEMENTS) {
+        sqliteDb.exec(stmt);
+    }
+}
+
+function isDuplicateColumnError(error: unknown): boolean {
+    const message =
+        typeof error === 'object' && error !== null && 'message' in error
+            ? String((error as { message?: unknown }).message ?? '')
+            : '';
+
+    return message.toLowerCase().includes('duplicate column name');
+}
+
+type XtreamCategoryDuplicateGroup = {
+    playlistId: string;
+    type: 'live' | 'movies' | 'series';
+    xtreamId: number;
+};
+
+type XtreamCategoryCandidate = {
+    id: number;
+    hidden: number;
+    contentCount: number;
+};
+
+type XtreamContentDuplicateGroup = {
+    categoryId: number;
+    type: 'live' | 'movie' | 'series';
+    xtreamId: number;
+};
+
+type XtreamContentCandidate = {
+    id: number;
+};
+
+function deduplicateXtreamCache(sqliteDb: Database.Database): void {
+    // With both unique indexes in place the cache cannot hold duplicates,
+    // and the two GROUP BY scans below would only cost a full pass over the
+    // content table on every launch (7.8 s on a 3.9M-title library).
+    if (xtreamCacheUniqueIndexesExist(sqliteDb)) {
+        return;
+    }
+    const executeCleanup = sqliteDb.transaction(() => {
+        const duplicateCategoryGroups = sqliteDb
+            .prepare(
+                `SELECT
+                    playlist_id AS playlistId,
+                    type,
+                    xtream_id AS xtreamId
+                 FROM categories
+                 GROUP BY playlist_id, type, xtream_id
+                 HAVING COUNT(*) > 1`
+            )
+            .all() as XtreamCategoryDuplicateGroup[];
+
+        const selectCategoryCandidates = sqliteDb.prepare(
+            `SELECT
+                categories.id AS id,
+                COALESCE(categories.hidden, 0) AS hidden,
+                COUNT(content.id) AS contentCount
+             FROM categories
+             LEFT JOIN content ON content.category_id = categories.id
+             WHERE categories.playlist_id = ?
+               AND categories.type = ?
+               AND categories.xtream_id = ?
+             GROUP BY categories.id, categories.hidden
+             ORDER BY COUNT(content.id) DESC, COALESCE(categories.hidden, 0) ASC, categories.id ASC`
+        );
+        const updateContentCategory = sqliteDb.prepare(
+            `UPDATE content SET category_id = ? WHERE category_id = ?`
+        );
+        const deleteCategory = sqliteDb.prepare(
+            `DELETE FROM categories WHERE id = ?`
+        );
+
+        for (const group of duplicateCategoryGroups) {
+            const candidates = selectCategoryCandidates.all(
+                group.playlistId,
+                group.type,
+                group.xtreamId
+            ) as XtreamCategoryCandidate[];
+            const canonicalCategoryId = candidates[0]?.id;
+
+            if (!canonicalCategoryId) {
+                continue;
+            }
+
+            for (const candidate of candidates.slice(1)) {
+                updateContentCategory.run(canonicalCategoryId, candidate.id);
+                deleteCategory.run(candidate.id);
+            }
+        }
+
+        const duplicateContentGroups = sqliteDb
+            .prepare(
+                `SELECT
+                    category_id AS categoryId,
+                    type,
+                    xtream_id AS xtreamId
+                 FROM content
+                 GROUP BY category_id, type, xtream_id
+                 HAVING COUNT(*) > 1`
+            )
+            .all() as XtreamContentDuplicateGroup[];
+
+        const selectContentCandidates = sqliteDb.prepare(
+            `SELECT id
+             FROM content
+             WHERE category_id = ?
+               AND type = ?
+               AND xtream_id = ?
+             ORDER BY id ASC`
+        );
+        const moveFavorites = sqliteDb.prepare(
+            `INSERT INTO favorites (content_id, playlist_id, added_at, position)
+             SELECT ?, playlist_id, added_at, COALESCE(position, 0)
+             FROM favorites
+             WHERE content_id = ?
+             ON CONFLICT(content_id, playlist_id) DO NOTHING`
+        );
+        const deleteFavorites = sqliteDb.prepare(
+            `DELETE FROM favorites WHERE content_id = ?`
+        );
+        const moveRecentlyViewed = sqliteDb.prepare(
+            `INSERT INTO recently_viewed (content_id, playlist_id, viewed_at)
+             SELECT ?, playlist_id, viewed_at
+             FROM recently_viewed
+             WHERE content_id = ?
+             ON CONFLICT(content_id, playlist_id) DO UPDATE SET
+                viewed_at = CASE
+                    WHEN excluded.viewed_at > recently_viewed.viewed_at
+                        THEN excluded.viewed_at
+                    ELSE recently_viewed.viewed_at
+                END`
+        );
+        const deleteRecentlyViewed = sqliteDb.prepare(
+            `DELETE FROM recently_viewed WHERE content_id = ?`
+        );
+        const deleteContent = sqliteDb.prepare(
+            `DELETE FROM content WHERE id = ?`
+        );
+
+        for (const group of duplicateContentGroups) {
+            const candidates = selectContentCandidates.all(
+                group.categoryId,
+                group.type,
+                group.xtreamId
+            ) as XtreamContentCandidate[];
+            const canonicalContentId = candidates[0]?.id;
+
+            if (!canonicalContentId) {
+                continue;
+            }
+
+            for (const candidate of candidates.slice(1)) {
+                moveFavorites.run(canonicalContentId, candidate.id);
+                deleteFavorites.run(candidate.id);
+                moveRecentlyViewed.run(canonicalContentId, candidate.id);
+                deleteRecentlyViewed.run(candidate.id);
+                deleteContent.run(candidate.id);
+            }
+        }
+    });
+
+    executeCleanup();
+}
+
+function normalizeXtreamContentAddedEpochs(sqliteDb: Database.Database): void {
+    try {
+        const migrationState = sqliteDb
+            .prepare(`SELECT value FROM app_state WHERE key = ?`)
+            .get(XTREAM_ADDED_EPOCH_SECONDS_MIGRATION_KEY) as
+            { value?: unknown } | undefined;
+
+        if (migrationState?.value === 'done') {
+            return;
+        }
+
+        const executeMigration = sqliteDb.transaction(() => {
+            sqliteDb
+                .prepare(
+                    `UPDATE content
+                     SET added = CAST(CAST(added AS INTEGER) / 1000 AS TEXT)
+                     WHERE added IS NOT NULL
+                       AND added <> ''
+                       AND added NOT GLOB '*[^0-9]*'
+                       AND CAST(added AS INTEGER) >= ?
+                       AND CAST(added AS INTEGER) / 1000 < ?`
+                )
+                .run(
+                    XTREAM_ADDED_EPOCH_MILLISECONDS_THRESHOLD,
+                    XTREAM_ADDED_EPOCH_MILLISECONDS_THRESHOLD
+                );
+
+            sqliteDb
+                .prepare(
+                    `INSERT INTO app_state (key, value, updated_at)
+                     VALUES (?, 'done', datetime('now'))
+                     ON CONFLICT(key) DO UPDATE SET
+                        value = excluded.value,
+                        updated_at = excluded.updated_at`
+                )
+                .run(XTREAM_ADDED_EPOCH_SECONDS_MIGRATION_KEY);
+        });
+
+        executeMigration();
+    } catch (error) {
+        const message =
+            typeof error === 'object' && error !== null && 'message' in error
+                ? String((error as { message?: unknown }).message ?? error)
+                : String(error);
+
+        console.warn(
+            `Xtream added timestamp normalization failed (continuing): ${message}`
+        );
+    }
+}
+
+/**
+ * The title index, folding diacritics when the runtime can.
+ *
+ * Cross-playlist matching compares NORMALIZED titles ("Amélie" -> "amelie"),
+ * but the index holds the raw title, and the trigram tokenizer does not fold
+ * diacritics by default. Every accented title was therefore invisible to it:
+ * two identical `Amélie` entries produced no candidates at all.
+ *
+ * `remove_diacritics` needs SQLite 3.45+, so an older runtime keeps the plain
+ * tokenizer rather than losing the index — accented titles stay unmatched
+ * there, which is exactly the behaviour it had before.
+ */
+function contentTitleFtsStatement(removeDiacritics: boolean): string {
+    const tokenize = removeDiacritics
+        ? `'trigram remove_diacritics 1'`
+        : `'trigram'`;
+    return `CREATE VIRTUAL TABLE IF NOT EXISTS content_title_fts USING fts5(
+      title,
+      content='content',
+      content_rowid='id',
+      tokenize=${tokenize}
+  )`;
+}
+
+/** Whether this SQLite accepts the folding tokenizer, asked without risk. */
+/**
+ * Whether the title index that actually exists folds diacritics, read from its
+ * own stored DDL rather than from the migration record.
+ *
+ * A missing table answers `false`, which is the useful answer: there is nothing
+ * folded to keep, so the caller rebuilds.
+ */
+function contentTitleFtsFoldsDiacritics(sqliteDb: Database.Database): boolean {
+    const row = sqliteDb
+        .prepare(
+            `SELECT sql FROM sqlite_master
+             WHERE type = 'table' AND name = 'content_title_fts'`
+        )
+        .get() as { sql?: unknown } | undefined;
+
+    return (
+        typeof row?.sql === 'string' && row.sql.includes('remove_diacritics')
+    );
+}
+
+function supportsTrigramDiacriticFolding(sqliteDb: Database.Database): boolean {
+    try {
+        sqliteDb.exec(
+            `CREATE VIRTUAL TABLE temp.content_title_fts_probe USING fts5(
+                title, tokenize='trigram remove_diacritics 1'
+            )`
+        );
+        sqliteDb.exec(`DROP TABLE temp.content_title_fts_probe`);
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * Rebuild the title index with diacritic folding.
+ *
+ * The tokenizer is fixed at CREATE time, so an existing database keeps the
+ * old one until the table is recreated. Wrapped in a transaction: if the
+ * CREATE is rejected the drop rolls back and the working index survives.
+ */
+function upgradeContentTitleFtsTokenizer(sqliteDb: Database.Database): boolean {
+    try {
+        const migrationState = sqliteDb
+            .prepare(`SELECT value FROM app_state WHERE key = ?`)
+            .get(CONTENT_TITLE_FTS_DIACRITICS_MIGRATION_KEY) as
+            { value?: unknown } | undefined;
+
+        // The marker alone is not evidence. `createTables` declares this table
+        // too, with the plain tokenizer, so a table recreated by that path
+        // after the marker was written would be silently unfolded — and a
+        // degraded index is invisible: discovery just stops finding "Pokémon"
+        // for "pokemon". Ask the live table instead of trusting the record.
+        if (
+            migrationState?.value === 'done' &&
+            contentTitleFtsFoldsDiacritics(sqliteDb)
+        ) {
+            return false;
+        }
+
+        if (!supportsTrigramDiacriticFolding(sqliteDb)) {
+            // Not marked done: a later app version ships a newer SQLite, and
+            // this should upgrade itself then rather than stay degraded.
+            return false;
+        }
+
+        const executeMigration = sqliteDb.transaction(() => {
+            sqliteDb.exec(`DROP TABLE IF EXISTS content_title_fts`);
+            sqliteDb.exec(contentTitleFtsStatement(true));
+            sqliteDb
+                .prepare(
+                    `INSERT INTO content_title_fts(content_title_fts)
+                     VALUES ('rebuild')`
+                )
+                .run();
+
+            // The rebuild is also all that `ensureContentTitleFts` does, so
+            // its record is written too. Without it the next launch rebuilds
+            // the whole index again, on the main thread, on the first launch
+            // after a fresh install has imported its catalog.
+            const markDone = sqliteDb.prepare(
+                `INSERT INTO app_state (key, value, updated_at)
+                 VALUES (?, 'done', datetime('now'))
+                 ON CONFLICT(key) DO UPDATE SET
+                    value = excluded.value,
+                    updated_at = excluded.updated_at`
+            );
+            markDone.run(CONTENT_TITLE_FTS_DIACRITICS_MIGRATION_KEY);
+            markDone.run(CONTENT_TITLE_FTS_MIGRATION_KEY);
+        });
+
+        executeMigration();
+        return true;
+    } catch (error) {
+        const message =
+            typeof error === 'object' && error !== null && 'message' in error
+                ? String((error as { message?: unknown }).message ?? error)
+                : String(error);
+
+        console.warn(
+            `Content title FTS tokenizer upgrade failed (continuing): ${message}`
+        );
+        return false;
+    }
+}
+
+function ensureContentTitleFts(sqliteDb: Database.Database): void {
+    try {
+        const migrationState = sqliteDb
+            .prepare(`SELECT value FROM app_state WHERE key = ?`)
+            .get(CONTENT_TITLE_FTS_MIGRATION_KEY) as
+            { value?: unknown } | undefined;
+
+        if (migrationState?.value === 'done') {
+            return;
+        }
+
+        const executeMigration = sqliteDb.transaction(() => {
+            sqliteDb
+                .prepare(
+                    `INSERT INTO content_title_fts(content_title_fts)
+                     VALUES ('rebuild')`
+                )
+                .run();
+
+            sqliteDb
+                .prepare(
+                    `INSERT INTO app_state (key, value, updated_at)
+                     VALUES (?, 'done', datetime('now'))
+                     ON CONFLICT(key) DO UPDATE SET
+                        value = excluded.value,
+                        updated_at = excluded.updated_at`
+                )
+                .run(CONTENT_TITLE_FTS_MIGRATION_KEY);
+        });
+
+        executeMigration();
+    } catch (error) {
+        const message =
+            typeof error === 'object' && error !== null && 'message' in error
+                ? String((error as { message?: unknown }).message ?? error)
+                : String(error);
+
+        console.warn(
+            `Content title FTS rebuild failed (continuing): ${message}`
+        );
+    }
+}
+
+function backfillEpgProgramSourceUrls(sqliteDb: Database.Database): void {
+    try {
+        const migrationState = sqliteDb
+            .prepare(`SELECT value FROM app_state WHERE key = ?`)
+            .get(EPG_PROGRAM_SOURCE_URL_BACKFILL_MIGRATION_KEY) as
+            { value?: unknown } | undefined;
+
+        if (migrationState?.value === 'done') {
+            return;
+        }
+
+        const backfillStatement = sqliteDb.prepare(
+            `UPDATE epg_programs
+             SET source_url = (
+                 SELECT epg_channels.source_url
+                 FROM epg_channels
+                 WHERE epg_channels.id = epg_programs.channel_id
+                 LIMIT 1
+             )
+             WHERE id IN (
+                 SELECT pending_programs.id
+                 FROM epg_programs AS pending_programs
+                 JOIN epg_channels
+                   ON epg_channels.id = pending_programs.channel_id
+                 WHERE pending_programs.source_url IS NULL
+                   AND epg_channels.source_url IS NOT NULL
+                   AND epg_channels.source_url <> ''
+                 LIMIT ${EPG_PROGRAM_SOURCE_URL_BACKFILL_BATCH_SIZE}
+             )`
+        );
+        const markMigrationDoneStatement = sqliteDb.prepare(
+            `INSERT INTO app_state (key, value, updated_at)
+             VALUES (?, 'done', datetime('now'))
+             ON CONFLICT(key) DO UPDATE SET
+                value = excluded.value,
+                updated_at = excluded.updated_at`
+        );
+
+        const executeBackfillBatch = sqliteDb.transaction((): number => {
+            const result = backfillStatement.run();
+            return typeof result === 'object' &&
+                result !== null &&
+                'changes' in result &&
+                typeof result.changes === 'number'
+                ? result.changes
+                : 0;
+        });
+        const markMigrationDone = sqliteDb.transaction(() => {
+            markMigrationDoneStatement.run(
+                EPG_PROGRAM_SOURCE_URL_BACKFILL_MIGRATION_KEY
+            );
+        });
+
+        let updatedRows = 0;
+        do {
+            updatedRows = executeBackfillBatch();
+        } while (updatedRows === EPG_PROGRAM_SOURCE_URL_BACKFILL_BATCH_SIZE);
+
+        markMigrationDone();
+    } catch (error) {
+        const message =
+            typeof error === 'object' && error !== null && 'message' in error
+                ? String((error as { message?: unknown }).message ?? error)
+                : String(error);
+
+        console.warn(
+            `EPG program source URL backfill failed (continuing): ${message}`
+        );
+    }
+}
+
+function runMigrationStatements(
+    sqliteDb: Database.Database,
+    statements: string[]
+): void {
+    for (const stmt of statements) {
+        try {
+            sqliteDb.exec(stmt);
+        } catch (error) {
+            // Ignore idempotent ALTER TABLE errors on existing columns.
+            if (isDuplicateColumnError(error)) {
+                continue;
+            }
+
+            const compactStmt = stmt.replace(/\s+/g, ' ').trim();
+            const message =
+                typeof error === 'object' &&
+                error !== null &&
+                'message' in error
+                    ? String((error as { message?: unknown }).message ?? error)
+                    : String(error);
+
+            console.warn(
+                `Migration failed (continuing): ${compactStmt} :: ${message}`
+            );
+        }
+    }
+}
+
+/**
+ * Pre-release installs created tmdb_metadata with a CHECK that only
+ * allowed 'movie'/'tv'; person rows need 'person'. The table is a pure
+ * cache, so the cheapest "migration" is a drop-and-recreate with the
+ * widened constraint. Self-healing via sqlite_master — no app_state key.
+ */
+function widenTmdbMetadataMediaTypeCheck(sqliteDb: Database.Database): void {
+    try {
+        const row = sqliteDb
+            .prepare(
+                `SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'tmdb_metadata'`
+            )
+            .get() as { sql?: string } | undefined;
+        if (!row?.sql || row.sql.includes(`'person'`)) {
+            return;
+        }
+        const rebuild = sqliteDb.transaction(() => {
+            sqliteDb.prepare(`DROP TABLE IF EXISTS tmdb_metadata`).run();
+            sqliteDb.prepare(TMDB_METADATA_TABLE_SQL).run();
+            sqliteDb.prepare(TMDB_METADATA_INDEX_SQL).run();
+        });
+        rebuild();
+        console.log(
+            '[DB] Rebuilt tmdb_metadata cache with widened media_type CHECK'
+        );
+    } catch (error) {
+        console.warn('[DB] tmdb_metadata CHECK widening failed:', error);
+    }
+}
+
+/**
+ * Every search-match cache key generation that has been retired, oldest
+ * first, each with the predicate selecting exactly the rows written under
+ * it. A retired generation's rows are unreachable — the resolver only ever
+ * reads the current key — so they would otherwise sit in long-lived
+ * installations forever, negative resolutions included.
+ *
+ * - unversioned → v2: title normalization learned to strip appended
+ *   language/quality tags.
+ * - v2 → v3: the search query stopped being the folded comparison key. Under
+ *   v2 every title with a Cyrillic "й"/"ё" was searched folded — the fold
+ *   spells them "и" and "е", as in the illustrative "леика" for "Лейка" —
+ *   got no answer, and was cached as missing for 7 days.
+ * - v3 → v4: year evidence became tiered. Under v3 a series admitted only by
+ *   the "premiered earlier" tolerance competed with an exact-year match on
+ *   popularity alone, so a new series resolved to its older, better-known
+ *   namesake — and that positive row stays fresh for 30 days.
+ */
+const LEGACY_TMDB_SEARCH_CACHE_CLEANUPS: ReadonlyArray<{
+    migrationKey: string;
+    rowPredicate: string;
+}> = [
+    {
+        migrationKey: TMDB_SEARCH_LOOKUP_V2_CACHE_CLEANUP_MIGRATION_KEY,
+        rowPredicate: `lookup_key LIKE 'title:%|year:%'
+                       AND lookup_key NOT LIKE 'title:%|year:%|v%'`,
+    },
+    {
+        migrationKey: TMDB_SEARCH_LOOKUP_V3_CACHE_CLEANUP_MIGRATION_KEY,
+        rowPredicate: `lookup_key LIKE 'title:%|year:%|v2'`,
+    },
+    {
+        migrationKey: TMDB_SEARCH_LOOKUP_V4_CACHE_CLEANUP_MIGRATION_KEY,
+        rowPredicate: `lookup_key LIKE 'title:%|year:%|v3'`,
+    },
+];
+
+/**
+ * Remove search-match rows written under a retired key generation, once per
+ * generation, recorded in `app_state`. Each generation is its own marker so
+ * an installation that skipped a release still runs every cleanup it missed,
+ * in order.
+ */
+function cleanupLegacyTmdbSearchCache(sqliteDb: Database.Database): void {
+    for (const cleanup of LEGACY_TMDB_SEARCH_CACHE_CLEANUPS) {
+        try {
+            const migrationState = sqliteDb
+                .prepare(`SELECT value FROM app_state WHERE key = ?`)
+                .get(cleanup.migrationKey) as { value?: unknown } | undefined;
+
+            if (migrationState?.value === 'done') {
+                continue;
+            }
+
+            const executeCleanup = sqliteDb.transaction(() => {
+                sqliteDb
+                    .prepare(
+                        `DELETE FROM tmdb_metadata
+                         WHERE ${cleanup.rowPredicate}`
+                    )
+                    .run();
+                sqliteDb
+                    .prepare(
+                        `INSERT INTO app_state (key, value, updated_at)
+                         VALUES (?, 'done', datetime('now'))
+                         ON CONFLICT(key) DO UPDATE SET
+                            value = excluded.value,
+                            updated_at = excluded.updated_at`
+                    )
+                    .run(cleanup.migrationKey);
+            });
+
+            executeCleanup();
+        } catch (error) {
+            const message =
+                typeof error === 'object' &&
+                error !== null &&
+                'message' in error
+                    ? String((error as { message?: unknown }).message ?? error)
+                    : String(error);
+
+            console.warn(
+                `Legacy TMDB search cache cleanup failed (continuing): ${message}`
+            );
+        }
+    }
+}
+
+/**
+ * Downloads remain locally owned after their source playlist is removed.
+ * SQLite cannot alter CHECK or foreign-key constraints in place, so rebuild
+ * when the table still has the old pause/header contract or source cascade.
+ */
+function ensureDownloadsPauseResumeSchema(sqliteDb: Database.Database): void {
+    try {
+        const row = sqliteDb
+            .prepare(
+                `SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'downloads'`
+            )
+            .get() as { sql?: string } | undefined;
+        if (!row?.sql) {
+            return;
+        }
+
+        const hasPausedStatus = row.sql.includes(`'paused'`);
+        const hasRequestHeaders = row.sql.includes('request_headers');
+        const hasPlaylistForeignKey = /\bREFERENCES\s+["`[]?playlists\b/i.test(
+            row.sql
+        );
+        if (hasPausedStatus && hasRequestHeaders && !hasPlaylistForeignKey) {
+            return;
+        }
+
+        const legacyHeadersSelect = hasRequestHeaders
+            ? 'request_headers'
+            : 'NULL AS request_headers';
+        const hasMetadataSnapshot = row.sql.includes('metadata_snapshot');
+        const legacyMetadataSnapshotSelect = hasMetadataSnapshot
+            ? 'metadata_snapshot'
+            : 'NULL AS metadata_snapshot';
+        const hasResumeValidator = row.sql.includes('resume_validator');
+        const legacyResumeValidatorSelect = hasResumeValidator
+            ? 'resume_validator'
+            : 'NULL AS resume_validator';
+        const hasEpisodeIdentityScope = row.sql.includes(
+            'episode_identity_scope'
+        );
+        const legacyEpisodeIdentityScopeSelect = hasEpisodeIdentityScope
+            ? 'episode_identity_scope'
+            : 'NULL AS episode_identity_scope';
+        const rebuild = sqliteDb.transaction(() => {
+            for (const statement of DOWNLOADS_INDEX_STATEMENTS) {
+                const match = statement.match(
+                    /^CREATE\s+(?:UNIQUE\s+)?INDEX\s+IF\s+NOT\s+EXISTS\s+([^\s]+)\s+/i
+                );
+                if (match?.[1]) {
+                    sqliteDb.prepare(`DROP INDEX IF EXISTS ${match[1]}`).run();
+                }
+            }
+
+            sqliteDb
+                .prepare(
+                    `ALTER TABLE downloads RENAME TO downloads_pause_resume_legacy`
+                )
+                .run();
+            sqliteDb.prepare(DOWNLOADS_TABLE_SQL).run();
+            sqliteDb
+                .prepare(
+                    `INSERT INTO downloads (
+                        id,
+                        playlist_id,
+                        xtream_id,
+                        content_type,
+                        series_xtream_id,
+                        season_number,
+                        episode_number,
+                        episode_identity_scope,
+                        title,
+                        url,
+                        file_name,
+                        file_path,
+                        poster_url,
+                        request_headers,
+                        resume_validator,
+                        metadata_snapshot,
+                        status,
+                        bytes_downloaded,
+                        total_bytes,
+                        error_message,
+                        created_at,
+                        updated_at
+                    )
+                    SELECT
+                        id,
+                        playlist_id,
+                        xtream_id,
+                        content_type,
+                        series_xtream_id,
+                        season_number,
+                        episode_number,
+                        ${legacyEpisodeIdentityScopeSelect},
+                        title,
+                        url,
+                        file_name,
+                        file_path,
+                        poster_url,
+                        ${legacyHeadersSelect},
+                        ${legacyResumeValidatorSelect},
+                        ${legacyMetadataSnapshotSelect},
+                        status,
+                        bytes_downloaded,
+                        total_bytes,
+                        error_message,
+                        created_at,
+                        updated_at
+                    FROM downloads_pause_resume_legacy`
+                )
+                .run();
+            sqliteDb.prepare(`DROP TABLE downloads_pause_resume_legacy`).run();
+            for (const statement of DOWNLOADS_INDEX_STATEMENTS) {
+                sqliteDb.prepare(statement).run();
+            }
+        });
+
+        rebuild();
+        console.log('[DB] Rebuilt downloads table with local ownership schema');
+    } catch (error) {
+        console.warn('[DB] downloads ownership migration failed:', error);
+    }
+}
+
+/**
+ * Run migrations that may fail if already applied
+ */
+function runMigrations(sqliteDb: Database.Database): void {
+    widenTmdbMetadataMediaTypeCheck(sqliteDb);
+    cleanupLegacyTmdbSearchCache(sqliteDb);
+    ensureDownloadsPauseResumeSchema(sqliteDb);
+    runMigrationStatements(sqliteDb, COLUMN_MIGRATION_STATEMENTS);
+    ensurePlaylistsPayloadLast(sqliteDb);
+    ensureDownloadsCatchupSchema(sqliteDb);
+    // The tokenizer upgrade recreates and rebuilds the index itself, so the
+    // plain rebuild below would only repeat work it just did.
+    if (!upgradeContentTitleFtsTokenizer(sqliteDb)) {
+        ensureContentTitleFts(sqliteDb);
+    }
+    deduplicateXtreamCache(sqliteDb);
+    normalizeXtreamContentAddedEpochs(sqliteDb);
+    runMigrationStatements(sqliteDb, INDEX_MIGRATION_STATEMENTS);
+    backfillEpgProgramSourceUrls(sqliteDb);
+}
+
+export interface DatabaseOptions {
+    /** Open database in read-only mode (for agent-backend) */
+    readonly?: boolean;
+    /** Skip table creation (useful for read-only connections) */
+    skipTableCreation?: boolean;
+}
+
+/**
+ * Initialize the database connection with full access (read-write)
+ * Creates tables if they don't exist
+ * Used by electron-backend
+ */
+export async function initDatabase(
+    options: DatabaseOptions = {}
+): Promise<DatabaseInstance> {
+    const { readonly = false, skipTableCreation = false } = options;
+
+    if (db) return db;
+    if (initPromise) return initPromise;
+
+    initPromise = (async () => {
+        const filePath = getDatabasePath();
+        sqlite = new Database(filePath, {
+            readonly,
+            verbose: isSqlTraceEnabled()
+                ? (message?: unknown) => traceSqlStatement(message)
+                : undefined,
+        });
+        notifyDatabaseConnectionOpened(sqlite);
+
+        if (isSqlTraceEnabled()) {
+            traceSql('sql-main', 'open', {
+                filePath,
+                readonly,
+            });
+        }
+
+        // Enable foreign keys
+        sqlite.pragma('foreign_keys = ON');
+        sqlite.pragma('busy_timeout = 5000');
+
+        if (!readonly) {
+            sqlite.pragma('journal_mode = WAL');
+            sqlite.pragma('synchronous = NORMAL');
+        }
+
+        sqlite.pragma('cache_size = -64000');
+        sqlite.pragma('temp_store = MEMORY');
+        sqlite.pragma('mmap_size = 268435456');
+
+        // Create tables only for read-write connections
+        if (!readonly && !skipTableCreation) {
+            createTables(sqlite);
+            runMigrations(sqlite);
+        }
+
+        const database = drizzle(sqlite, { schema });
+        db = database;
+        return database;
+    })();
+
+    return initPromise;
+}
+
+/**
+ * Get the database instance
+ * Initializes the database if not already initialized (with defaults for full access)
+ * Used by electron-backend
+ */
+export async function getDatabase(
+    options?: DatabaseOptions
+): Promise<DatabaseInstance> {
+    if (db) return db;
+    return initDatabase(options);
+}
+
+/**
+ * Get a read-only database connection
+ * Used by agent-backend for safe read-only queries
+ */
+export async function getReadOnlyDatabase(): Promise<DatabaseInstance> {
+    return getDatabase({ readonly: true, skipTableCreation: true });
+}
+
+/**
+ * Close the database connection
+ */
+export function closeDatabase(): void {
+    if (sqlite) {
+        try {
+            sqlite.pragma('optimize');
+        } catch {
+            // Optimize is advisory; never block close on it.
+        }
+
+        sqlite.close();
+
+        if (isSqlTraceEnabled()) {
+            traceSql('sql-main', 'close');
+        }
+
+        sqlite = null;
+        db = null;
+        initPromise = null;
+    }
+}

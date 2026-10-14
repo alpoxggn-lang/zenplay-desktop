@@ -1,0 +1,108 @@
+import { ChangeDetectorRef, signal } from '@angular/core';
+import { ComponentFixture, TestBed, waitForAsync } from '@angular/core/testing';
+import { MAT_DIALOG_DATA, MatDialogModule } from '@angular/material/dialog';
+import { By } from '@angular/platform-browser';
+import { TranslateModule } from '@ngx-translate/core';
+import { MockModule } from 'ng-mocks';
+import { SettingsStore } from '@iptvnator/services';
+import { EpgProgram } from '@iptvnator/shared/interfaces';
+import { EpgItemDescriptionComponent } from './epg-item-description.component';
+
+describe('EpgItemDescriptionComponent', () => {
+    let component: EpgItemDescriptionComponent;
+    let fixture: ComponentFixture<EpgItemDescriptionComponent>;
+
+    beforeEach(waitForAsync(() => {
+        TestBed.configureTestingModule({
+            imports: [
+                EpgItemDescriptionComponent,
+                MockModule(MatDialogModule),
+                TranslateModule.forRoot(),
+            ],
+            providers: [
+                {
+                    provide: MAT_DIALOG_DATA,
+                    useValue: {
+                        start: '2026-04-05T11:30:00.000Z',
+                        stop: '2026-04-05T12:30:00.000Z',
+                        title: 'TV Show 1',
+                        desc: 'Highly interesting show about pets',
+                        category: 'Fun',
+                    } as unknown as EpgProgram,
+                },
+                {
+                    provide: SettingsStore,
+                    useValue: { resolvedEpgOffsetMinutes: signal(60) },
+                },
+            ],
+        }).compileComponents();
+    }));
+
+    beforeEach(() => {
+        fixture = TestBed.createComponent(EpgItemDescriptionComponent);
+        component = fixture.componentInstance;
+        component.epgProgram = TestBed.inject(MAT_DIALOG_DATA);
+        fixture.detectChanges();
+    });
+
+    it('should create', () => {
+        expect(component).toBeTruthy();
+    });
+
+    it('should render epg details in the dialog', () => {
+        fixture.detectChanges();
+        const titleElement = fixture.debugElement.query(
+            By.css('.epg-dialog__title')
+        );
+        expect(titleElement.nativeElement.textContent.trim()).toContain(
+            'TV Show 1'
+        );
+
+        const metaElement = fixture.debugElement.query(
+            By.css('.epg-dialog__meta')
+        );
+        expect(metaElement.nativeElement.textContent).toContain('Fun');
+
+        const descElement = fixture.debugElement.query(
+            By.css('.epg-dialog__desc')
+        );
+        expect(descElement.nativeElement.textContent.trim()).toContain(
+            'Highly interesting show about pets'
+        );
+    });
+
+    it('offers archive URL copying only with explicit capability and explains credentials', () => {
+        // The component is OnPush and dialog data is fixed once the dialog
+        // opens, so the test marks the component's own view after mutating it.
+        const componentView =
+            fixture.debugElement.injector.get(ChangeDetectorRef);
+        Object.assign(component.dialogData, { archiveUrlAvailable: true });
+        componentView.markForCheck();
+        fixture.detectChanges();
+        expect(
+            fixture.nativeElement.querySelector(
+                '[data-testid="copy-catchup-url"]'
+            )
+        ).toBeTruthy();
+        expect(fixture.nativeElement.textContent).toContain(
+            'EPG.PROGRAM_DIALOG.ARCHIVE_URL_NOTICE'
+        );
+        Object.assign(component.dialogData, { archiveUrlAvailable: false });
+        componentView.markForCheck();
+        fixture.detectChanges();
+        expect(
+            fixture.nativeElement.querySelector(
+                '[data-testid="copy-catchup-url"]'
+            )
+        ).toBeNull();
+    });
+
+    it('applies the stored EPG display offset to the dialog timestamps', () => {
+        const start = Date.parse('2026-04-05T11:30:00.000Z');
+        const stop = Date.parse('2026-04-05T12:30:00.000Z');
+        const offsetMinutes = 60;
+
+        expect(component.startMs).toBe(start + offsetMinutes * 60_000);
+        expect(component.stopMs).toBe(stop + offsetMinutes * 60_000);
+    });
+});

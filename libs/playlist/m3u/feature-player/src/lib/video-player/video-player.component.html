@@ -1,0 +1,288 @@
+<!--
+    Guide mode HIDES this sidebar instead of removing it: destroying it would
+    destroy `app-channel-list-container`, whose `ngOnDestroy` dispatches
+    `resetActiveChannel()` — that clears the active channel the guide itself
+    needs, so the guide would close again the moment it opened. `inert` keeps
+    the hidden rail out of the tab order and away from assistive technology.
+-->
+<div
+    class="sidebar"
+    [class.sidebar-collapsed]="isSidebarCollapsed()"
+    [class.sidebar--guide-hidden]="guideOpen()"
+    [attr.inert]="guideOpen() ? '' : null"
+    appResizable
+    [minWidth]="sidebarMinWidth"
+    [maxWidth]="sidebarMaxWidth"
+    [defaultWidth]="sidebarWidth()"
+    [style.width.px]="sidebarWidth()"
+    [storageKey]="sidebarStorageKey()"
+    (widthChange)="onSidebarWidthChange($event)"
+    (resizeEnd)="onSidebarResizeEnd($event)"
+>
+    @if (activeView() !== 'groups' && activeView() !== 'all') {
+        <button
+            mat-icon-button
+            type="button"
+            class="sidebar-collapse-toggle"
+            [attr.aria-label]="'LAYOUT.HIDE_CHANNELS_LIST' | translate"
+            [matTooltip]="'LAYOUT.TOGGLE_SIDEBAR_TOOLTIP' | translate"
+            [attr.aria-pressed]="isSidebarCollapsed()"
+            (click)="toggleSidebar()"
+        >
+            <mat-icon>chevron_left</mat-icon>
+        </button>
+    }
+    @defer {
+        <app-sidebar
+            [channels]="(channels$ | async)!"
+            [channelsLoading]="channelsLoading()"
+            [activeView]="activeView()"
+            [sidebarWidth]="sidebarWidth()"
+            (sidebarWidthRequested)="onGroupedSidebarWidthRequested($event)"
+            (sidebarWidthRequestEnded)="
+                onGroupedSidebarWidthRequestEnded($event)
+            "
+            (sidebarToggleRequested)="toggleSidebar()"
+            (selectedGroupChange)="onSidebarGroupSelected($event)"
+        />
+    } @loading {
+        <app-channel-list-loading-state
+            [view]="activeView()"
+            [showEpg]="supportsEpg"
+        />
+    } @placeholder {
+        <app-channel-list-loading-state
+            [view]="activeView()"
+            [showEpg]="supportsEpg"
+        />
+    }
+</div>
+
+<div
+    class="content-container"
+    [class.is-guide]="guideOpen()"
+    [class.is-guide-collapsed]="guideOpen() && guideDockCollapsed()"
+>
+    @if (isSidebarCollapsed() && !guideOpen()) {
+        <button
+            mat-icon-button
+            type="button"
+            class="sidebar-restore"
+            [attr.aria-label]="'LAYOUT.SHOW_CHANNELS_LIST' | translate"
+            [matTooltip]="'LAYOUT.TOGGLE_SIDEBAR_TOOLTIP' | translate"
+            [attr.aria-pressed]="isSidebarCollapsed()"
+            (click)="toggleSidebar()"
+        >
+            <mat-icon>chevron_right</mat-icon>
+        </button>
+    }
+    @if (activeChannel(); as activeChannel) {
+        @if (showMovieDetail()) {
+            <app-m3u-vod-detail
+                [channel]="activeChannel"
+                [playback]="embeddedPlayback()"
+                [playbackSessionKey]="playbackSessionKey()"
+                [inlinePlayerAvailable]="shouldShowInlinePlayer(activeChannel)"
+                [volume]="volume()"
+                [playerOverride]="playerSettings().player ?? null"
+                (playbackStarted)="refreshVolumeFromBus()"
+                (externalFallbackRequested)="
+                    handleExternalFallbackRequest($event)
+                "
+            />
+        } @else {
+            @if (
+                activeChannel.radio === 'true' ||
+                shouldShowInlinePlayer(activeChannel)
+            ) {
+                <div
+                    class="video-player"
+                    [attr.data-player-shortcuts-suspended]="
+                        guideOpen() ? '' : null
+                    "
+                >
+                    @if (activeChannel.radio === 'true') {
+                        <app-audio-player
+                            [url]="activeChannel.url"
+                            [icon]="
+                                $safeNavigationMigration(
+                                    activeChannel?.tvg?.logo
+                                )!
+                            "
+                            [channelName]="displayChannelName()"
+                            [volume]="volume()"
+                            [playbackSessionKey]="playbackSessionKey()"
+                            (volumeChange)="onInlineVolumeChange($event)"
+                        />
+                    } @else {
+                        <app-web-player-view
+                            [playbackSessionKey]="playbackSessionKey()"
+                            [streamUrl]="embeddedPlayback()?.streamUrl ?? ''"
+                            [title]="inlinePlayerTitle()"
+                            [playback]="embeddedPlayback()"
+                            [playerOverride]="
+                                activeChannelIsDash()
+                                    ? dashPlayerOverride()
+                                    : (playerSettings().player ?? null)
+                            "
+                            [volume]="volume()"
+                            [timelineSegments]="catchupTimelineSegments()"
+                            [recordingMetadata]="recordingMetadata()"
+                            (externalFallbackRequested)="
+                                handleExternalFallbackRequest($event)
+                            "
+                            (recordingStopped)="onRecordingStopped($event)"
+                        />
+                    }
+                    @if (guideOpen()) {
+                        <app-epg-guide-now-playing
+                            [channelName]="timelineChannelName()"
+                            [program]="guideNowPlayingProgram()"
+                            [offsetMinutes]="epgOffsetMinutes()"
+                            [collapsed]="guideDockCollapsed()"
+                            (closeRequested)="closeGuide()"
+                            (collapsedChange)="setGuideDockCollapsed($event)"
+                        />
+                    }
+                </div>
+            }
+
+            @if (guideOpen() && !shouldShowInlinePlayer(activeChannel)) {
+                <div class="video-player guide-dock--external">
+                    <app-epg-guide-now-playing
+                        [channelName]="timelineChannelName()"
+                        [program]="guideNowPlayingProgram()"
+                        [offsetMinutes]="epgOffsetMinutes()"
+                        [collapsed]="true"
+                        [collapsible]="false"
+                        (closeRequested)="closeGuide()"
+                    />
+                </div>
+            }
+
+            @if (guideOpen()) {
+                <app-epg-guide class="epg-guide-host" (close)="closeGuide()" />
+            } @else if (supportsEpg && activeChannel.radio !== 'true') {
+                @let canCollapseEpgPanel =
+                    shouldShowInlinePlayer(activeChannel);
+                <div
+                    class="epg"
+                    [class.epg--inline]="canCollapseEpgPanel"
+                    [class.epg--list]="epgViewMode() === 'list'"
+                    [class.epg-collapsed]="
+                        canCollapseEpgPanel && isLiveEpgPanelCollapsed()
+                    "
+                >
+                    <div class="epg-content">
+                        @if (epgViewMode() === 'list') {
+                            <app-epg-list-view
+                                [programs]="epgPrograms()"
+                                [offsetMinutes]="epgOffsetMinutes()"
+                                [channelName]="timelineChannelName()"
+                                [channelLogo]="timelineChannelLogo()"
+                                [archiveContextKey]="archiveContextKey()"
+                                [archivePlaybackAvailable]="
+                                    archivePlaybackAvailable()
+                                "
+                                [archiveDays]="epgArchiveDays()"
+                                [activeProgram]="activeEpgProgramOrNull()"
+                                [isLivePlayback]="!showReturnToLive()"
+                                [selectedDate]="selectedLiveEpgDate()"
+                                [collapsed]="
+                                    canCollapseEpgPanel &&
+                                    isLiveEpgPanelCollapsed()
+                                "
+                                [summary]="liveEpgPanelSummary()"
+                                [summaryLabelKey]="
+                                    liveEpgPanelSummaryLabelKey()
+                                "
+                                [emptyReason]="liveEpgEmptyReason()"
+                                [guideAvailable]="canOpenGuide()"
+                                (programActivated)="
+                                    onTimelineProgramActivated($event)
+                                "
+                                (returnToLive)="returnToLivePlayback()"
+                                (selectedDateChange)="
+                                    onLiveEpgSelectedDateChange($event)
+                                "
+                                (collapsedChange)="
+                                    onLiveEpgPanelCollapsedChange($event)
+                                "
+                                (openEpgSettings)="openEpgSettings()"
+                                (openGuide)="openGuide()"
+                            />
+                        } @else {
+                            <app-epg-timeline
+                                [programs]="epgPrograms()"
+                                [offsetMinutes]="epgOffsetMinutes()"
+                                [channelName]="timelineChannelName()"
+                                [channelLogo]="timelineChannelLogo()"
+                                [archiveContextKey]="archiveContextKey()"
+                                [archivePlaybackAvailable]="
+                                    archivePlaybackAvailable()
+                                "
+                                [archiveDays]="epgArchiveDays()"
+                                [activeProgram]="activeEpgProgramOrNull()"
+                                [isLivePlayback]="!showReturnToLive()"
+                                [selectedDate]="selectedLiveEpgDate()"
+                                [collapsed]="
+                                    canCollapseEpgPanel &&
+                                    isLiveEpgPanelCollapsed()
+                                "
+                                [summary]="liveEpgPanelSummary()"
+                                [summaryLabelKey]="
+                                    liveEpgPanelSummaryLabelKey()
+                                "
+                                [emptyReason]="liveEpgEmptyReason()"
+                                [guideAvailable]="canOpenGuide()"
+                                (programActivated)="
+                                    onTimelineProgramActivated($event)
+                                "
+                                (returnToLive)="returnToLivePlayback()"
+                                (selectedDateChange)="
+                                    onLiveEpgSelectedDateChange($event)
+                                "
+                                (collapsedChange)="
+                                    onLiveEpgPanelCollapsedChange($event)
+                                "
+                                (openEpgSettings)="openEpgSettings()"
+                                (openGuide)="openGuide()"
+                            />
+                        }
+                    </div>
+                </div>
+            }
+        }
+
+        @if (showChannelNumberOverlay()) {
+            <div class="channel-number-overlay">
+                <div class="channel-number-display">
+                    {{ channelNumberInput() }}
+                </div>
+            </div>
+        }
+    } @else if (isSidebarCollapsed()) {
+        <app-channel-list-hidden-state (restore)="toggleSidebar()" />
+    } @else {
+        <app-portal-empty-state
+            icon="live_tv"
+            [message]="'CHANNELS.SELECT_CHANNEL_PLAYBACK' | translate"
+        />
+    }
+</div>
+
+<!-- Stamped into the player's fullscreen channel panel (FULLSCREEN_CHANNEL_PANEL). -->
+<ng-template
+    #fullscreenChannelPanel
+    let-searchTerm="searchTerm"
+    let-close="close"
+>
+    <app-m3u-fullscreen-channel-list
+        [channels]="fullscreenPanelChannels()"
+        [channelsLoading]="channelsLoading()"
+        [initialView]="activeView()"
+        [recentItems]="activePlaylistRecentItems()"
+        [searchTerm]="searchTerm()"
+        (closeRequested)="close()"
+    />
+</ng-template>

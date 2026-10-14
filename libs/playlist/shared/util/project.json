@@ -1,0 +1,21 @@
+{
+    "name": "playlist-shared-util",
+    "$schema": "../../../../node_modules/nx/schemas/project-schema.json",
+    "sourceRoot": "libs/playlist/shared/util/src",
+    "prefix": "lib",
+    "projectType": "library",
+    "tags": ["scope:playlist", "domain:m3u", "type:data-access"],
+    "targets": {
+        "test": {
+            "executor": "@nx/jest:jest",
+            "outputs": ["{workspaceRoot}/coverage/{projectRoot}"],
+            "options": {
+                "jestConfig": "libs/playlist/shared/util/jest.config.ts",
+                "tsConfig": "libs/playlist/shared/util/tsconfig.spec.json"
+            }
+        },
+        "lint": {
+            "executor": "@nx/eslint:lint"
+        }
+    }
+}

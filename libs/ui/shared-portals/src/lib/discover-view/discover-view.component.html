@@ -1,0 +1,31 @@
+<div class="discover-view">
+    <header class="discover-view__header">
+        <h1>{{ 'XTREAM.DISCOVER_TITLE' | translate }}</h1>
+        <div class="discover-view__facets">
+            <span class="discover-view__facet-chip">
+                {{ mediaTypeLabelKey() | translate }}
+            </span>
+            @for (label of facetLabels(); track label) {
+                <span class="discover-view__facet-chip">{{ label }}</span>
+            }
+        </div>
+    </header>
+
+    @if (isLoading()) {
+        <div class="discover-view__loading">
+            <mat-spinner diameter="48" />
+        </div>
+    } @else {
+        <app-title-results
+            headingKey="XTREAM.DISCOVER_RESULTS"
+            emptyMessageKey="XTREAM.DISCOVER_EMPTY"
+            [items]="items()"
+            [isMatching]="isMatching()"
+            [showAvailabilityFilter]="showAvailabilityFilter()"
+            [showScopeToggle]="showScopeToggle()"
+            [scope]="scope()"
+            (scopeChanged)="scopeChanged.emit($event)"
+            (itemClicked)="itemClicked.emit($event)"
+        />
+    }
+</div>
