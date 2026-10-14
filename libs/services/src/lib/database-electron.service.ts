@@ -130,7 +130,7 @@ export function isDbAbortError(error: unknown): boolean {
     return error instanceof Error && error.name === 'AbortError';
 }
 
-export type GlobalRecentlyAddedKind = 'all' | 'vod' | 'series';
+export type GlobalRecentlyAddedKind = 'all' | 'live' | 'vod' | 'series';
 
 export type GlobalRecentlyAddedPlaylistType =
     'xtream' | 'stalker' | 'm3u-file' | 'm3u-text' | 'm3u-url';

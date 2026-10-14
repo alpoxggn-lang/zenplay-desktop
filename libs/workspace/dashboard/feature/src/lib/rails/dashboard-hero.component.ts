@@ -21,17 +21,21 @@ import {
 import type { DashboardHeroSlide } from './dashboard-hero.utils';
 
 const REDUCED_MOTION_QUERY = '(prefers-reduced-motion: reduce)';
+const HERO_POINTER_SWIPE_THRESHOLD_PX = 48;
+const HERO_WHEEL_SWIPE_THRESHOLD_PX = 56;
+const HERO_WHEEL_IDLE_MS = 220;
 
 /**
  * Cinematic dashboard hero: a full-bleed backdrop that rotates between an
  * unfinished title, a favourite channel on air now and a few discovery
  * picks (see `pickDashboardHeroSources`).
  *
- * Rotation is driven by the active dot's CSS fill animation: its
+ * Rotation is driven by the active indicator's CSS fill animation: its
  * `animationend` advances the slide, so pausing (hover, focus inside the
- * hero, the pause button) is just `animation-play-state: paused` and resumes
- * where it stopped. With `prefers-reduced-motion` there is no animation and
- * therefore no auto-advance; the dots still switch slides.
+ * hero, pointer or trackpad interaction) is just
+ * `animation-play-state: paused` and resumes where it stopped. With
+ * `prefers-reduced-motion` there is no animation and therefore no
+ * auto-advance; keyboard and swipe navigation still work.
  *
  * The active slide is tracked by id, so a slide that arrives late (the live
  * slide waits for its EPG answer) never yanks the user off the current one.
@@ -54,6 +58,7 @@ const REDUCED_MOTION_QUERY = '(prefers-reduced-motion: reduce)';
 })
 export class DashboardHeroComponent {
     readonly presenter = inject(DashboardHeroSlidesPresenter);
+    private readonly destroyRef = inject(DestroyRef);
     readonly mode = input<DashboardHeroMode>('personalized');
     readonly slides = this.presenter.slides;
     readonly rotationMs = HERO_ROTATION_MS;
@@ -86,9 +91,18 @@ export class DashboardHeroComponent {
     });
     private readonly hovered = signal(false);
     private readonly focusWithin = signal(false);
+    private readonly interacting = signal(false);
     private readonly documentHidden = signal(false);
-    readonly userPaused = signal(false);
     readonly reducedMotion = signal(false);
+    private pointerGesture: {
+        id: number;
+        startX: number;
+        startY: number;
+        navigated: boolean;
+    } | null = null;
+    private wheelDistance = 0;
+    private wheelNavigated = false;
+    private wheelIdleTimer: ReturnType<typeof setTimeout> | null = null;
 
     readonly activeIndex = computed(() => {
         const index = this.slides().findIndex(
@@ -107,9 +121,9 @@ export class DashboardHeroComponent {
 
     readonly paused = computed(
         () =>
-            this.userPaused() ||
             this.hovered() ||
             this.focusWithin() ||
+            this.interacting() ||
             this.documentHidden()
     );
 
@@ -121,7 +135,7 @@ export class DashboardHeroComponent {
                 this.documentHidden.set(document.visibilityState === 'hidden');
             onVisibility();
             document.addEventListener('visibilitychange', onVisibility);
-            inject(DestroyRef).onDestroy(() =>
+            this.destroyRef.onDestroy(() =>
                 document.removeEventListener('visibilitychange', onVisibility)
             );
         }
@@ -134,10 +148,15 @@ export class DashboardHeroComponent {
             const onChange = (event: MediaQueryListEvent) =>
                 this.reducedMotion.set(event.matches);
             media.addEventListener('change', onChange);
-            inject(DestroyRef).onDestroy(() =>
+            this.destroyRef.onDestroy(() =>
                 media.removeEventListener('change', onChange)
             );
         }
+        this.destroyRef.onDestroy(() => {
+            if (this.wheelIdleTimer !== null) {
+                clearTimeout(this.wheelIdleTimer);
+            }
+        });
     }
 
     show(index: number): void {
@@ -147,25 +166,12 @@ export class DashboardHeroComponent {
         }
     }
 
-    /** The active dot's fill animation finished: time for the next slide. */
+    /** The active indicator's fill animation finished: show the next slide. */
     onRotationTick(): void {
         if (!this.canRotate() || this.paused()) {
             return;
         }
         this.show((this.activeIndex() + 1) % this.slides().length);
-    }
-
-    togglePaused(): void {
-        if (!this.userPaused()) {
-            this.userPaused.set(true);
-            return;
-        }
-        // An explicit Play wins over the implicit pauses: the pointer and
-        // the focus are on this very button, so they would otherwise keep
-        // the rotation stopped. They re-arm on the next enter / focus move.
-        this.userPaused.set(false);
-        this.hovered.set(false);
-        this.focusWithin.set(false);
     }
 
     setHovered(hovered: boolean): void {
@@ -182,6 +188,94 @@ export class DashboardHeroComponent {
         if (!host || !next || !host.contains(next)) {
             this.focusWithin.set(false);
         }
+    }
+
+    onPointerDown(event: PointerEvent): void {
+        if (
+            !event.isPrimary ||
+            this.slides().length < 2 ||
+            this.isInteractiveTarget(event.target)
+        ) {
+            return;
+        }
+        this.pointerGesture = {
+            id: event.pointerId,
+            startX: event.clientX,
+            startY: event.clientY,
+            navigated: false,
+        };
+        (event.currentTarget as HTMLElement | null)?.setPointerCapture?.(
+            event.pointerId
+        );
+        this.interacting.set(true);
+    }
+
+    onPointerMove(event: PointerEvent): void {
+        const gesture = this.pointerGesture;
+        if (!gesture || gesture.id !== event.pointerId || gesture.navigated) {
+            return;
+        }
+
+        const deltaX = event.clientX - gesture.startX;
+        const deltaY = event.clientY - gesture.startY;
+        if (
+            Math.abs(deltaX) < HERO_POINTER_SWIPE_THRESHOLD_PX ||
+            Math.abs(deltaX) <= Math.abs(deltaY)
+        ) {
+            return;
+        }
+
+        event.preventDefault();
+        gesture.navigated = true;
+        this.move(deltaX < 0 ? 1 : -1);
+    }
+
+    onPointerEnd(event: PointerEvent): void {
+        if (this.pointerGesture?.id !== event.pointerId) {
+            return;
+        }
+        this.pointerGesture = null;
+        this.interacting.set(false);
+        const host = event.currentTarget as HTMLElement | null;
+        if (host?.hasPointerCapture?.(event.pointerId)) {
+            host.releasePointerCapture(event.pointerId);
+        }
+    }
+
+    onHeroWheel(event: WheelEvent): void {
+        if (this.slides().length < 2) {
+            return;
+        }
+
+        const horizontalDelta = event.shiftKey ? event.deltaY : event.deltaX;
+        const verticalDelta = event.shiftKey ? 0 : event.deltaY;
+        if (
+            Math.abs(horizontalDelta) <= Math.abs(verticalDelta) ||
+            horizontalDelta === 0
+        ) {
+            return;
+        }
+
+        event.preventDefault();
+        this.interacting.set(true);
+        this.wheelDistance += horizontalDelta;
+        if (
+            !this.wheelNavigated &&
+            Math.abs(this.wheelDistance) >= HERO_WHEEL_SWIPE_THRESHOLD_PX
+        ) {
+            this.wheelNavigated = true;
+            this.move(this.wheelDistance > 0 ? 1 : -1);
+        }
+
+        if (this.wheelIdleTimer !== null) {
+            clearTimeout(this.wheelIdleTimer);
+        }
+        this.wheelIdleTimer = setTimeout(() => {
+            this.wheelDistance = 0;
+            this.wheelNavigated = false;
+            this.wheelIdleTimer = null;
+            this.interacting.set(false);
+        }, HERO_WHEEL_IDLE_MS);
     }
 
     /**
@@ -213,18 +307,18 @@ export class DashboardHeroComponent {
         }
     }
 
-    /** Roving arrows between the dots, like a tab list. */
-    onDotKeydown(event: KeyboardEvent, index: number): void {
+    private move(step: -1 | 1): void {
         const count = this.slides().length;
-        const step =
-            event.key === 'ArrowRight' ? 1 : event.key === 'ArrowLeft' ? -1 : 0;
-        if (step === 0 || count < 2) {
+        if (count < 2) {
             return;
         }
-        event.preventDefault();
-        const next = (index + step + count) % count;
-        this.show(next);
-        const group = (event.currentTarget as HTMLElement).parentElement;
-        group?.querySelectorAll<HTMLButtonElement>('button')[next]?.focus();
+        this.show((this.activeIndex() + step + count) % count);
+    }
+
+    private isInteractiveTarget(target: EventTarget | null): boolean {
+        return (
+            target instanceof Element &&
+            target.closest('a, button, input, select, textarea') !== null
+        );
     }
 }

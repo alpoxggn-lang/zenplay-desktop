@@ -14,6 +14,7 @@ import {
 /** Defaults and boot-time helpers of `SettingsStore`, split out for size. */
 export const DEFAULT_SETTINGS: Settings = {
     player: VideoPlayer.VideoJs,
+    desktopNativePlayerMigrationVersion: 0,
     webPlayerSharedControls: true,
     playerAmbientMode: false,
     detailTrailerBackdrop: false,
@@ -60,6 +61,13 @@ export const DEFAULT_SETTINGS: Settings = {
     parentalLockEnabled: false,
     parentalLockRelockMinutes: DEFAULT_PARENTAL_LOCK_RELOCK_MINUTES,
 };
+
+/**
+ * Existing ZenPlay profiles persisted Video.js when it was still the desktop
+ * default. This marker lets one supported native-runtime migration happen
+ * without repeatedly overriding a later explicit player choice.
+ */
+export const DESKTOP_NATIVE_PLAYER_MIGRATION_VERSION = 1;
 
 /**
  * Which half of the settings persistence round-trip failed, if any.

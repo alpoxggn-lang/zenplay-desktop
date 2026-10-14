@@ -105,6 +105,7 @@ export function mapDbRecentlyAddedToItem(
         category_id: item.category_id,
         xtream_id: item.xtream_id,
         poster_url: item.poster_url,
+        epg_lookup_key: item.epg_channel_id ?? undefined,
         source: 'xtream',
     };
 }

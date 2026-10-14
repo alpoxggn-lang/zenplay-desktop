@@ -61,6 +61,7 @@ import {
     getRecentItemResumeNavigation as getRecentItemResumeNavigationUtil,
     getRecentlyAddedLink as getRecentlyAddedLinkUtil,
     getRecentlyAddedNavigationState as getRecentlyAddedNavigationStateUtil,
+    getRecentlyAddedPlayNavigationState as getRecentlyAddedPlayNavigationStateUtil,
     isTypeInKind as isTypeInKindUtil,
     type DashboardContentKind,
 } from './dashboard-navigation.util';
@@ -87,6 +88,8 @@ export type GlobalRecentItem = PortalRecentItem;
 /** @deprecated Use {@link PortalFavoriteItem} from `@iptvnator/shared/interfaces` instead. */
 export type DashboardFavoriteItem = PortalFavoriteItem;
 export type DashboardRecentlyAddedFilterKind = GlobalRecentlyAddedKind;
+
+const DASHBOARD_LIVE_SAMPLE_LIMIT = 20;
 
 @Injectable({ providedIn: 'root' })
 export class DashboardDataService {
@@ -581,12 +584,36 @@ export class DashboardDataService {
             );
         }
 
-        const items = await this.dbService.getGlobalRecentlyAdded(
-            'all',
-            limit,
-            'xtream'
-        );
-        return items
+        // Keep the branded movie and series rails independent. Asking SQLite
+        // for one mixed window lets a busy movie feed consume every row and
+        // makes the series rail disappear (or the reverse). Bounded,
+        // index-backed reads stay O(limit) and avoid loading the full catalog.
+        // A third small read supplies TV en vivo on a cold account without
+        // waiting for the user to build recent history or favorites.
+        const normalizedLimit = Number.isFinite(limit)
+            ? Math.max(0, Math.trunc(limit))
+            : DEFAULT_XTREAM_RECENTLY_ADDED_LIMIT;
+        if (normalizedLimit === 0) {
+            return [];
+        }
+        const movieLimit = Math.ceil(normalizedLimit / 2);
+        const seriesLimit = Math.floor(normalizedLimit / 2);
+        const [movies, series, live] = await Promise.all([
+            this.dbService.getGlobalRecentlyAdded('vod', movieLimit, 'xtream'),
+            seriesLimit > 0
+                ? this.dbService.getGlobalRecentlyAdded(
+                      'series',
+                      seriesLimit,
+                      'xtream'
+                  )
+                : Promise.resolve([]),
+            this.dbService.getGlobalRecentlyAdded(
+                'live',
+                DASHBOARD_LIVE_SAMPLE_LIMIT,
+                'xtream'
+            ),
+        ]);
+        return [...movies, ...series, ...live]
             .map((item) =>
                 withRecentlyAddedMetadata(mapDbRecentlyAddedToItem(item), item)
             )
@@ -1043,6 +1070,12 @@ export class DashboardDataService {
         item: DashboardRecentlyAddedItem
     ): WorkspaceNavigationTarget['state'] {
         return getRecentlyAddedNavigationStateUtil(item);
+    }
+
+    getRecentlyAddedPlayNavigationState(
+        item: DashboardRecentlyAddedItem
+    ): WorkspaceNavigationTarget['state'] {
+        return getRecentlyAddedPlayNavigationStateUtil(item);
     }
 
     async removeGlobalFavorite(item: DashboardFavoriteItem): Promise<void> {

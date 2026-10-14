@@ -27,6 +27,8 @@ export const OPEN_STALKER_LIVE_CATEGORY_STATE_KEY = 'openStalkerLiveCategoryId';
 export const OPEN_STALKER_LIVE_TITLE_STATE_KEY = 'openStalkerLiveTitle';
 export const OPEN_STALKER_LIVE_POSTER_STATE_KEY = 'openStalkerLivePoster';
 export const OPEN_COLLECTION_DETAIL_STATE_KEY = 'openCollectionDetailItem';
+/** One-shot request to start the addressed Xtream movie/series after details load. */
+export const XTREAM_DETAIL_AUTOPLAY_STATE_KEY = 'autoPlayXtreamDetail';
 export const OPEN_STALKER_ITEM_STATE_KEY = 'openStalkerItem';
 export const STALKER_RETURN_TO_STATE_KEY = 'stalkerReturnTo';
 export const COLLECTION_VIEW_STATE_KEY = 'collectionViewState';
@@ -55,6 +57,73 @@ export interface SeriesResumeTarget {
 export interface CollectionViewState {
     selectedContentType?: CollectionContentType;
     scope?: CollectionScope;
+}
+
+export interface XtreamDetailAutoplayState {
+    playlistId: string;
+    contentType: 'movie' | 'series';
+    contentId: number;
+}
+
+/**
+ * Adds an identity-scoped, one-shot autoplay handoff to an existing router
+ * state. The identity prevents a stale browser-history entry from starting a
+ * different title when Angular reuses a detail component.
+ */
+export function withXtreamDetailAutoplayState(
+    state: Record<string, unknown> | undefined,
+    params: {
+        playlistId: string;
+        contentType: 'movie' | 'series';
+        contentId: string | number | null | undefined;
+    }
+): Record<string, unknown> | undefined {
+    const target = normalizeXtreamDetailAutoplayState(params);
+    return target
+        ? {
+              ...(state ?? {}),
+              [XTREAM_DETAIL_AUTOPLAY_STATE_KEY]: target,
+          }
+        : state;
+}
+
+export function getXtreamDetailAutoplayState(
+    state: unknown
+): XtreamDetailAutoplayState | null {
+    const record = toStateRecord(state);
+    return normalizeXtreamDetailAutoplayState(
+        record?.[XTREAM_DETAIL_AUTOPLAY_STATE_KEY]
+    );
+}
+
+/**
+ * Consumes the autoplay handoff only when it belongs to the detail currently
+ * on screen. Callers wait until their playable item and position state are
+ * ready before taking it.
+ */
+export function consumeXtreamDetailAutoplayState(params: {
+    playlistId: string;
+    contentType: 'movie' | 'series';
+    contentId: string | number | null | undefined;
+}): boolean {
+    try {
+        const expected = normalizeXtreamDetailAutoplayState(params);
+        const actual = getXtreamDetailAutoplayState(window.history.state);
+        if (
+            !expected ||
+            !actual ||
+            actual.playlistId !== expected.playlistId ||
+            actual.contentType !== expected.contentType ||
+            actual.contentId !== expected.contentId
+        ) {
+            return false;
+        }
+
+        clearNavigationStateKeys([XTREAM_DETAIL_AUTOPLAY_STATE_KEY]);
+        return true;
+    } catch {
+        return false;
+    }
 }
 
 export function getRecentItemNavigation(
@@ -798,6 +867,33 @@ function normalizeSeriesResumeTarget(
         contentXtreamId: contentXtreamId as number,
         seasonNumber: seasonNumber as number,
         episodeNumber: episodeNumber as number,
+    };
+}
+
+function normalizeXtreamDetailAutoplayState(
+    candidate: unknown
+): XtreamDetailAutoplayState | null {
+    const record = toStateRecord(candidate);
+    if (!record) {
+        return null;
+    }
+
+    const playlistId = toPathSegment(record['playlistId']);
+    const contentType = toPathSegment(record['contentType']);
+    const contentId = toOptionalNumber(record['contentId']);
+    if (
+        !playlistId ||
+        (contentType !== 'movie' && contentType !== 'series') ||
+        !Number.isSafeInteger(contentId) ||
+        (contentId ?? 0) <= 0
+    ) {
+        return null;
+    }
+
+    return {
+        playlistId,
+        contentType,
+        contentId: contentId as number,
     };
 }
 

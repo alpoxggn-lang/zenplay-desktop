@@ -53,6 +53,13 @@ export const APP_UPDATE_INSTALL = 'APP_UPDATE:INSTALL';
 export const APP_UPDATE_GET_RELEASE_NOTES = 'APP_UPDATE:GET_RELEASE_NOTES';
 export const APP_UPDATE_STATUS_CHANGED = 'APP_UPDATE:STATUS_CHANGED';
 
+// ZenPlay account-expiry alerts. The renderer sends only a validated alert
+// kind and calendar date; account identity, portal URL, and credentials never
+// cross this notification boundary.
+export const ZENPLAY_ACCOUNT_EXPIRY_NOTIFY = 'ZENPLAY_ACCOUNT_EXPIRY:NOTIFY';
+// Main -> renderer wake-up after the operating system resumes from sleep.
+export const APP_RESUMED = 'APP:RESUMED';
+
 // Experimental
 export const OPEN_MPV_PLAYER = 'OPEN_MPV_PLAYER';
 export const SET_MPV_PLAYER_PATH = 'SET_MPV_PLAYER_PATH';

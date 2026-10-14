@@ -47,17 +47,21 @@ describe('DashboardHeroComponent', () => {
     const activeTitle = () =>
         host().querySelector('[data-test-id=dashboard-hero-slide] h2')
             ?.textContent;
-    const dots = () =>
+    const indicators = () =>
         Array.from(
-            host().querySelectorAll<HTMLButtonElement>(
+            host().querySelectorAll<HTMLElement>(
                 '[data-test-id=dashboard-hero-dot]'
             )
         );
-    const finishActiveDot = () => {
+    const finishActiveIndicator = () => {
         const fill = host().querySelector(
-            '.hero__dot--active .hero__dot-fill'
+            '.hero__indicator--active .hero__indicator-fill'
         ) as HTMLElement;
         fill.dispatchEvent(new Event('animationend'));
+        fixture.detectChanges();
+    };
+    const showSlide = (index: number) => {
+        fixture.componentInstance.show(index);
         fixture.detectChanges();
     };
 
@@ -109,15 +113,15 @@ describe('DashboardHeroComponent', () => {
         expect(setMode).toHaveBeenLastCalledWith('zenplay-trending');
     });
 
-    it('advances when the active dot finishes its rotation interval', () => {
+    it('advances when the active indicator finishes its rotation interval', () => {
         render();
         expect(activeTitle()).toBe('First');
 
-        finishActiveDot();
+        finishActiveIndicator();
         expect(activeTitle()).toBe('Second');
 
-        finishActiveDot();
-        finishActiveDot();
+        finishActiveIndicator();
+        finishActiveIndicator();
         expect(activeTitle()).toBe('First');
     });
 
@@ -130,75 +134,101 @@ describe('DashboardHeroComponent', () => {
         section.dispatchEvent(new Event('mouseenter'));
         fixture.detectChanges();
         expect(section.classList).toContain('hero--paused');
-        finishActiveDot();
+        finishActiveIndicator();
         expect(activeTitle()).toBe('First');
 
         section.dispatchEvent(new Event('mouseleave'));
+        section.dispatchEvent(new FocusEvent('focusin'));
         fixture.detectChanges();
-        finishActiveDot();
-        expect(activeTitle()).toBe('Second');
-    });
-
-    it('lets the user pause and resume the rotation', () => {
-        render();
-        const pause = host().querySelector(
-            '[data-test-id=dashboard-hero-pause]'
-        ) as HTMLButtonElement;
-
-        pause.click();
-        fixture.detectChanges();
-        expect(pause.getAttribute('aria-pressed')).toBe('true');
-        finishActiveDot();
+        finishActiveIndicator();
         expect(activeTitle()).toBe('First');
 
-        pause.click();
+        section.dispatchEvent(
+            new FocusEvent('focusout', { relatedTarget: null })
+        );
         fixture.detectChanges();
-        finishActiveDot();
+        finishActiveIndicator();
         expect(activeTitle()).toBe('Second');
     });
 
-    it('resumes on Play even while the button keeps the pointer and focus', () => {
+    it('shows passive indicators without carousel control buttons', () => {
+        render();
+
+        expect(
+            host().querySelector('[data-test-id=dashboard-hero-pause]')
+        ).toBeNull();
+        expect(host().querySelector('.hero__indicators button')).toBeNull();
+        expect(indicators()).toHaveLength(3);
+        expect(indicators()[0].getAttribute('aria-current')).toBe('true');
+        expect(indicators()[0].tagName).toBe('SPAN');
+    });
+
+    it('moves with a horizontal pointer swipe and resumes afterwards', () => {
         render();
         const section = host().querySelector(
             '[data-test-id=dashboard-hero]'
         ) as HTMLElement;
-        const pause = host().querySelector(
-            '[data-test-id=dashboard-hero-pause]'
-        ) as HTMLButtonElement;
-        section.dispatchEvent(new Event('mouseenter'));
-        section.dispatchEvent(new FocusEvent('focusin'));
-
-        pause.click();
+        const preventDefault = jest.fn();
+        fixture.componentInstance.onPointerDown({
+            isPrimary: true,
+            pointerId: 7,
+            clientX: 240,
+            clientY: 100,
+            target: section,
+        } as unknown as PointerEvent);
         fixture.detectChanges();
-        pause.click();
-        fixture.detectChanges();
+        expect(section.classList).toContain('hero--paused');
 
-        expect(section.classList).not.toContain('hero--paused');
-        finishActiveDot();
+        fixture.componentInstance.onPointerMove({
+            pointerId: 7,
+            clientX: 150,
+            clientY: 104,
+            preventDefault,
+        } as unknown as PointerEvent);
+        fixture.detectChanges();
+        expect(preventDefault).toHaveBeenCalledTimes(1);
         expect(activeTitle()).toBe('Second');
+
+        fixture.componentInstance.onPointerEnd({
+            pointerId: 7,
+        } as PointerEvent);
+        fixture.detectChanges();
+        expect(section.classList).not.toContain('hero--paused');
     });
 
-    it('switches slides from the dots, with roving arrow keys', () => {
+    it('moves once for each horizontal trackpad gesture', () => {
         render();
+        const section = host().querySelector(
+            '[data-test-id=dashboard-hero]'
+        ) as HTMLElement;
+        const wheel = new WheelEvent('wheel', {
+            deltaX: 72,
+            deltaY: 3,
+            bubbles: true,
+            cancelable: true,
+        });
 
-        dots()[2].click();
+        section.dispatchEvent(wheel);
         fixture.detectChanges();
-        expect(activeTitle()).toBe('Third');
-        expect(dots()[2].getAttribute('aria-current')).toBe('true');
-        expect(dots()[2].tabIndex).toBe(0);
-        expect(dots()[0].tabIndex).toBe(-1);
+        expect(wheel.defaultPrevented).toBe(true);
+        expect(activeTitle()).toBe('Second');
+        expect(section.classList).toContain('hero--paused');
 
-        dots()[2].dispatchEvent(
-            new KeyboardEvent('keydown', { key: 'ArrowRight' })
+        section.dispatchEvent(
+            new WheelEvent('wheel', {
+                deltaX: 100,
+                deltaY: 0,
+                bubbles: true,
+                cancelable: true,
+            })
         );
         fixture.detectChanges();
-        expect(activeTitle()).toBe('First');
+        expect(activeTitle()).toBe('Second');
     });
 
     it('keeps the current slide when a slide arrives late', () => {
         render();
-        dots()[1].click();
-        fixture.detectChanges();
+        showSlide(1);
 
         slides.set([
             slide('a', 'First'),
@@ -209,7 +239,7 @@ describe('DashboardHeroComponent', () => {
         fixture.detectChanges();
 
         expect(activeTitle()).toBe('Second');
-        expect(dots()).toHaveLength(4);
+        expect(indicators()).toHaveLength(4);
     });
 
     it('keeps the first slide when a slide arrives ahead of it untouched', () => {
@@ -229,8 +259,7 @@ describe('DashboardHeroComponent', () => {
 
     it('shows the slide now at the same position when the active one goes', () => {
         render();
-        dots()[1].click();
-        fixture.detectChanges();
+        showSlide(1);
 
         slides.set([slide('a', 'First'), slide('c', 'Third')]);
         fixture.detectChanges();
@@ -238,17 +267,21 @@ describe('DashboardHeroComponent', () => {
         expect(activeTitle()).toBe('Third');
     });
 
-    it('never auto-rotates under reduced motion, but the dots still work', () => {
+    it('never auto-rotates under reduced motion, but keyboard navigation works', () => {
         reducedMotion = true;
         render();
 
-        expect(
-            host().querySelector('[data-test-id=dashboard-hero-pause]')
-        ).toBeNull();
-        finishActiveDot();
+        finishActiveIndicator();
         expect(activeTitle()).toBe('First');
 
-        dots()[1].click();
+        host()
+            .querySelector<HTMLElement>('[data-test-id=dashboard-hero]')
+            ?.dispatchEvent(
+                new KeyboardEvent('keydown', {
+                    key: 'ArrowRight',
+                    bubbles: true,
+                })
+            );
         fixture.detectChanges();
         expect(activeTitle()).toBe('Second');
     });
@@ -258,7 +291,7 @@ describe('DashboardHeroComponent', () => {
         render();
 
         expect(activeTitle()).toBe('Only');
-        expect(dots()).toHaveLength(0);
+        expect(indicators()).toHaveLength(0);
         expect(
             host()
                 .querySelector('[data-test-id=dashboard-hero-primary-action]')
@@ -286,7 +319,7 @@ describe('DashboardHeroComponent', () => {
             expect(first.contains(hooks(testId)[0])).toBe(true);
         }
 
-        finishActiveDot();
+        finishActiveIndicator();
 
         expect(contents()).toHaveLength(3);
         expect(contents()[0]).toBe(first);
@@ -313,8 +346,7 @@ describe('DashboardHeroComponent', () => {
                 })
             );
 
-        dots()[1].click();
-        fixture.detectChanges();
+        showSlide(1);
         section.dispatchEvent(
             new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })
         );
@@ -356,8 +388,7 @@ describe('DashboardHeroComponent', () => {
             '[data-test-id=dashboard-hero]'
         ) as HTMLElement;
         section.dispatchEvent(new Event('focusin'));
-        dots()[1].click();
-        fixture.detectChanges();
+        showSlide(1);
 
         expect(announcement()).toBe(region);
         expect(region?.getAttribute('aria-live')).toBe('polite');
@@ -387,8 +418,7 @@ describe('DashboardHeroComponent', () => {
             'WORKSPACE.DASHBOARD.PERCENT_WATCHED'
         );
 
-        dots()[1].click();
-        fixture.detectChanges();
+        showSlide(1);
         expect(bar()?.getAttribute('aria-label')).toBe('Evening programme');
         // Elapsed share of a live programme: the plain percentage.
         expect(bar()?.hasAttribute('aria-valuetext')).toBe(false);
@@ -449,9 +479,8 @@ describe('DashboardHeroComponent', () => {
         );
         expect(clicked).toHaveBeenCalledTimes(1);
 
-        // Keys pressed inside a control belong to that control.
-        const dot = dots()[0];
-        dot.dispatchEvent(
+        // Keys pressed inside a content action belong to that action.
+        primary.dispatchEvent(
             new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })
         );
         expect(clicked).toHaveBeenCalledTimes(1);
@@ -492,7 +521,7 @@ describe('DashboardHeroComponent rotation animation', () => {
 
     // The fill runs for the whole time an idle dashboard is on screen: a
     // layout property here means style, layout and paint on every frame.
-    it('fills the active dot with a compositor-only animation', () => {
+    it('fills the active indicator with a compositor-only animation', () => {
         const frames = keyframes('hero-dot-fill');
         const properties = Array.from(
             frames.matchAll(/^\s*([a-z-]+)\s*:/gm),

@@ -11,6 +11,7 @@ import {
     assertMsiPackage,
     assertMountedMacPayload,
     assertPortableExecutable,
+    assertWindowsAuthenticodeSignature,
     discoverMacDiskImage,
     discoverMountedMacApp,
     discoverWindowsInstallers,
@@ -139,7 +140,77 @@ test('parses platform-specific installer smoke arguments', () => {
     assert.equal(result.platform, 'macos');
     assert.equal(result.expectedArch, 'arm64');
     assert.equal(result.expectedAppId, 'com.zenplay.app');
+    assert.equal(result.requireCodeSigning, false);
     assert.equal(result.root, path.resolve('dist/executables'));
+
+    const signedWindows = parseArguments([
+        '--platform',
+        'windows',
+        '--root',
+        'dist/executables',
+        '--require-code-signing',
+    ]);
+    assert.equal(signedWindows.requireCodeSigning, true);
+});
+
+test('accepts only trusted and timestamped Windows Authenticode signatures', async () => {
+    const root = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'zenplay-signature-test-')
+    );
+    try {
+        const executable = path.join(root, 'ZenPlay.exe');
+        writePe(executable);
+        const calls = [];
+        const validSignature = await assertWindowsAuthenticodeSignature(
+            executable,
+            async (command, args, options) => {
+                calls.push({ command, args, options });
+                return {
+                    stdout: JSON.stringify({
+                        Status: 'Valid',
+                        SignerSubject: 'CN=ZenPlay Test Publisher',
+                        TimeStamperSubject: 'CN=Test Timestamp Authority',
+                    }),
+                    stderr: '',
+                };
+            }
+        );
+
+        assert.equal(validSignature.Status, 'Valid');
+        assert.equal(calls[0].command, 'powershell.exe');
+        assert.match(calls[0].args.at(-1), /FromBase64String/);
+        assert.match(
+            calls[0].args.at(-1),
+            new RegExp(
+                Buffer.from(path.resolve(executable), 'utf8').toString('base64')
+            )
+        );
+        assert.match(
+            calls[0].options.env.PSModulePath,
+            /WindowsPowerShell\\v1\.0\\Modules$/
+        );
+        assert.equal(calls[0].options.timeoutMs, 30_000);
+
+        await assert.rejects(
+            assertWindowsAuthenticodeSignature(executable, async () => ({
+                stdout: JSON.stringify({ Status: 'NotSigned' }),
+                stderr: '',
+            })),
+            /not trusted.*NotSigned/
+        );
+        await assert.rejects(
+            assertWindowsAuthenticodeSignature(executable, async () => ({
+                stdout: JSON.stringify({
+                    Status: 'Valid',
+                    SignerSubject: 'CN=ZenPlay Test Publisher',
+                }),
+                stderr: '',
+            })),
+            /not timestamped/
+        );
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
 });
 
 test('workflow gates Windows and macOS artifact uploads on installer smoke', () => {
@@ -167,4 +238,11 @@ test('workflow gates Windows and macOS artifact uploads on installer smoke', () 
         workflow,
         /verify:desktop-installer -- --platform macos[\s\S]*?--expected-app-id com\.zenplay\.app/
     );
+    assert.match(workflow, /secrets\.WIN_CSC_LINK/);
+    assert.match(workflow, /secrets\.WIN_CSC_KEY_PASSWORD/);
+    assert.match(workflow, /--require-code-signing/);
+    assert.match(workflow, /name: Create stable desktop download aliases/);
+    assert.match(workflow, /download-aliases\/ZenPlay-Windows\.exe/);
+    assert.match(workflow, /download-aliases\/ZenPlay-Mac-Intel\.dmg/);
+    assert.match(workflow, /download-aliases\/ZenPlay-Mac-Apple-Silicon\.dmg/);
 });

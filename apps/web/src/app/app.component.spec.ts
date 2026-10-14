@@ -42,6 +42,7 @@ import { AppDateLocaleService } from './app-date-locales';
 import { ElectronServiceStub } from './services/electron.service.stub';
 import { SettingsService } from './services/settings.service';
 import { ZenPlayContentRefreshService } from './services/zenplay-content-refresh.service';
+import { ZenPlayAccountExpiryAlertService } from './services/zenplay-account-expiry-alert.service';
 
 /** Writable double for the bridge's read-only capability getters. */
 type EpgBridgeStub = {
@@ -89,10 +90,14 @@ describe('AppComponent', () => {
     let snackBar: MatSnackBar;
     let store: MockStore;
     let translateService: TranslateService;
-    let runtimeCapabilities: Partial<RuntimeCapabilitiesService>;
+    let runtimeCapabilities: {
+        isElectron: boolean;
+        isPwa: boolean;
+    };
     let epgBridge: EpgBridgeStub;
     let actionsSubject: Subject<unknown>;
     let contentRefresh: { startAutomaticRefresh: jest.Mock };
+    let accountExpiryAlerts: { start: jest.Mock };
 
     beforeEach(waitForAsync(() => {
         runtimeCapabilities = {
@@ -101,6 +106,7 @@ describe('AppComponent', () => {
         };
         actionsSubject = new Subject();
         contentRefresh = { startAutomaticRefresh: jest.fn() };
+        accountExpiryAlerts = { start: jest.fn() };
         epgBridge = {
             checkFreshness: jest.fn().mockResolvedValue({
                 freshUrls: [],
@@ -176,6 +182,10 @@ describe('AppComponent', () => {
                     useValue: contentRefresh,
                 },
                 {
+                    provide: ZenPlayAccountExpiryAlertService,
+                    useValue: accountExpiryAlerts,
+                },
+                {
                     provide: WORKSPACE_SHELL_ACTIONS,
                     useValue: {
                         openAddPlaylistDialog: jest.fn(),
@@ -218,6 +228,7 @@ describe('AppComponent', () => {
         jest.spyOn(component, 'initSettings');
 
         component.ngOnInit();
+        expect(accountExpiryAlerts.start).toHaveBeenCalledTimes(1);
         expect(storeDispatchSpy).toHaveBeenCalledWith(
             PlaylistActions.loadPlaylists()
         );

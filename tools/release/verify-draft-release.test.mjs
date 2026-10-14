@@ -34,6 +34,9 @@ function completeAssets(version) {
         `ZenPlay-${version}-mac-x64.zip.blockmap`,
         `ZenPlay-${version}-windows-x64-setup.exe`,
         `ZenPlay-${version}-windows-x64-setup.exe.blockmap`,
+        'ZenPlay-Windows.exe',
+        'ZenPlay-Mac-Intel.dmg',
+        'ZenPlay-Mac-Apple-Silicon.dmg',
         'latest-linux-arm.yml',
         'latest-linux-arm64.yml',
         'latest-linux.yml',
@@ -203,7 +206,7 @@ describe('runVerification', () => {
         assert.match(result.lines[0], /Draft release v0\.24\.0 found\./);
         assert.match(
             result.lines.at(-2),
-            /All 28 required assets present \(28 attached\)\./
+            /All 31 required assets present \(31 attached\)\./
         );
         assert.match(result.lines.at(-1), /publish the release manually/);
     });
@@ -348,7 +351,7 @@ describe('runVerification', () => {
         // pre-publication gate must not pass after publication.
         assert.equal(result.exitCode, 1);
         assert.match(result.lines[0], /already published/);
-        assert.match(result.lines.at(-1), /All 28 required assets present/);
+        assert.match(result.lines.at(-1), /All 31 required assets present/);
         assert.ok(
             !result.lines.some((line) => /publish the release manually/.test(line))
         );

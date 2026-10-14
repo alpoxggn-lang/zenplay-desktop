@@ -50,6 +50,7 @@ import { AppStartupStatusComponent } from './app-startup-status.component';
 import { syncDocumentLanguage } from './services/document-language';
 import { AutomaticPictureInPictureService } from './services/automatic-picture-in-picture.service';
 import { ZenPlayContentRefreshService } from './services/zenplay-content-refresh.service';
+import { ZenPlayAccountExpiryAlertService } from './services/zenplay-account-expiry-alert.service';
 
 const debugAppComponent = createDevLogger('AppComponent');
 
@@ -96,6 +97,9 @@ export class AppComponent implements OnInit {
     );
     private readonly zenPlayContentRefresh = inject(
         ZenPlayContentRefreshService
+    );
+    private readonly zenPlayAccountExpiryAlerts = inject(
+        ZenPlayAccountExpiryAlertService
     );
 
     /** Default language as fallback */
@@ -153,6 +157,7 @@ export class AppComponent implements OnInit {
     }
 
     ngOnInit() {
+        this.zenPlayAccountExpiryAlerts.start();
         this.store.dispatch(PlaylistActions.loadPlaylists());
         this.translate.setDefaultLang(this.DEFAULT_LANG);
 

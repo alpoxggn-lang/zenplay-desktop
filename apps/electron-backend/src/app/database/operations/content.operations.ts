@@ -633,11 +633,15 @@ export function buildM3uGlobalSearchResults(
     );
 }
 
-export type GlobalRecentlyAddedKind = 'all' | 'vod' | 'series';
+export type GlobalRecentlyAddedKind = 'all' | 'live' | 'vod' | 'series';
 
 function getRecentlyAddedContentTypes(
     kind: GlobalRecentlyAddedKind
-): Array<'movie' | 'series'> {
+): Array<'live' | 'movie' | 'series'> {
+    if (kind === 'live') {
+        return ['live'];
+    }
+
     if (kind === 'vod') {
         return ['movie'];
     }
@@ -779,7 +783,7 @@ function getRecentlyAddedSortValue(item: {
 
 function getGlobalRecentlyAddedByType(
     db: AppDatabase,
-    type: 'movie' | 'series',
+    type: 'live' | 'movie' | 'series',
     limit: number,
     playlistType?: RecentlyAddedPlaylistType
 ) {
@@ -787,9 +791,18 @@ function getGlobalRecentlyAddedByType(
         eq(schema.content.type, type),
         eq(schema.categories.hidden, false),
         unlockedCategoryCondition(),
-        sql`${schema.content.added} <> ''`,
-        sql`${schema.content.added} <= ${getXtreamRecentlyAddedMaxEpochSeconds()}`,
     ];
+
+    // Live uses this bounded query as the dashboard's cold-account channel
+    // sample. Many providers leave `added` empty for channels, so requiring a
+    // catalog timestamp here would make TV en vivo disappear until the user
+    // had already watched or favorited something.
+    if (type !== 'live') {
+        whereConditions.push(
+            sql`${schema.content.added} <> ''`,
+            sql`${schema.content.added} <= ${getXtreamRecentlyAddedMaxEpochSeconds()}`
+        );
+    }
 
     if (playlistType) {
         whereConditions.push(eq(schema.playlists.type, playlistType));
@@ -818,7 +831,11 @@ function getGlobalRecentlyAddedByType(
             eq(schema.categories.playlistId, schema.playlists.id)
         )
         .where(and(...whereConditions))
-        .orderBy(desc(schema.content.added))
+        .orderBy(
+            type === 'live'
+                ? asc(schema.content.id)
+                : desc(schema.content.added)
+        )
         .limit(limit);
 }
 

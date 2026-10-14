@@ -14,6 +14,7 @@ import {
     getGlobalFavoriteNavigation,
     getRecentItemNavigation,
     isPortalPlaybackWatched,
+    withXtreamDetailAutoplayState,
     WorkspaceNavigationTarget,
     type SeriesResumeTarget,
 } from '@iptvnator/portal/shared/util';
@@ -230,4 +231,27 @@ export function getRecentlyAddedNavigationState(
         title: item.title,
         imageUrl: item.poster_url,
     }).state;
+}
+
+/**
+ * State for the hero's explicit Play action. Xtream movie/series details use
+ * this one-shot handoff to start their native player once metadata and saved
+ * position are ready. The detail CTA deliberately uses the state above.
+ */
+export function getRecentlyAddedPlayNavigationState(
+    item: PortalAddedItem
+): WorkspaceNavigationTarget['state'] {
+    const state = getRecentlyAddedNavigationState(item);
+    if (
+        item.source !== 'xtream' ||
+        (item.type !== 'movie' && item.type !== 'series')
+    ) {
+        return state;
+    }
+
+    return withXtreamDetailAutoplayState(state, {
+        playlistId: item.playlist_id,
+        contentType: item.type,
+        contentId: item.xtream_id,
+    });
 }

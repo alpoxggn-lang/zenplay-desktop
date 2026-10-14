@@ -54,6 +54,14 @@
     height: 86px;
 }
 
+.zenplay-auth-wordmark {
+    width: min(300px, 80%);
+    height: auto;
+    margin-bottom: 18px;
+    border-radius: 0;
+    object-fit: contain;
+}
+
 .zenplay-auth-copy {
     margin-bottom: 28px;
     text-align: center;
@@ -103,9 +111,9 @@ input {
 }
 
 input:focus-visible {
-    border-color: var(--app-selection-color);
+    border-color: var(--app-focus-ring);
     box-shadow: 0 0 0 3px
-        color-mix(in srgb, var(--app-selection-color) 25%, transparent);
+        color-mix(in srgb, var(--app-focus-ring) 25%, transparent);
 }
 
 .zenplay-password-field {
@@ -153,9 +161,21 @@ input:focus-visible {
 
 .zenplay-profile-list {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(104px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
     gap: 14px;
     margin-bottom: 28px;
+}
+
+.zenplay-profile-tile {
+    min-width: 0;
+    padding: 8px;
+    border: 1px solid var(--app-glass-border);
+    border-radius: 20px;
+    background: color-mix(
+        in srgb,
+        var(--app-widget-bg) 82%,
+        transparent
+    );
 }
 
 .zenplay-profile-option {
@@ -171,13 +191,17 @@ input:focus-visible {
     font: inherit;
     font-weight: 600;
     cursor: pointer;
+    width: 100%;
 }
 
-.zenplay-profile-option:hover,
-.zenplay-profile-option:focus-visible {
+.zenplay-profile-option:hover {
     border-color: var(--app-glass-border);
     background: var(--app-hover-overlay);
-    outline: none;
+}
+
+.zenplay-profile-option:focus-visible {
+    outline: 2px solid var(--app-focus-ring);
+    outline-offset: 2px;
 }
 
 .zenplay-profile-avatar {
@@ -192,6 +216,62 @@ input:focus-visible {
     font-weight: 700;
 }
 
+.zenplay-profile-actions,
+.zenplay-profile-editor__actions {
+    display: flex;
+    justify-content: center;
+    gap: 8px;
+}
+
+.zenplay-profile-actions button,
+.zenplay-profile-editor__actions button {
+    min-height: 34px;
+    padding: 0 10px;
+    border: 1px solid var(--app-glass-border);
+    border-radius: 10px;
+    color: var(--app-on-surface);
+    background: var(--app-hover-overlay);
+    font: inherit;
+    font-size: 0.76rem;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.zenplay-profile-actions button:hover,
+.zenplay-profile-editor__actions button:hover {
+    border-color: var(--app-selection-border);
+    background: var(--app-selection-surface);
+}
+
+.zenplay-profile-actions button:focus-visible,
+.zenplay-profile-editor__actions button:focus-visible {
+    outline: 2px solid var(--app-focus-ring);
+    outline-offset: 2px;
+}
+
+.zenplay-profile-editor,
+.zenplay-profile-delete-confirmation {
+    display: grid;
+    gap: 8px;
+    padding: 8px 4px 4px;
+}
+
+.zenplay-profile-editor input {
+    min-height: 40px;
+}
+
+.zenplay-profile-delete-confirmation {
+    color: var(--app-on-surface);
+    font-size: 0.8rem;
+    font-weight: 600;
+    text-align: center;
+}
+
+.zenplay-profile-actions .zenplay-profile-delete,
+.zenplay-profile-editor__actions .zenplay-profile-delete {
+    color: var(--mat-sys-error);
+}
+
 @media (min-width: 768px) and (orientation: landscape) {
     .zenplay-auth-card:not(.zenplay-profile-card) {
         display: grid;
@@ -200,7 +280,7 @@ input:focus-visible {
         width: min(760px, 100%);
     }
 
-    .zenplay-auth-logo {
+    .zenplay-auth-card:not(.zenplay-profile-card) .zenplay-auth-logo {
         grid-row: 1 / span 2;
         align-self: center;
         width: 140px;

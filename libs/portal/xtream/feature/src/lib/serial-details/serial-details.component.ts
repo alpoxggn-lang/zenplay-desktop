@@ -45,6 +45,7 @@ import {
     PortalInlinePlayerComponent,
     type UpNextRailItem,
 } from '@iptvnator/ui/playback';
+import { consumeXtreamDetailAutoplayState } from '@iptvnator/portal/shared/util';
 import {
     TmdbEnrichedCastMember,
     XtreamSerieDetails,
@@ -134,6 +135,8 @@ export class SerialDetailsComponent implements OnDestroy {
     readonly isLoadingDetails = this.xtreamStore.isLoadingDetails;
     readonly detailsError = this.xtreamStore.detailsError;
     readonly currentPlaylistId = signal('');
+    /** Exact-once fallback if a host refuses history.replaceState. */
+    private readonly consumedAutoplayKeys = new Set<string>();
     private readonly downloadAdapter = inject(
         SerialDetailsDownloadAdapterService
     );
@@ -253,6 +256,38 @@ export class SerialDetailsComponent implements OnDestroy {
         // Initializes on first render and RE-initializes when the route
         // params change while the component is reused (Similar rail).
         effect(() => this.routeState.loadAddressedSeries());
+
+        // The dashboard's explicit Play CTA routes through details so the
+        // normal parental guard, source resolution and player selection stay
+        // authoritative. Once details and saved positions are ready, consume
+        // its identity-scoped handoff and use the page's regular quick start.
+        effect(() => {
+            const playlistId = this.currentPlaylistId();
+            const seriesXtreamId = Number(this.selectedItem()?.series_id ?? 0);
+            const quickStart = this.quickStartAction();
+            const autoplayKey = `${playlistId}:series:${seriesXtreamId}`;
+            if (
+                !playlistId ||
+                !this.playback.positionLoaded() ||
+                !quickStart ||
+                quickStart.disabled ||
+                this.playback.forcedLaunchPending() ||
+                this.consumedAutoplayKeys.has(autoplayKey)
+            ) {
+                return;
+            }
+
+            if (
+                consumeXtreamDetailAutoplayState({
+                    playlistId,
+                    contentType: 'series',
+                    contentId: seriesXtreamId,
+                })
+            ) {
+                this.consumedAutoplayKeys.add(autoplayKey);
+                this.playback.playQuickStartEpisode();
+            }
+        });
 
         registerContentMetadataBackfill({
             store: this.xtreamStore,

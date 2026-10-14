@@ -126,7 +126,9 @@ describe('WorkspaceShellRailComponent', () => {
         fixture.detectChanges();
 
         const labels = Array.from(
-            fixture.nativeElement.querySelectorAll('.zenplay-nav__item span')
+            fixture.nativeElement.querySelectorAll(
+                '.zenplay-nav__item span'
+            ) as NodeListOf<Element>
         ).map((element: Element) => element.textContent?.trim());
 
         expect(labels).toEqual([
@@ -143,7 +145,9 @@ describe('WorkspaceShellRailComponent', () => {
         fixture.detectChanges();
 
         const labels = Array.from(
-            fixture.nativeElement.querySelectorAll('.zenplay-nav__item span')
+            fixture.nativeElement.querySelectorAll(
+                '.zenplay-nav__item span'
+            ) as NodeListOf<Element>
         ).map((element: Element) => element.textContent?.trim());
 
         expect(labels).toEqual([

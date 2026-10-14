@@ -92,7 +92,11 @@ describe('ZenPlay dashboard catalog selectors', () => {
 
     it('normalizes provider rating and release-year fallbacks', () => {
         expect(
-            zenPlayCatalogRating(item(1, 'movie', 'A', '1', { rating: '8.44' }))
+            zenPlayCatalogRating(
+                item(1, 'movie', 'A', '1', {
+                    rating: '8.44' as unknown as number,
+                })
+            )
         ).toBe(8.4);
         expect(
             zenPlayCatalogRating(

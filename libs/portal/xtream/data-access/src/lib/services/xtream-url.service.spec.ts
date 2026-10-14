@@ -7,11 +7,13 @@ import {
 } from '@iptvnator/services';
 import {
     StreamFormat,
+    VideoPlayer,
     XtreamSerieEpisode,
     XtreamVodDetails,
 } from '@iptvnator/shared/interfaces';
 import { XtreamCredentials } from './xtream-api.service';
 import {
+    prefersTsFirstForDesktopLive,
     prefersTsFirstForWebLive,
     XtreamUrlService,
 } from './xtream-url.service';
@@ -23,6 +25,7 @@ describe('XtreamUrlService', () => {
         setAppState: jest.Mock<Promise<void>, [string, string]>;
     };
     let streamFormat: WritableSignal<StreamFormat>;
+    let player: WritableSignal<VideoPlayer>;
     const runtime = { isPwa: false };
 
     const credentials: XtreamCredentials = {
@@ -35,6 +38,7 @@ describe('XtreamUrlService', () => {
 
     beforeEach(() => {
         streamFormat = signal(StreamFormat.TsStreamFormat);
+        player = signal(VideoPlayer.EmbeddedMpv);
         runtime.isPwa = false;
         databaseService = {
             getAppState: jest.fn().mockResolvedValue(null),
@@ -49,6 +53,7 @@ describe('XtreamUrlService', () => {
                 {
                     provide: SettingsStore,
                     useValue: {
+                        player,
                         streamFormat,
                     },
                 },
@@ -89,7 +94,7 @@ describe('XtreamUrlService', () => {
         expect(url).toBe('http://demo.example/live/demo/secret/101.m3u8');
     });
 
-    it('auto-selects HLS for live streams when the provider allows it', () => {
+    it('auto-selects MPEG-TS for native desktop playback when the provider allows it', () => {
         streamFormat.set(StreamFormat.AutoStreamFormat);
 
         const url = service.constructLiveUrl(
@@ -100,7 +105,26 @@ describe('XtreamUrlService', () => {
             101
         );
 
-        expect(url).toBe('http://demo.example/live/demo/secret/101.m3u8');
+        expect(url).toBe('http://demo.example/live/demo/secret/101.ts');
+    });
+
+    it('keeps HLS first for an Electron web player', () => {
+        streamFormat.set(StreamFormat.AutoStreamFormat);
+        player.set(VideoPlayer.VideoJs);
+
+        const primary = service.constructLiveUrl(
+            { ...credentials, allowedOutputFormats: ['ts', 'm3u8'] },
+            101
+        );
+        const fallback = service.constructAutoLiveFallbackUrl(
+            { ...credentials, allowedOutputFormats: ['ts', 'm3u8'] },
+            101
+        );
+
+        expect(primary).toBe(
+            'http://demo.example/live/demo/secret/101.m3u8'
+        );
+        expect(fallback).toBe('http://demo.example/live/demo/secret/101.ts');
     });
 
     it('auto-selects MPEG-TS for live streams when it is the only provider format', () => {
@@ -117,12 +141,12 @@ describe('XtreamUrlService', () => {
         expect(url).toBe('http://demo.example/live/demo/secret/101.ts');
     });
 
-    it('uses HLS as the auto live-stream fallback when provider formats are unknown', () => {
+    it('uses MPEG-TS as the native desktop Auto format when provider formats are unknown', () => {
         streamFormat.set(StreamFormat.AutoStreamFormat);
 
         const url = service.constructLiveUrl(credentials, 101);
 
-        expect(url).toBe('http://demo.example/live/demo/secret/101.m3u8');
+        expect(url).toBe('http://demo.example/live/demo/secret/101.ts');
     });
 
     it('keeps the manual live-stream format override when provider formats are unknown', () => {
@@ -292,6 +316,21 @@ describe('XtreamUrlService', () => {
             expect(prefersTsFirstForWebLive(browser)).toBe(expected);
         }
     );
+
+    it.each([
+        VideoPlayer.EmbeddedMpv,
+        VideoPlayer.MPV,
+        VideoPlayer.VLC,
+    ])('uses TS first for the native desktop player %s', (nativePlayer) => {
+        expect(prefersTsFirstForDesktopLive(nativePlayer)).toBe(true);
+    });
+
+    it('does not force TS first for desktop web players', () => {
+        expect(prefersTsFirstForDesktopLive(VideoPlayer.VideoJs)).toBe(false);
+        expect(prefersTsFirstForDesktopLive(VideoPlayer.ArtPlayer)).toBe(
+            false
+        );
+    });
 
     it('builds an Auto TS alternative with encoded credentials and the provider subpath', () => {
         streamFormat.set(StreamFormat.AutoStreamFormat);

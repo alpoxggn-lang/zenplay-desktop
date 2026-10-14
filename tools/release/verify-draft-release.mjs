@@ -61,6 +61,14 @@ export function requiredAssetRules(version) {
 
     rules.push(exact('Windows', windowsSetup));
     rules.push(exact('Windows blockmap', `${windowsSetup}.blockmap`));
+    rules.push(exact('Stable Windows download alias', 'ZenPlay-Windows.exe'));
+    rules.push(exact('Stable Intel Mac download alias', 'ZenPlay-Mac-Intel.dmg'));
+    rules.push(
+        exact(
+            'Stable Apple Silicon Mac download alias',
+            'ZenPlay-Mac-Apple-Silicon.dmg'
+        )
+    );
 
     for (const arch of ['amd64', 'arm64', 'armv7l']) {
         rules.push(exact('DEB', `iptvnator-${version}-linux-${arch}.deb`));

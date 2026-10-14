@@ -11,7 +11,9 @@ import {
     APP_UPDATE_STATUS_CHANGED,
     ACKNOWLEDGE_PLAYLIST_OPEN_REQUEST,
     ANNOUNCE_PLAYLIST_OPEN_LISTENER,
+    APP_RESUMED,
     OPEN_FILE,
+    ZENPLAY_ACCOUNT_EXPIRY_NOTIFY,
 } from '@iptvnator/shared/interfaces';
 import type {
     DownloadMetadataSnapshot,
@@ -274,6 +276,33 @@ describe('main preload DB IPC contract', () => {
         expect(mockIpcRenderer.off).toHaveBeenCalledWith(
             APP_UPDATE_STATUS_CHANGED,
             handler
+        );
+    });
+
+    it('exposes the narrow ZenPlay expiry notification and OS-resume bridge', async () => {
+        const api = getExposedApi();
+        const request = {
+            kind: 'tomorrow',
+            expiresOn: '2026-10-15',
+        };
+        const callback = jest.fn();
+
+        await api['showZenPlayAccountExpiryNotification'](request);
+        const unsubscribe = api['onAppResume'](callback) as () => void;
+        const resumeHandler = mockIpcRenderer.on.mock.calls.find(
+            ([channel]) => channel === APP_RESUMED
+        )?.[1];
+        resumeHandler?.({});
+        unsubscribe();
+
+        expect(mockIpcRenderer.invoke).toHaveBeenCalledWith(
+            ZENPLAY_ACCOUNT_EXPIRY_NOTIFY,
+            request
+        );
+        expect(callback).toHaveBeenCalledTimes(1);
+        expect(mockIpcRenderer.off).toHaveBeenCalledWith(
+            APP_RESUMED,
+            resumeHandler
         );
     });
 

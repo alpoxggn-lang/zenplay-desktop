@@ -10,6 +10,7 @@ import { SerialDetailsComponent } from './serial-details.component';
 import { SerialDetailsMenuService } from './serial-details-menu.service';
 import { SerialDetailsPlaybackService } from './serial-details-playback.service';
 import { createPlaybackSessionKey } from '@iptvnator/playback/util';
+import { XTREAM_DETAIL_AUTOPLAY_STATE_KEY } from '@iptvnator/portal/shared/util';
 import {
     configureSerialDetailsTestBed,
     createSerialDetailsStubs,
@@ -51,6 +52,35 @@ describe('SerialDetailsComponent', () => {
     afterEach(() => {
         window.history.replaceState({}, '', window.location.href);
         fixture?.destroy();
+    });
+
+    it('starts the first available episode once when dashboard Play supplies the autoplay handoff', async () => {
+        window.history.replaceState(
+            {
+                [XTREAM_DETAIL_AUTOPLAY_STATE_KEY]: {
+                    playlistId: 'xtream-1',
+                    contentType: 'series',
+                    contentId: 103,
+                },
+            },
+            '',
+            window.location.href
+        );
+
+        fixture.detectChanges();
+        await fixture.whenStable();
+        fixture.detectChanges();
+
+        expect(constructEpisodeStreamUrl).toHaveBeenCalledWith(
+            expect.objectContaining({ id: '1001' })
+        );
+        expect(openResolvedPlayback).toHaveBeenCalledTimes(1);
+        expect(
+            window.history.state[XTREAM_DETAIL_AUTOPLAY_STATE_KEY]
+        ).toBeUndefined();
+
+        fixture.detectChanges();
+        expect(openResolvedPlayback).toHaveBeenCalledTimes(1);
     });
 
     it('initializes series metadata and renders the season container', async () => {
@@ -337,6 +367,54 @@ describe('SerialDetailsComponent', () => {
                     contentXtreamId: 1001,
                 }),
             }),
+            true
+        );
+    });
+
+    it('does not expose a temporary Play action before resume progress loads', async () => {
+        let resolvePositions!: (positions: PlaybackPositionData[]) => void;
+        getSeriesPlaybackPositions.mockReturnValueOnce(
+            new Promise<PlaybackPositionData[]>((resolve) => {
+                resolvePositions = resolve;
+            })
+        );
+
+        fixture.detectChanges();
+        fixture.detectChanges();
+
+        const quickStartButton = (): HTMLButtonElement | null =>
+            fixture.nativeElement.querySelector(
+                '[data-testid="series-quick-start"]'
+            );
+        expect(quickStartButton()?.disabled).toBe(true);
+
+        quickStartButton()?.click();
+        expect(openResolvedPlayback).not.toHaveBeenCalled();
+
+        resolvePositions([
+            {
+                contentXtreamId: 1001,
+                contentType: 'episode',
+                seriesXtreamId: 103,
+                seasonNumber: 1,
+                episodeNumber: 1,
+                positionSeconds: 42,
+                durationSeconds: 120,
+                playlistId: 'xtream-1',
+                updatedAt: '2026-05-10T12:00:00.000Z',
+            },
+        ]);
+        await fixture.whenStable();
+        fixture.detectChanges();
+
+        expect(quickStartButton()?.disabled).toBe(false);
+        expect(quickStartButton()?.textContent).toContain(
+            'WORKSPACE.DASHBOARD.HERO_CONTINUE'
+        );
+
+        quickStartButton()?.click();
+        expect(openResolvedPlayback).toHaveBeenCalledWith(
+            expect.objectContaining({ startTime: 42 }),
             true
         );
     });

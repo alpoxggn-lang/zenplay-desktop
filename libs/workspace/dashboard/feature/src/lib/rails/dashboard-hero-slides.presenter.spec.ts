@@ -20,6 +20,7 @@ import {
     DashboardHeroSlidesPresenter,
 } from './dashboard-hero-slides.presenter';
 import type { DashboardHeroLiveCandidate } from './dashboard-hero-slides.utils';
+import type { ZenPlayCatalogItem } from './dashboard-zenplay-catalog';
 import { DashboardLiveEpgPresenter } from './dashboard-live-epg.presenter';
 import type { DashboardLiveEpgDetails } from './dashboard-live-epg.utils';
 
@@ -90,7 +91,7 @@ const onAir: DashboardLiveEpgDetails = {
 describe('DashboardHeroSlidesPresenter', () => {
     let recentItems: ReturnType<typeof signal<PortalRecentItem[]>>;
     let favorites: ReturnType<typeof signal<PortalFavoriteItem[]>>;
-    let addedItems: ReturnType<typeof signal<PortalAddedItem[]>>;
+    let addedItems: ReturnType<typeof signal<ZenPlayCatalogItem[]>>;
     let candidates: ReturnType<typeof signal<DashboardHeroLiveCandidate[]>>;
     let liveDetails: jest.Mock;
     let tmdbEnabled: ReturnType<typeof signal<boolean>>;
@@ -176,6 +177,10 @@ describe('DashboardHeroSlidesPresenter', () => {
                         ],
                         getRecentlyAddedNavigationState: () => ({
                             added: true,
+                        }),
+                        getRecentlyAddedPlayNavigationState: () => ({
+                            added: true,
+                            autoPlay: true,
                         }),
                     },
                 },
@@ -311,11 +316,15 @@ describe('DashboardHeroSlidesPresenter', () => {
             year: currentYear,
             backdropUrl: 'https://img/movie-one-wide.jpg',
             primaryAction: {
+                labelKey: 'XTREAM.PLAY',
+                link: ['/added', '11'],
+                state: { added: true, autoPlay: true },
+            },
+            secondaryAction: {
                 labelKey: 'WORKSPACE.DASHBOARD.HERO_DETAILS',
                 link: ['/added', '11'],
                 state: { added: true },
             },
-            secondaryAction: null,
         });
         expect(slides.some((slide) => slide.title === 'Big Pharma')).toBe(
             false
@@ -448,7 +457,11 @@ describe('DashboardHeroSlidesPresenter', () => {
         });
         expect(slides[3]).toMatchObject({
             backdropSource: 'backdrop',
-            primaryAction: { link: ['/added', '5'], state: { added: true } },
+            primaryAction: {
+                link: ['/added', '5'],
+                state: { added: true, autoPlay: true },
+            },
+            secondaryAction: { link: ['/added', '5'], state: { added: true } },
         });
     });
 

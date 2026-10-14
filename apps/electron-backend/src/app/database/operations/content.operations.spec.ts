@@ -363,6 +363,31 @@ describe('content.operations', () => {
         expect(result.map((item) => item.id)).toEqual([2, 1]);
     });
 
+    it('returns a bounded live sample even when channels have no added timestamp', async () => {
+        const { db, queries } = createRecentlyAddedDbMock([
+            [
+                {
+                    id: 3,
+                    added_at: '',
+                    type: 'live',
+                    title: 'Channel without timestamp',
+                },
+            ],
+        ]);
+
+        const result = await getGlobalRecentlyAdded(db, 'live', 12, 'xtream');
+
+        expect(eqMock).toHaveBeenCalledWith(schema.content.type, 'live');
+        expect(queries[0].limit).toHaveBeenCalledWith(12);
+        expect(queries[0].where.mock.calls[0][0].conditions).toHaveLength(4);
+        expect(result).toEqual([
+            expect.objectContaining({
+                title: 'Channel without timestamp',
+                type: 'live',
+            }),
+        ]);
+    });
+
     it('builds M3U global search results from playlist payloads and respects hidden groups', () => {
         const visibleChannel = {
             id: 'channel-news',

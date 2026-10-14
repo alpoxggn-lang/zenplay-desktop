@@ -44,10 +44,9 @@ interface AppUpdateRepository {
 }
 
 const APP_UPDATE_REPOSITORIES: Record<AppUpdateChannel, AppUpdateRepository> = {
-    // TODO(zenplay-desktop-updates): these ZenPlay repositories are reserved
-    // destinations and may return 404 until they are created and confirmed.
-    // Keeping the pending destination here is deliberate: a development build
-    // must fail safely instead of contacting or installing upstream releases.
+    // Stable is the confirmed public ZenPlay release repository. Nightly stays
+    // a fail-safe pending destination until that separate public repository is
+    // created; a development build must never fall back to upstream releases.
     stable: { owner: 'alpoxggn-lang', repo: 'zenplay-desktop' },
     nightly: {
         owner: 'alpoxggn-lang',

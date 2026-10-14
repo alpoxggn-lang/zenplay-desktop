@@ -37,4 +37,29 @@ describe('ZenPlayProfileService', () => {
         expect(service.select('missing')).toBe(false);
         expect(service.selectedProfile()).toBeNull();
     });
+
+    it('renames a profile and persists the updated name', () => {
+        const service = TestBed.inject(ZenPlayProfileService);
+        const profile = service.addAndSelect('Principal');
+
+        expect(service.rename(profile?.id ?? '', '  Familia  ')?.name).toBe(
+            'Familia'
+        );
+
+        TestBed.resetTestingModule();
+        TestBed.configureTestingModule({ providers: [ZenPlayProfileService] });
+        expect(TestBed.inject(ZenPlayProfileService).profiles()[0]?.name).toBe(
+            'Familia'
+        );
+    });
+
+    it('removes a profile and clears its active selection', () => {
+        const service = TestBed.inject(ZenPlayProfileService);
+        const profile = service.addAndSelect('Infantil');
+
+        expect(service.remove(profile?.id ?? '')).toBe(true);
+        expect(service.profiles()).toEqual([]);
+        expect(service.selectedProfile()).toBeNull();
+        expect(service.remove(profile?.id ?? '')).toBe(false);
+    });
 });

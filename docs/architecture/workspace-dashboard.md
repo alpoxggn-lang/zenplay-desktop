@@ -20,12 +20,12 @@ Related:
   `dashboardRails().<key>`. Rails additionally auto-hide when empty.
 - First-run users see the shared welcome empty-state with a single primary
   CTA to add their first playlist.
-- The managed ZenPlay PWA keeps the same dashboard shell but curates its first
-  sections like the Android client: Tendencias is the large cinematic
-  carousel, followed by recently added movies, recently added series, and
-  Continue Watching. Desktop retains its original personalized hero-first
-  layout. The generic source shortcut and mixed recently-added rows stay
-  desktop-only so a one-source managed account does not repeat itself.
+- The branded ZenPlay home uses the same curated order in the PWA and the
+  installed Windows/macOS runtime: a cinematic Tendencias carousel, one
+  Continue Watching row, recently added movies, new/recently updated series,
+  and TV en vivo. Live and VOD favorites follow only when they contain real
+  user data. Generic source, mixed recently-added and TMDB rows do not render
+  on this home surface.
 
 Core implementation:
 
@@ -43,31 +43,21 @@ Core implementation:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│  Hero — rotating cinematic banner (resume · live · discovery)       │
+│  Tendencias — rotating cinematic catalog banner                     │
 ├─────────────────────────────────────────────────────────────────────┤
 │  Continue Watching · See all →                                      │
 │  [poster][poster][poster][poster] →→                                │
 ├─────────────────────────────────────────────────────────────────────┤
-│  Live now on your favorites · See all →                             │
-│  [channel][channel][channel][channel] →→                            │
-├─────────────────────────────────────────────────────────────────────┤
-│  Recently watched live TV · See all →                               │
-│  [channel][channel][channel][channel] →→                            │
-├─────────────────────────────────────────────────────────────────────┤
-│  Favorite movies & series · See all →                               │
+│  Recently added movies                                              │
 │  [poster][poster][poster][poster] →→                                │
 ├─────────────────────────────────────────────────────────────────────┤
-│  Recently Used Sources · See all →                                  │
-│  [tile][tile][tile][tile] →→                                        │
+│  New and recently updated series                                    │
+│  [poster][poster][poster][poster] →→                                │
 ├─────────────────────────────────────────────────────────────────────┤
-│  Recently Added on Xtream (aggregated across providers)             │
-│  [poster][poster][poster] →→                                        │
+│  TV en vivo (recent channels, otherwise bounded catalog sample)     │
+│  [channel][channel][channel][channel] →→                            │
 ├─────────────────────────────────────────────────────────────────────┤
-│  Because you watched X (TMDB, opt-in, Electron-only)                │
-│  [poster][poster][poster] →→                                        │
-├─────────────────────────────────────────────────────────────────────┤
-│  Trending this week (TMDB, opt-in, Electron-only)                   │
-│  [poster][poster][poster] →→                                        │
+│  Live / movie / series favorites (only when non-empty)              │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -128,6 +118,17 @@ heights resized the banner and moved every rail below it, every 8 s on an idle
 dashboard. Late data (TMDB extras, the live slide's first EPG answer, the next
 programme) can still grow the tallest slide, once, when it arrives.
 
+The ZenPlay home mounts the hero in `zenplay-trending` mode on both PWA and
+desktop. That mode derives its slides from the real recently-added movie and
+series pool (current-year first, newest real titles as fallback) and does not
+repeat Continue Watching. A large ZenPlay silver/blue/purple `Tendencias`
+heading sits immediately above the one panoramic hero; there is no second
+poster ranking row and no made-up rank badge because the provider catalog does
+not expose a real popularity position. The shorter desktop panorama keeps the
+first rail visible on common laptop windows. The personalized source selection
+described below remains the contract for callers that explicitly use
+`personalized` mode.
+
 Slides (`pickDashboardHeroSources`, at most four, stable order, each title
 once):
 
@@ -187,26 +188,27 @@ Slide changes are announced by one polite live region
 (`dashboard-hero-announcement`, position and title) that lives outside the
 slides and is silent while the slides rotate on their own. A
 slide's progress bar is named after its title (a live slide: the programme)
-and a title's reads "N% watched". The dots are 26 × 24px targets (WCAG 2.5.8)
-of one fixed width; the active pill is the same 18px bar with its
-`clip-path` opened, so a slide change moves no dot.
+and a title's reads "N% watched". The passive indicators keep one fixed 18px
+footprint; the active pill opens with `clip-path`, so a slide change moves no
+indicator. They are deliberately not buttons: no previous, next or pause
+control is superimposed on the artwork.
 
-Rotation is the active dot's CSS fill animation (8 s); its `animationend`
+Rotation is the active indicator's CSS fill animation (8 s); its `animationend`
 advances. The fill animates `transform` only (a bar sliding in under the
 pill's rounded clip), so it runs on the compositor; animating `width` there
 cost a style, layout and paint pass on every frame of an idle dashboard.
-Hover, focus inside the hero, a hidden document and the pause button pause
-it; an explicit Play clears the hover/focus pause until they re-arm; under
-`prefers-reduced-motion` nothing auto-advances. The hero is a focusable
-region: ←/→ switch slides and Enter follows the primary action. The active slide is tracked
-by id, so a late live slide never moves the user off the current one. Test
-hooks: `dashboard-hero`, `dashboard-hero-slide` (`data-hero-kind`),
-`dashboard-hero-dot`, `dashboard-hero-pause`,
+Hover, focus inside the hero, pointer/trackpad interaction and a hidden
+document pause it; under `prefers-reduced-motion` nothing auto-advances. The
+hero is a focusable region: ←/→ switch slides, Enter follows the primary
+action, and a horizontal trackpad or touch swipe changes slide without adding
+overlay controls. The active slide is tracked by id, so a late live slide never
+moves the user off the current one. Test hooks: `dashboard-trending-heading`,
+`dashboard-hero`, `dashboard-hero-slide` (`data-hero-kind`), `dashboard-hero-dot`,
 `dashboard-hero-primary-action`, `dashboard-hero-secondary-action`. The
 slide hooks mark the shown slide only; the inert slides carry none.
 `dashboard-hero-rotation.e2e.ts` drives the real fill animation (with a
 shortened `--hero-rotation-ms`) to prove its `animationend` still advances
-and that pause holds the slide. `dashboard-hero-legibility.e2e.ts` sums the
+and that hover holds the slide. `dashboard-hero-legibility.e2e.ts` sums the
 layout shifts of an unattended rotation, at the wide width and again at the
 narrow one once every slide carries a rating and an overview: under 0.001 in
 all, and none inside the hero.
@@ -437,20 +439,23 @@ all, and none inside the hero.
           channel layout then shows a shimmer placeholder in the programme
           slot; a refresh keeps the previous answer on screen.
     4. `xtreamRecentlyAddedCards` — maps `xtreamRecentlyAddedItems()` to rail
-       cards. Electron aggregates newly added VOD and series across _all_
-       Xtream playlists through `getGlobalRecentlyAdded('all', limit,
-'xtream')`. The PWA instead asks each active Xtream source for its movie
-       and series catalogs through `XTREAM_DATA_SOURCE.getContent()`, which
-       reuses the session cache after the first request; one failed catalog
-       does not discard successful sources or content types. It never loads
-       live channels for this surface. The managed web home then splits that
+       cards. Electron performs separate bounded, index-backed reads for VOD
+       and series across _all_ Xtream playlists so one busy content type cannot
+       consume the other's window. A third 20-row live read supplies the fixed
+       TV en vivo row for a new account without transferring the full channel
+       catalog; it does not require an `added` timestamp because many providers
+       omit one for channels. The PWA instead asks each active Xtream source for
+       its movie and series catalogs through `XTREAM_DATA_SOURCE.getContent()`,
+       which reuses the session cache after the first request; one failed
+       catalog does not discard successful sources or content types. It never
+       loads live channels for this surface. The branded home splits the VOD
        pool into Tendencias (newest current-year movies and series, alternated),
        recently added movies, and recently added series. Quality/language
        editions collapse to one title, locked categories remain filtered by
        the data source, and provider rating/date metadata is shown without
-       inventing a global play count. The desktop keeps its existing mixed
-       rail. Loading starts after global favorites settle so it does not block
-       Continue Watching or the first useful dashboard content.
+       inventing a global play count. Loading starts after global favorites
+       settle so it does not block Continue Watching or the first useful
+       dashboard content.
     5. `recommendationCards` / `trendingCards` — the two TMDB rails. Both
        need the TMDB opt-in AND the Electron DB worker that answers
        `DB_MATCH_TITLES` (each is hidden in the PWA), and both load after
@@ -539,10 +544,9 @@ The welcome state is rendered via the existing
    ordinary collection-grid clicks.
 7. `Recently Used Sources` reflects recent source usage across all provider
    types, not just recent imports.
-8. The live rail title key must match the rendered source: favorites use
-   `WORKSPACE.DASHBOARD.LIVE_FAVORITES`; the recently-watched-live rail uses
-   `WORKSPACE.DASHBOARD.RECENTLY_WATCHED_LIVE_TV`
-   (`liveRailTitleKeyForSource` in `rails/dashboard-rail.utils.ts`).
+8. The fixed ZenPlay TV rail uses `WORKSPACE.SHELL.RAIL_LIVE`, whether its
+   cards come from history or the cold-account catalog sample. The separate
+   favorites row uses `WORKSPACE.DASHBOARD.LIVE_FAVORITES`.
 
 ## Adding Or Changing Rails
 

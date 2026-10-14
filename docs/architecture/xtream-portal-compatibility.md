@@ -238,12 +238,14 @@ the shared constant instead of inlining the string again.
 
 When account info includes `user_info.allowed_output_formats`, the current
 Xtream playlist keeps those formats for the active session. The default
-application format is `auto`: live stream URL construction chooses `m3u8` when
-the provider allows HLS in Electron and Safari/iOS. In the PWA, Chromium,
-Edge, and Firefox choose `ts` first when the account advertises both formats;
-Safari, iPhone, and iPad choose `m3u8` first. A single advertised format is
-respected, and otherwise Auto uses the first provider-advertised format. If the
-provider does not advertise output formats, `auto` falls back to `m3u8`.
+application format is `auto`: native desktop MPV/VLC engines choose `ts` first
+so they consume the provider stream directly, while Electron web engines choose
+`m3u8` first. In the PWA, Chromium, Edge, and Firefox choose `ts` first when
+the account advertises both formats; Safari, iPhone, and iPad choose `m3u8`
+first. A single advertised format is respected, and otherwise Auto uses the
+first provider-advertised format. If the provider does not advertise output
+formats, `auto` uses `ts` for native desktop engines and `m3u8` for the other
+paths.
 Manual `ts` and `m3u8` settings remain supported; when a manual setting is not
 allowed by the portal, URL construction falls back to the first
 provider-allowed format.
@@ -288,8 +290,8 @@ advertised formats on the next channel.
 | ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | HTML5 / ArtPlayer, hls.js                | One advertised HLS/TS alternate after an eligible initial HTTP failure; waits for the engine's own bounded retries                                                                                        |
 | Video.js / VHS                           | One advertised HLS/TS alternate after an eligible HTTP diagnostic or initial opaque MediaError 4                                                                                                          |
-| External MPV / VLC                       | Manual TS only. Process launch/exit and best-effort playing telemetry do not reliably identify the initial HLS media HTTP failure                                                                          |
-| Embedded MPV                             | Manual TS only; no equivalent structured HTTP diagnostic                                                                                                                                                   |
+| External MPV / VLC                       | Auto selects TS first. Process launch/exit and best-effort playing telemetry do not reliably identify an initial media HTTP failure for automatic alternate switching                                    |
+| Embedded MPV                             | Auto selects TS first. Its reconnect policy handles stream loss after playback, but it has no equivalent structured initial HTTP diagnostic for automatic alternate switching                            |
 | Unified Favorites/Recent live resolution | Manual TS; it does not own fresh session account-format evidence                                                                                                                                           |
 
 For manual recovery, stop the current player, choose **Settings > Playback >

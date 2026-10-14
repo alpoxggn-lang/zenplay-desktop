@@ -253,6 +253,34 @@ describe('SettingsStore desktop player default', () => {
         expect(storage.set).not.toHaveBeenCalled();
     });
 
+    it('migrates the legacy persisted Video.js default to supported Embedded MPV once', async () => {
+        getEmbeddedMpvSupport.mockResolvedValue(SUPPORTED);
+
+        const store = await createStore({ player: VideoPlayer.VideoJs });
+
+        expect(store.player()).toBe(VideoPlayer.EmbeddedMpv);
+        expect(storage.set).toHaveBeenCalledWith(
+            STORE_KEY.Settings,
+            expect.objectContaining({
+                player: VideoPlayer.EmbeddedMpv,
+                desktopNativePlayerMigrationVersion: 1,
+            })
+        );
+    });
+
+    it('preserves Video.js after the desktop native-player migration was acknowledged', async () => {
+        getEmbeddedMpvSupport.mockResolvedValue(SUPPORTED);
+
+        const store = await createStore({
+            player: VideoPlayer.VideoJs,
+            desktopNativePlayerMigrationVersion: 1,
+        });
+
+        expect(store.player()).toBe(VideoPlayer.VideoJs);
+        expect(getEmbeddedMpvSupport).not.toHaveBeenCalled();
+        expect(storage.set).not.toHaveBeenCalled();
+    });
+
     it('preserves an explicit saved web-player selection', async () => {
         getEmbeddedMpvSupport.mockResolvedValue(SUPPORTED);
 
@@ -287,5 +315,26 @@ describe('SettingsStore desktop player default', () => {
             storage.set.mock.calls.map(([, settings]) => settings.player)
         ).toEqual([VideoPlayer.ArtPlayer]);
         expect(getEmbeddedMpvSupport).toHaveBeenCalledTimes(2);
+    });
+
+    it('records a manual Video.js choice while the native support check is pending', async () => {
+        getEmbeddedMpvSupport
+            .mockResolvedValueOnce(INCONCLUSIVE)
+            .mockResolvedValue(SUPPORTED);
+        const store = await createStore(null);
+
+        await store.updateSettings({ player: VideoPlayer.VideoJs });
+        await jest.advanceTimersByTimeAsync(
+            EMBEDDED_MPV_SUPPORT_RECHECK_MS * 20
+        );
+
+        expect(store.player()).toBe(VideoPlayer.VideoJs);
+        expect(storage.set).toHaveBeenCalledWith(
+            STORE_KEY.Settings,
+            expect.objectContaining({
+                player: VideoPlayer.VideoJs,
+                desktopNativePlayerMigrationVersion: 1,
+            })
+        );
     });
 });

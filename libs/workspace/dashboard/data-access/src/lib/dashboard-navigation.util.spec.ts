@@ -1,11 +1,14 @@
 import type {
     PlaybackPositionData,
+    PortalAddedItem,
     PortalRecentItem,
 } from '@iptvnator/shared/interfaces';
 import {
     getRecentItemDetailNavigationState,
     getRecentItemNavigationState,
     getRecentItemResumeNavigation,
+    getRecentlyAddedNavigationState,
+    getRecentlyAddedPlayNavigationState,
 } from './dashboard-navigation.util';
 
 const recentSeries: PortalRecentItem = {
@@ -189,5 +192,48 @@ describe('getRecentItemResumeNavigation', () => {
                 episodePosition({ seriesXtreamId: 17572 })
             )
         ).toBeNull();
+    });
+});
+
+describe('recently added hero actions', () => {
+    const addedMovie: PortalAddedItem = {
+        id: 910916,
+        title: 'ZenPlay Movie',
+        type: 'movie',
+        source: 'xtream',
+        playlist_id: 'zenplay-primary',
+        category_id: 1597,
+        xtream_id: 910916,
+        added_at: '2026-10-14T00:00:00.000Z',
+    };
+
+    it('adds direct-play state only to the explicit Play action', () => {
+        expect(getRecentlyAddedNavigationState(addedMovie)).toBeUndefined();
+        expect(getRecentlyAddedPlayNavigationState(addedMovie)).toEqual({
+            autoPlayXtreamDetail: {
+                playlistId: 'zenplay-primary',
+                contentType: 'movie',
+                contentId: 910916,
+            },
+        });
+    });
+
+    it('scopes direct play to Xtream VOD and series', () => {
+        expect(
+            getRecentlyAddedPlayNavigationState({
+                ...addedMovie,
+                source: 'm3u',
+            })
+        ).toBeUndefined();
+        expect(
+            getRecentlyAddedPlayNavigationState({
+                ...addedMovie,
+                type: 'live',
+            })
+        ).toEqual(
+            expect.objectContaining({
+                openXtreamLiveItemId: 910916,
+            })
+        );
     });
 });

@@ -78,7 +78,7 @@ describe('renderTelegramPost', () => {
         assert.doesNotMatch(post, /Stalker resume|EPG no longer/);
         assert.match(
             post,
-            /⬇️ Download: https:\/\/github\.com\/4gray\/iptvnator\/releases\/tag\/v0\.24\.0/
+            /⬇️ Download: https:\/\/github\.com\/alpoxggn-lang\/zenplay-desktop\/releases\/tag\/v0\.24\.0/
         );
         assert.match(
             post,
@@ -209,7 +209,7 @@ describe('renderRedditPost', () => {
         assert.match(post, /\*\*Fixes\*\*\n\n- \*\*stalker\*\* — Resume works\./);
         assert.match(
             post,
-            /\[Download\]\(https:\/\/github\.com\/4gray\/iptvnator\/releases\/tag\/v0\.24\.0\)/
+            /\[Download\]\(https:\/\/github\.com\/alpoxggn-lang\/zenplay-desktop\/releases\/tag\/v0\.24\.0\)/
         );
         assert.match(
             post,

@@ -34,6 +34,29 @@
     }
 }
 
+.rails-page__trending-heading {
+    position: relative;
+    z-index: 2;
+    width: fit-content;
+    margin: 0 0 -22px;
+    font-size: clamp(28px, 3.2cqw, 44px);
+    font-weight: 700;
+    line-height: 1;
+    letter-spacing: -0.035em;
+    color: var(--app-heading-color, #d8dce8);
+
+    &::after {
+        content: '';
+        display: block;
+        width: min(96px, 42%);
+        height: 3px;
+        margin-top: 10px;
+        border-radius: 999px;
+        background: linear-gradient(90deg, #eef2f8, #42c8ff, #a66cff);
+        box-shadow: 0 0 14px color-mix(in srgb, #42c8ff 38%, transparent);
+    }
+}
+
 .rails-page--empty {
     flex: 1;
     max-width: none;
@@ -55,5 +78,22 @@
 
     .rails-page {
         gap: 24px;
+    }
+
+    .rails-page__trending-heading {
+        margin-bottom: -16px;
+        font-size: clamp(26px, 8cqw, 36px);
+    }
+}
+
+@media (forced-colors: active) {
+    .rails-page__trending-heading {
+        background: none;
+        -webkit-text-fill-color: currentColor;
+
+        &::after {
+            background: currentColor;
+            box-shadow: none;
+        }
     }
 }

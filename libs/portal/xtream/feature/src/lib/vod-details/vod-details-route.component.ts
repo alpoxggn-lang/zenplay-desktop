@@ -29,7 +29,10 @@ import {
     VodMoreMenuComponent,
     scrollToCastCrewRow,
 } from '@iptvnator/ui/components';
-import { createLogger } from '@iptvnator/portal/shared/util';
+import {
+    consumeXtreamDetailAutoplayState,
+    createLogger,
+} from '@iptvnator/portal/shared/util';
 import {
     registerContentMetadataBackfill,
     XtreamStore,
@@ -118,6 +121,8 @@ export class VodDetailsRouteComponent implements OnInit, OnDestroy {
     private readonly logger = createLogger('VodDetailsRoute');
     /** `playlistId:vodId` of the last initialized detail view */
     private readonly lastInitKey = signal<string | null>(null);
+    /** Exact-once fallback if a host refuses history.replaceState. */
+    private readonly consumedAutoplayKeys = new Set<string>();
     readonly inlinePlayback = this.playback.inlinePlayback;
     readonly vodPlaybackPosition = this.playback.vodPlaybackPosition;
     /** The route copy's own row — what Resume acts on. */
@@ -278,6 +283,37 @@ export class VodDetailsRouteComponent implements OnInit, OnDestroy {
             this.playback.routePlaybackPosition.set(null);
             this.msUi.reset();
             this.initializeVodDetails(playlistId, vodId);
+        });
+
+        // The dashboard Play CTA opens this route so every existing guard and
+        // source-selection rule still applies. It differs from Details only
+        // by this one-shot, identity-scoped handoff, taken after both the
+        // playable item and its saved position are ready.
+        effect(() => {
+            const playlistId = this.xtreamStore.currentPlaylist()?.id;
+            const vodId = this.selectedVodId();
+            const item = this.playableVodItem();
+            const autoplayKey = `${playlistId ?? ''}:movie:${vodId}`;
+            if (
+                !playlistId ||
+                !item ||
+                !this.playback.positionLoaded() ||
+                this.startBlocked() ||
+                this.consumedAutoplayKeys.has(autoplayKey)
+            ) {
+                return;
+            }
+
+            if (
+                consumeXtreamDetailAutoplayState({
+                    playlistId,
+                    contentType: 'movie',
+                    contentId: vodId,
+                })
+            ) {
+                this.consumedAutoplayKeys.add(autoplayKey);
+                void this.onPrimaryAction(item);
+            }
         });
 
         this.watched.bind(this.selectedVodId);
@@ -459,6 +495,10 @@ export class VodDetailsRouteComponent implements OnInit, OnDestroy {
                 return;
             }
         }
+        await this.waitForRoutePosition();
+        if (this.startBlocked()) {
+            return;
+        }
         if (this.playback.hasPlaybackPosition()) {
             await this.resumeVod(vodItem, player);
             return;
@@ -489,6 +529,17 @@ export class VodDetailsRouteComponent implements OnInit, OnDestroy {
             return;
         }
 
+        // Details and saved progress load concurrently. Wait for the read
+        // already serving this route before deciding between Play and Resume;
+        // otherwise an immediate click can restart a partially watched film.
+        await this.waitForRoutePosition();
+        if (
+            this.startBlocked() ||
+            this.externalPrimaryButtonState() !== 'idle'
+        ) {
+            return;
+        }
+
         // Through the route's OWN wrappers, not the service's: they carry the
         // bookkeeping a route start needs — clearing the playback evidence and
         // replacing whatever timecode an alternative left in the controller.
@@ -498,6 +549,14 @@ export class VodDetailsRouteComponent implements OnInit, OnDestroy {
         }
 
         await this.playVod(vodItem);
+    }
+
+    private waitForRoutePosition(): Promise<void> {
+        const playlistId = this.xtreamStore.currentPlaylist()?.id;
+        const vodId = this.selectedVodId();
+        return playlistId && Number.isSafeInteger(vodId) && vodId > 0
+            ? this.playback.waitForPosition(playlistId, vodId)
+            : Promise.resolve();
     }
 
     stopExternalPlayback(): Promise<void> {

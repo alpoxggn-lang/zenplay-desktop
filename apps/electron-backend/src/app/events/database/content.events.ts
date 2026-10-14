@@ -33,7 +33,7 @@ handleWorkerRequest(
 handleWorkerRequest(
     'DB_GET_GLOBAL_RECENTLY_ADDED',
     (
-        kind: 'all' | 'vod' | 'series' = 'all',
+        kind: 'all' | 'live' | 'vod' | 'series' = 'all',
         limit = 200,
         playlistType?:
             | 'xtream'

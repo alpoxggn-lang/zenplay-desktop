@@ -350,14 +350,22 @@ export class DashboardHeroSlidesPresenter {
                     secondaryAction: null,
                 };
             case 'added':
-            case 'trending':
+            case 'trending': {
+                const link = this.data.getRecentlyAddedLink(source.item);
+                const detailsState = this.data.getRecentlyAddedNavigationState(
+                    source.item
+                );
+                const playState = this.data.getRecentlyAddedPlayNavigationState(
+                    source.item
+                );
                 return {
-                    primaryAction: detailsAction(
-                        this.data.getRecentlyAddedLink(source.item),
-                        this.data.getRecentlyAddedNavigationState(source.item)
-                    ),
-                    secondaryAction: null,
+                    primaryAction: playAction(link, playState),
+                    secondaryAction: {
+                        ...detailsAction(link, detailsState),
+                        testId: 'dashboard-hero-secondary-action',
+                    },
                 };
+            }
             case 'continue':
             case 'recent': {
                 const item = source.item;
@@ -414,6 +422,19 @@ function watchLiveAction(
 ): DashboardHeroAction {
     return {
         labelKey: 'WORKSPACE.DASHBOARD.HERO_WATCH_LIVE',
+        icon: 'play_arrow',
+        link,
+        state,
+        testId: 'dashboard-hero-primary-action',
+    };
+}
+
+function playAction(
+    link: string[],
+    state: Record<string, unknown> | undefined
+): DashboardHeroAction {
+    return {
+        labelKey: 'XTREAM.PLAY',
         icon: 'play_arrow',
         link,
         state,

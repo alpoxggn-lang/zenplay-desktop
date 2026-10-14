@@ -45,14 +45,20 @@ export const EMBEDDED_MPV_HARDWARE_DEFAULT_OPTIONS: readonly string[] = [
 
 /**
  * Applied to every embedded session ahead of the user's options, on every
- * engine: a stalled IPTV connection then surfaces as an mpv error within
- * seconds instead of the 60 s libmpv default, and ffmpeg re-requests a
- * dropped HTTP stream on its own before the app-level reconnect has to. A
- * user line with the same key wins because it is applied later.
+ * engine: a stalled IPTV connection surfaces as an mpv error within seconds
+ * instead of the 60 s libmpv default, a bounded demuxer cache absorbs short
+ * provider/network stalls without holding startup for a large prebuffer, and
+ * ffmpeg re-requests a dropped HTTP stream before app-level reconnect. A user
+ * line with the same key wins because it is applied later.
  */
 export const EMBEDDED_MPV_NETWORK_DEFAULT_OPTIONS: readonly string[] = [
-    'network-timeout=10',
-    'demuxer-lavf-o=reconnect=1,reconnect_streamed=1,reconnect_delay_max=5',
+    'network-timeout=8',
+    'cache=yes',
+    'cache-pause-initial=no',
+    'cache-secs=15',
+    'demuxer-max-bytes=67108864',
+    'demuxer-max-back-bytes=33554432',
+    'demuxer-lavf-o=reconnect=1,reconnect_streamed=1,reconnect_delay_max=2',
 ];
 
 /**

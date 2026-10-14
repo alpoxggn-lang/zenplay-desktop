@@ -4,8 +4,8 @@
         aria-labelledby="profiles-title"
     >
         <img
-            class="zenplay-auth-logo zenplay-auth-logo--small"
-            src="assets/branding/zenplay-logo.png"
+            class="zenplay-auth-logo zenplay-auth-wordmark"
+            src="assets/branding/zenplay-wordmark-horizontal.png"
             alt="ZenPlay"
         />
         <div class="zenplay-auth-copy">
@@ -22,16 +22,89 @@
         @if (profileService.profiles().length) {
             <div class="zenplay-profile-list" aria-label="Perfiles disponibles">
                 @for (profile of profileService.profiles(); track profile.id) {
-                    <button
-                        class="zenplay-profile-option"
-                        type="button"
-                        (click)="chooseProfile(profile.id)"
-                    >
-                        <span class="zenplay-profile-avatar" aria-hidden="true">
-                            {{ initial(profile.name) }}
-                        </span>
-                        <span>{{ profile.name }}</span>
-                    </button>
+                    <article class="zenplay-profile-tile">
+                        <button
+                            class="zenplay-profile-option"
+                            type="button"
+                            (click)="chooseProfile(profile.id)"
+                            [attr.aria-label]="'Entrar con ' + profile.name"
+                        >
+                            <span
+                                class="zenplay-profile-avatar"
+                                aria-hidden="true"
+                            >
+                                {{ initial(profile.name) }}
+                            </span>
+                            <span>{{ profile.name }}</span>
+                        </button>
+
+                        @if (editingProfileId() === profile.id) {
+                            <form
+                                class="zenplay-profile-editor"
+                                [formGroup]="editForm"
+                                (ngSubmit)="saveProfile(profile.id)"
+                                novalidate
+                            >
+                                <label [for]="'profile-edit-' + profile.id">
+                                    Nombre del perfil
+                                </label>
+                                <input
+                                    [id]="'profile-edit-' + profile.id"
+                                    data-test-id="zenplay-profile-edit-input"
+                                    type="text"
+                                    formControlName="name"
+                                    maxlength="24"
+                                    autocomplete="off"
+                                />
+                                <div class="zenplay-profile-editor__actions">
+                                    <button type="submit">Guardar</button>
+                                    <button type="button" (click)="cancelEdit()">
+                                        Cancelar
+                                    </button>
+                                </div>
+                            </form>
+                        } @else if (deleteConfirmationId() === profile.id) {
+                            <div
+                                class="zenplay-profile-delete-confirmation"
+                                role="group"
+                                [attr.aria-label]="
+                                    'Confirmar eliminación de ' + profile.name
+                                "
+                            >
+                                <span>¿Eliminar {{ profile.name }}?</span>
+                                <div class="zenplay-profile-editor__actions">
+                                    <button
+                                        class="zenplay-profile-delete"
+                                        type="button"
+                                        (click)="deleteProfile(profile.id)"
+                                    >
+                                        Sí, eliminar
+                                    </button>
+                                    <button type="button" (click)="cancelDelete()">
+                                        Cancelar
+                                    </button>
+                                </div>
+                            </div>
+                        } @else {
+                            <div class="zenplay-profile-actions">
+                                <button
+                                    type="button"
+                                    (click)="beginEdit(profile)"
+                                    [attr.aria-label]="'Editar ' + profile.name"
+                                >
+                                    Editar
+                                </button>
+                                <button
+                                    class="zenplay-profile-delete"
+                                    type="button"
+                                    (click)="requestDelete(profile.id)"
+                                    [attr.aria-label]="'Eliminar ' + profile.name"
+                                >
+                                    Eliminar
+                                </button>
+                            </div>
+                        }
+                    </article>
                 }
             </div>
         }

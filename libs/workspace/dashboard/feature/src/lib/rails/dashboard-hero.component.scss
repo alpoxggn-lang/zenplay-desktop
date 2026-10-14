@@ -32,6 +32,9 @@
     --hero-text-edge: calc(var(--hero-inset) + var(--hero-text-width));
     --hero-scrim: var(--app-content-bg, #161a22);
     --hero-heading: var(--app-heading-color, #d8dce8);
+    --hero-zenplay-silver: #eef2f8;
+    --hero-zenplay-blue: #42c8ff;
+    --hero-zenplay-purple: #a66cff;
     --hero-body: color-mix(
         in srgb,
         var(--app-heading-color, #d8dce8) 85%,
@@ -75,10 +78,24 @@
     overflow: hidden;
     isolation: isolate;
     color: var(--hero-heading);
+    // Keep vertical page scrolling and pinch zoom native; horizontal travel
+    // belongs to this carousel and is handled as a swipe.
+    touch-action: pan-y pinch-zoom;
+    overscroll-behavior-inline: contain;
 
     &:focus-visible {
         @include focus-ring.focus-ring-declarations($offset: -2px);
     }
+}
+
+// The ZenPlay home owns a separate Tendencias heading directly above this
+// panorama, so it no longer needs to cancel the page's top gutter. A shorter
+// artwork tail keeps the first content rail visible on common laptop windows.
+.hero--zenplay-trending {
+    --hero-tail: 96px;
+
+    min-height: calc(clamp(300px, 34vh, 410px) + var(--hero-tail));
+    margin-top: 0;
 }
 
 :host-context(.dark-theme) .hero {
@@ -496,144 +513,100 @@
     opacity: 0.8;
 }
 
-// ── Rotation controls ──────────────────────────────────────────────────────
-.hero__controls {
+// ── Rotation indicators ────────────────────────────────────────────────────
+// Navigation belongs to the focused hero (keyboard) and to horizontal
+// trackpad/touch gestures. The only overlay is this passive progress group:
+// no previous/next/pause buttons compete with the artwork.
+.hero__indicators {
     position: absolute;
     right: var(--hero-inset);
     bottom: calc(34px + var(--hero-tail));
     z-index: 1;
     display: flex;
     align-items: center;
-    gap: 2px;
-    padding: 2px 4px;
+    gap: 7px;
+    padding: 7px 9px;
+    border: 1px solid
+        color-mix(in srgb, var(--hero-zenplay-silver) 10%, transparent);
     border-radius: 999px;
-    // Keeps the dots legible over bright key art in both themes.
-    background: color-mix(in srgb, var(--hero-scrim) 55%, transparent);
-    -webkit-backdrop-filter: blur(10px);
-    backdrop-filter: blur(10px);
+    background: color-mix(in srgb, var(--hero-scrim) 42%, transparent);
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.12);
+    -webkit-backdrop-filter: blur(9px);
+    backdrop-filter: blur(9px);
+    pointer-events: none;
 }
 
-.hero__pause {
+// Every indicator keeps one footprint. The active one opens into a pill,
+// but no sibling moves when the slide changes.
+.hero__indicator {
     display: grid;
     place-items: center;
-    width: 28px;
-    height: 28px;
-    padding: 0;
-    border: 0;
-    border-radius: 50%;
-    background: transparent;
-    color: var(--hero-body);
-    cursor: pointer;
-    transition:
-        color 0.15s ease,
-        background-color 0.15s ease;
-
-    mat-icon {
-        width: 18px;
-        height: 18px;
-        font-size: 18px;
-        line-height: 18px;
-    }
-
-    &:hover {
-        background: var(--hero-pill-bg);
-        color: var(--hero-heading);
-    }
-
-    &:focus-visible {
-        @include focus-ring.focus-ring-declarations($offset: 1px);
-    }
-}
-
-.hero__dots {
-    display: flex;
-    align-items: center;
-    gap: 2px;
-}
-
-// 6px dots in 26 × 24px hit areas (WCAG 2.5.8 target size), 2px apart; the
-// active one opens into an 18px pill whose fill runs for one rotation
-// interval. Every dot keeps its footprint and the pill is the same bar
-// unclipped: a wider active button, and a pill that grew in width, moved
-// the dots on every rotation (layout shifts on an idle dashboard).
-.hero__dot {
-    display: grid;
-    place-items: center;
-    width: 26px;
-    height: 24px;
-    padding: 0;
-    border: 0;
-    background: transparent;
-    cursor: pointer;
+    width: 18px;
+    height: 6px;
 
     &::before {
         content: '';
         grid-area: 1 / 1;
         width: 18px;
-        height: 6px;
-        border-radius: 3px;
+        height: 4px;
+        border-radius: 2px;
         background: color-mix(
             in srgb,
-            var(--app-on-surface, #e6e1e5) 32%,
+            var(--hero-zenplay-silver) 34%,
             transparent
         );
-        // The middle 6px of the bar: a round dot.
-        clip-path: inset(0 6px round 3px);
+        // The middle 4px of the bar reads as a quiet round dot.
+        clip-path: inset(0 7px round 2px);
         transition:
             clip-path 0.25s ease,
             background-color 0.15s ease;
     }
 
-    &:hover::before {
+    &--active::before {
+        clip-path: inset(0 round 2px);
         background: color-mix(
             in srgb,
-            var(--app-on-surface, #e6e1e5) 55%,
+            var(--hero-zenplay-blue) 38%,
             transparent
         );
     }
-
-    &:focus-visible {
-        @include focus-ring.focus-ring-declarations($offset: -2px);
-        border-radius: 6px;
-    }
-
-    &--active::before {
-        clip-path: inset(0 round 3px);
-    }
 }
 
-// Over the pill, and shown on the active dot only.
-.hero__dot-fill {
+// Over the pill, and shown on the active indicator only.
+.hero__indicator-fill {
     grid-area: 1 / 1;
     width: 18px;
-    height: 6px;
-    border-radius: 3px;
+    height: 4px;
+    border-radius: 2px;
     overflow: hidden;
     pointer-events: none;
     visibility: hidden;
 
     // The fill is a full-width bar that slides in from the left under the
     // pill's rounded clip. Only `transform` animates, so the compositor runs
-    // it: animating `width` meant style, layout and paint on every frame for
-    // as long as an idle dashboard stayed on screen. Its `animationend`
-    // reaches the span (the originating element) and advances the slide.
+    // it. Its `animationend` reaches this span and advances the slide.
     &::before {
         content: '';
         display: block;
         height: 100%;
         border-radius: inherit;
-        background: var(--hero-heading);
+        background: linear-gradient(
+            90deg,
+            var(--hero-zenplay-silver),
+            var(--hero-zenplay-blue) 52%,
+            var(--hero-zenplay-purple)
+        );
     }
 
-    .hero__dot--active & {
+    .hero__indicator--active & {
         visibility: visible;
     }
 
-    .hero--rotating .hero__dot--active &::before {
+    .hero--rotating .hero__indicator--active &::before {
         animation: hero-dot-fill var(--hero-rotation-ms, 8000ms) linear both;
     }
 
-    .hero--paused .hero__dot--active &::before {
+    .hero--paused .hero__indicator--active &::before {
         animation-play-state: paused;
     }
 }
@@ -694,6 +667,12 @@
         --hero-tail: 0px;
     }
 
+    .hero--zenplay-trending {
+        --hero-tail: 0px;
+
+        min-height: clamp(320px, 74vh, 500px);
+    }
+
     .hero__content {
         margin-right: var(--hero-inset);
         // Clears the rotation controls, which move to the top here.
@@ -724,7 +703,7 @@
         text-shadow: none;
     }
 
-    .hero__controls {
+    .hero__indicators {
         top: 16px;
         bottom: auto;
     }
@@ -742,6 +721,25 @@
     .hero__backdrop-keyart {
         width: 70%;
         opacity: 0.6;
+    }
+}
+
+@container dashboard (max-width: 480px) {
+    .hero__content {
+        padding-top: 58px;
+        gap: 10px;
+    }
+
+    .hero__indicators {
+        right: var(--hero-inset);
+        padding: 6px 8px;
+        gap: 5px;
+    }
+}
+
+@container dashboard (min-width: 1280px) {
+    .hero__title {
+        font-size: 46px;
     }
 }
 

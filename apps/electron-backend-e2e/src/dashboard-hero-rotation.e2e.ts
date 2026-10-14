@@ -23,7 +23,7 @@ test.describe('Dashboard hero rotation', () => {
     // The unit tests dispatch `animationend` by hand. This drives the real
     // CSS fill animation, whose `animationend` comes from the fill's
     // `::before` and must still reach the span's handler.
-    test('advances when the dot fill animation ends and holds while paused', async ({
+    test('advances when the indicator fills and holds while hovered', async ({
         dataDir,
         request,
     }) => {
@@ -58,17 +58,12 @@ test.describe('Dashboard hero rotation', () => {
                 .poll(() => activeDotIndex(page), { timeout: 10_000 })
                 .not.toBe(first);
 
-            const pause = page.getByTestId('dashboard-hero-pause');
-            await pause.click();
-            await expect(pause).toHaveAttribute('aria-pressed', 'true');
-            await page.mouse.move(1, 1);
+            await hero.hover();
             const paused = await activeDotIndex(page);
             // Several intervals: a running fill would have advanced by now.
             await page.waitForTimeout(2_000);
             expect(await activeDotIndex(page)).toBe(paused);
 
-            await pause.click();
-            await expect(pause).toHaveAttribute('aria-pressed', 'false');
             await page.mouse.move(1, 1);
             await expect
                 .poll(() => activeDotIndex(page), { timeout: 10_000 })

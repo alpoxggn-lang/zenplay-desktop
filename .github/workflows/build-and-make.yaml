@@ -44,6 +44,11 @@ on:
             - '.claude/**'
     workflow_dispatch:
         inputs:
+            sign_windows:
+                description: 'Sign Windows artifacts with a trusted Authenticode certificate'
+                required: false
+                default: false
+                type: boolean
             sign_macos:
                 description: 'Sign and notarize macOS artifacts (requires configured Apple credentials)'
                 required: false
@@ -797,6 +802,33 @@ jobs:
                     fs.writeFileSync('electron-builder.json', JSON.stringify(pkg, null, 4) + '\n');
                   "
 
+            - name: Configure signed Windows production artifacts
+              if: matrix.os == 'windows' && github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || inputs.sign_windows == true)
+              run: |
+                  node -e "
+                    const fs = require('fs');
+                    const config = JSON.parse(fs.readFileSync('electron-builder.json', 'utf8'));
+                    config.win.forceCodeSigning = true;
+                    fs.writeFileSync('electron-builder.json', JSON.stringify(config, null, 4) + '\n');
+                  "
+
+            - name: Validate Windows signing configuration
+              if: matrix.os == 'windows' && github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || inputs.sign_windows == true)
+              shell: pwsh
+              env:
+                  WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+                  WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+              run: |
+                  if ([string]::IsNullOrWhiteSpace($env:WIN_CSC_LINK)) {
+                      Write-Error 'Missing WIN_CSC_LINK secret for trusted Windows Authenticode signing.'
+                      exit 1
+                  }
+
+                  if ([string]::IsNullOrWhiteSpace($env:WIN_CSC_KEY_PASSWORD)) {
+                      Write-Error 'Missing WIN_CSC_KEY_PASSWORD secret for the Windows signing certificate.'
+                      exit 1
+                  }
+
             - name: Validate macOS signing configuration
               if: matrix.os == 'macos' && github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || inputs.sign_macos == true)
               shell: bash
@@ -947,8 +979,27 @@ jobs:
                   IPTVNATOR_REQUIRE_EMBEDDED_MPV: '1'
               run: pnpm run make:app -- --publishPolicy=never
 
-            - name: Make Electron app
-              if: matrix.os != 'macos'
+            - name: Make Electron app (Windows signed)
+              if: matrix.os == 'windows' && github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || inputs.sign_windows == true)
+              env:
+                  WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+                  WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+                  IPTVNATOR_EMBEDDED_MPV_PLATFORM: ${{ matrix.embedded_mpv_platform }}
+                  IPTVNATOR_EMBEDDED_MPV_ARCH: ${{ matrix.embedded_mpv_arch }}
+                  IPTVNATOR_REQUIRE_EMBEDDED_MPV: '1'
+              run: pnpm run make:app -- --publishPolicy=never
+
+            - name: Make unsigned Electron app (Windows development)
+              if: matrix.os == 'windows' && (github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.sign_windows != true))
+              env:
+                  CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+                  IPTVNATOR_EMBEDDED_MPV_PLATFORM: ${{ matrix.embedded_mpv_platform }}
+                  IPTVNATOR_EMBEDDED_MPV_ARCH: ${{ matrix.embedded_mpv_arch }}
+                  IPTVNATOR_REQUIRE_EMBEDDED_MPV: '1'
+              run: pnpm run make:app -- --publishPolicy=never
+
+            - name: Make Electron app (Linux)
+              if: matrix.os == 'linux'
               env:
                   IPTVNATOR_EMBEDDED_MPV_PLATFORM: ${{ matrix.embedded_mpv_platform || '' }}
                   IPTVNATOR_EMBEDDED_MPV_ARCH: ${{ matrix.embedded_mpv_arch || matrix.arch || '' }}
@@ -976,7 +1027,25 @@ jobs:
             - name: Smoke-test Windows installer payload
               if: matrix.os == 'windows'
               shell: pwsh
-              run: pnpm run verify:desktop-installer -- --platform windows --root dist/executables --expected-arch "${{ matrix.arch }}"
+              run: |
+                  $arguments = @(
+                      'run',
+                      'verify:desktop-installer',
+                      '--',
+                      '--platform',
+                      'windows',
+                      '--root',
+                      'dist/executables',
+                      '--expected-arch',
+                      '${{ matrix.arch }}'
+                  )
+                  if ('${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || inputs.sign_windows == true) }}' -eq 'true') {
+                      $arguments += '--require-code-signing'
+                  }
+                  & pnpm @arguments
+                  if ($LASTEXITCODE -ne 0) {
+                      exit $LASTEXITCODE
+                  }
 
             - name: Smoke-test macOS DMG payload
               if: matrix.os == 'macos'
@@ -1614,6 +1683,37 @@ jobs:
                   console.log(`Merged ${candidates.length} macOS update metadata files into ${channelFile}.`);
                   NODE
 
+            # Keep the versioned packages and updater metadata intact, while
+            # also publishing stable human-facing filenames. This makes links
+            # under /releases/latest/download/ durable across app versions.
+            - name: Create stable desktop download aliases
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  shopt -s nullglob
+
+                  windows_installers=(artifacts/windows-artifacts/*-setup.exe)
+                  mac_intel_images=(artifacts/macos-x64-artifacts/*-x64.dmg)
+                  mac_apple_silicon_images=(artifacts/macos-arm64-artifacts/*-arm64.dmg)
+
+                  if [ "${#windows_installers[@]}" -ne 1 ]; then
+                      echo "::error::Expected exactly one versioned Windows setup executable; found ${#windows_installers[@]}."
+                      exit 1
+                  fi
+                  if [ "${#mac_intel_images[@]}" -ne 1 ]; then
+                      echo "::error::Expected exactly one Intel macOS DMG; found ${#mac_intel_images[@]}."
+                      exit 1
+                  fi
+                  if [ "${#mac_apple_silicon_images[@]}" -ne 1 ]; then
+                      echo "::error::Expected exactly one Apple Silicon macOS DMG; found ${#mac_apple_silicon_images[@]}."
+                      exit 1
+                  fi
+
+                  mkdir -p artifacts/download-aliases
+                  cp -- "${windows_installers[0]}" artifacts/download-aliases/ZenPlay-Windows.exe
+                  cp -- "${mac_intel_images[0]}" artifacts/download-aliases/ZenPlay-Mac-Intel.dmg
+                  cp -- "${mac_apple_silicon_images[0]}" artifacts/download-aliases/ZenPlay-Mac-Apple-Silicon.dmg
+
             # Hash every public Windows/macOS package plus all updater channel
             # metadata. Verify the generated manifest before any draft upload
             # or nightly publication can cross the release boundary.
@@ -1640,6 +1740,7 @@ jobs:
                       artifacts/windows-artifacts/*.blockmap
                       artifacts/linux-portable-artifacts/latest-linux*.yml
                       artifacts/linux-portable-artifacts/nightly-linux*.yml
+                      artifacts/download-aliases/*
                   )
 
                   node tools/release/release-checksums.mjs generate \
@@ -1795,6 +1896,9 @@ jobs:
                       artifacts/windows-artifacts/*.zip
                       artifacts/windows-artifacts/latest.yml
                       artifacts/windows-artifacts/*.blockmap
+                      artifacts/download-aliases/ZenPlay-Windows.exe
+                      artifacts/download-aliases/ZenPlay-Mac-Intel.dmg
+                      artifacts/download-aliases/ZenPlay-Mac-Apple-Silicon.dmg
                       artifacts/SHA256SUMS
               env:
                   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -2006,6 +2110,9 @@ jobs:
                       artifacts/windows-artifacts/*.zip
                       artifacts/windows-artifacts/nightly.yml
                       artifacts/windows-artifacts/*.blockmap
+                      artifacts/download-aliases/ZenPlay-Windows.exe
+                      artifacts/download-aliases/ZenPlay-Mac-Intel.dmg
+                      artifacts/download-aliases/ZenPlay-Mac-Apple-Silicon.dmg
                       artifacts/SHA256SUMS
                   )
 

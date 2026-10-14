@@ -10,9 +10,11 @@ import {
     PORTAL_EXTERNAL_PLAYBACK,
     PORTAL_PLAYBACK_POSITIONS,
     PORTAL_PLAYER,
+    XTREAM_DETAIL_AUTOPLAY_STATE_KEY,
 } from '@iptvnator/portal/shared/util';
 import { XtreamStore } from '@iptvnator/portal/xtream/data-access';
 import {
+    PlaybackPositionData,
     VideoPlayer,
     XtreamCategory,
     XtreamVodDetails,
@@ -21,6 +23,7 @@ import {
 import { DownloadsService, SettingsStore } from '@iptvnator/services';
 import { MatSnackBar } from '@angular/material/snack-bar';
 import { VodDetailsRouteComponent } from './vod-details-route.component';
+import { VodDetailsPlaybackService } from './vod-details-playback.service';
 
 describe('VodDetailsRouteComponent', () => {
     let fixture: ComponentFixture<VodDetailsRouteComponent>;
@@ -49,10 +52,12 @@ describe('VodDetailsRouteComponent', () => {
         .fn()
         .mockReturnValue('http://example.com/movie/650020.mp4');
     const addRecentItem = jest.fn();
+    const openResolvedPlayback = jest.fn();
     const downloads = signal([]);
     const getPlaybackPosition = jest.fn().mockResolvedValue(null);
 
     beforeEach(async () => {
+        window.history.replaceState({}, '', window.location.href);
         const consoleDebug = console.debug.bind(console);
         const consoleWarn = console.warn.bind(console);
         consoleDebugSpy = jest
@@ -97,6 +102,8 @@ describe('VodDetailsRouteComponent', () => {
         constructVodStreamUrl.mockClear();
         addRecentItem.mockClear();
         getPlaybackPosition.mockClear();
+        openResolvedPlayback.mockReset();
+        openResolvedPlayback.mockResolvedValue(undefined);
 
         await TestBed.configureTestingModule({
             imports: [VodDetailsRouteComponent],
@@ -189,7 +196,7 @@ describe('VodDetailsRouteComponent', () => {
                     provide: PORTAL_PLAYER,
                     useValue: {
                         isEmbeddedPlayer: jest.fn().mockReturnValue(false),
-                        openResolvedPlayback: jest.fn(),
+                        openResolvedPlayback,
                     },
                 },
                 {
@@ -211,8 +218,100 @@ describe('VodDetailsRouteComponent', () => {
     });
 
     afterEach(() => {
+        window.history.replaceState({}, '', window.location.href);
         consoleDebugSpy?.mockRestore();
         consoleWarnSpy?.mockRestore();
+    });
+
+    it('starts an addressed movie once when dashboard Play supplies the autoplay handoff', async () => {
+        window.history.replaceState(
+            {
+                [XTREAM_DETAIL_AUTOPLAY_STATE_KEY]: {
+                    playlistId: 'zenplay-primary',
+                    contentType: 'movie',
+                    contentId: 650020,
+                },
+            },
+            '',
+            window.location.href
+        );
+        currentPlaylist.set({ id: 'zenplay-primary' });
+        selectedItem.set({
+            info: [],
+            stream_id: 650020,
+            name: 'Dashboard movie',
+            container_extension: 'mp4',
+        } as unknown as XtreamVodDetails);
+
+        fixture.detectChanges();
+        await fixture.whenStable();
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+        fixture.detectChanges();
+
+        const playback = fixture.debugElement.injector.get(
+            VodDetailsPlaybackService
+        );
+        expect(playback.positionLoaded()).toBe(true);
+        expect(fixture.componentInstance.playableVodItem()).not.toBeNull();
+        expect(fixture.componentInstance.startBlocked()).toBe(false);
+        expect(openResolvedPlayback).toHaveBeenCalledTimes(1);
+        expect(
+            window.history.state[XTREAM_DETAIL_AUTOPLAY_STATE_KEY]
+        ).toBeUndefined();
+
+        fixture.detectChanges();
+        expect(openResolvedPlayback).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps a normal Details navigation from starting the movie', async () => {
+        currentPlaylist.set({ id: 'zenplay-primary' });
+        selectedItem.set({
+            info: [],
+            stream_id: 650020,
+            name: 'Details only movie',
+            container_extension: 'mp4',
+        } as unknown as XtreamVodDetails);
+
+        fixture.detectChanges();
+        await fixture.whenStable();
+
+        expect(openResolvedPlayback).not.toHaveBeenCalled();
+    });
+
+    it('waits for saved progress before an immediate primary action', async () => {
+        let resolvePosition!: (position: PlaybackPositionData | null) => void;
+        getPlaybackPosition.mockReturnValueOnce(
+            new Promise<PlaybackPositionData | null>((resolve) => {
+                resolvePosition = resolve;
+            })
+        );
+        currentPlaylist.set({ id: 'zenplay-primary' });
+        selectedItem.set({
+            info: [],
+            stream_id: 650020,
+            name: 'Resume movie',
+            container_extension: 'mp4',
+        } as unknown as XtreamVodDetails);
+
+        fixture.detectChanges();
+        const start = fixture.componentInstance.onPrimaryAction(selectedItem());
+        await Promise.resolve();
+
+        expect(openResolvedPlayback).not.toHaveBeenCalled();
+
+        resolvePosition({
+            playlistId: 'zenplay-primary',
+            contentXtreamId: 650020,
+            contentType: 'vod',
+            positionSeconds: 42,
+            durationSeconds: 120,
+        });
+        await start;
+
+        expect(openResolvedPlayback).toHaveBeenCalledWith(
+            expect.objectContaining({ startTime: 42 }),
+            true
+        );
     });
 
     it('keeps the fallback visible and exposes actions when catalog playback fields are usable', () => {
@@ -260,8 +359,12 @@ describe('VodDetailsRouteComponent', () => {
                 ?.textContent
         ).toContain('XTREAM.DETAIL_FALLBACK.STATUS');
         expect(host.querySelector('button.play-btn')).not.toBeNull();
-        expect(host.querySelector('[data-testid="vod-favorite-toggle"]')).not.toBeNull();
-        expect(host.querySelector('[data-testid="vod-download-start"]')).toBeNull();
+        expect(
+            host.querySelector('[data-testid="vod-favorite-toggle"]')
+        ).not.toBeNull();
+        expect(
+            host.querySelector('[data-testid="vod-download-start"]')
+        ).toBeNull();
     });
 
     it('keeps the fallback visible for a minimal info object', () => {
@@ -301,7 +404,9 @@ describe('VodDetailsRouteComponent', () => {
 
         const host = fixture.nativeElement as HTMLElement;
         expect(host.querySelector('button.play-btn')).toBeNull();
-        expect(host.querySelector('[data-testid="vod-favorite-toggle"]')).toBeNull();
+        expect(
+            host.querySelector('[data-testid="vod-favorite-toggle"]')
+        ).toBeNull();
 
         selectedItem.set({
             info: [],
@@ -311,7 +416,9 @@ describe('VodDetailsRouteComponent', () => {
         fixture.detectChanges();
 
         expect(host.querySelector('button.play-btn')).not.toBeNull();
-        expect(host.querySelector('[data-testid="vod-favorite-toggle"]')).not.toBeNull();
+        expect(
+            host.querySelector('[data-testid="vod-favorite-toggle"]')
+        ).not.toBeNull();
     });
 
     it('keeps the full Xtream detail view when usable metadata exists', () => {

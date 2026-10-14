@@ -30,6 +30,10 @@ export class SerialDetailsPlaybackPositionState {
         this.loadedKey.set(null);
     }
 
+    isLoaded(playlistId: string, seriesXtreamId: number): boolean {
+        return this.loadedKey() === this.createKey(playlistId, seriesXtreamId);
+    }
+
     async load(
         playlistId: string,
         seriesXtreamId: number,

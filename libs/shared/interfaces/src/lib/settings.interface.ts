@@ -133,6 +133,14 @@ export function normalizeDashboardRailsSettings(
 export interface Settings {
     player: VideoPlayer;
     /**
+     * One-time desktop migration marker for installations created before the
+     * bundled native MPV runtime became ZenPlay's default. Version 1 upgrades
+     * only the old persisted Video.js default after native support succeeds.
+     * Any later player selection records the marker, so a user's choice is
+     * never replaced again on a future launch.
+     */
+    desktopNativePlayerMigrationVersion?: number;
+    /**
      * Use IPTVnator's shared controls in HTML5, Video.js, and ArtPlayer.
      * Default ON: a missing value means the user never chose, and gets the
      * shared controls; only an explicit false keeps the legacy vendor chrome.

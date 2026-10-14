@@ -155,9 +155,9 @@ test('compositing report', async ({ dataDir, request }) => {
 
     try {
         await routeDeterministicArtwork(page);
-        // The same motion on every machine: with the OS set to reduced
-        // motion the hero neither rotates nor renders its pause button, and
-        // the crossfade reading would measure a different animation set.
+        // The same motion on every machine: reduced motion disables the
+        // hero's rotation, so the crossfade reading would measure a different
+        // animation set.
         await page.emulateMedia({ reducedMotion: 'no-preference' });
         await setWindowContentSize(app);
         await sleep(500);
@@ -213,13 +213,11 @@ test('compositing report', async ({ dataDir, request }) => {
                 timeout: 20_000,
             })
             .toBeGreaterThanOrEqual(2);
-        // Idle means no motion: rotation paused (it would advance after 8 s,
+        // Idle means no motion: hover pauses rotation (it would advance after 8 s,
         // into another slide's zoom), the current slide's zoom finished and
-        // the tile pool settled. The pointer stays off the hero.
-        const pause = page.getByTestId('dashboard-hero-pause');
-        await pause.click();
-        await expect(pause).toHaveAttribute('aria-pressed', 'true');
-        await page.mouse.move(1, 1);
+        // the tile pool settled.
+        const hero = page.getByTestId('dashboard-hero');
+        await hero.hover();
         await measure('dashboard', HERO_ZOOM_MS + TILE_POOL_SETTLE_MS);
 
         const dots = page.getByTestId('dashboard-hero-dot');
@@ -231,7 +229,11 @@ test('compositing report', async ({ dataDir, request }) => {
         // animations are frozen at a known point of the 700 ms fade while
         // the layers and the memory are read, so the reading does not
         // depend on how long the sampling takes.
-        await dots.nth((active + 1) % (await dots.count())).click();
+        await hero.focus();
+        await hero.press('ArrowRight');
+        await expect(
+            dots.nth((active + 1) % (await dots.count()))
+        ).toHaveAttribute('aria-current', 'true');
         await page.mouse.move(1, 1);
         await sleep(CROSSFADE_SAMPLE_MS);
         await cdp.send('Animation.enable');

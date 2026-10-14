@@ -9,11 +9,18 @@
         [attr.aria-label]="'WORKSPACE.DASHBOARD.HERO_LABEL' | translate"
         [class.hero--paused]="paused()"
         [class.hero--rotating]="canRotate()"
+        [class.hero--zenplay-trending]="mode() === 'zenplay-trending'"
         (mouseenter)="setHovered(true)"
         (mouseleave)="setHovered(false)"
         (focusin)="onFocusIn()"
         (focusout)="onFocusOut($event)"
         (keydown)="onHeroKeydown($event)"
+        (pointerdown)="onPointerDown($event)"
+        (pointermove)="onPointerMove($event)"
+        (pointerup)="onPointerEnd($event)"
+        (pointercancel)="onPointerEnd($event)"
+        (lostpointercapture)="onPointerEnd($event)"
+        (wheel)="onHeroWheel($event)"
     >
         <!-- Every slide's backdrop stays mounted so switching crossfades
              and the next image is already decoded. -->
@@ -84,15 +91,30 @@
                               }
                 "
             >
-                <p class="hero__eyebrow">
-                    <span
-                        class="hero__type"
-                        [class.hero__type--live]="slide.contentType === 'live'"
-                        >{{ slide.typeLabelKey | translate }}</span
-                    >
-                    <span class="hero__eyebrow-sep" aria-hidden="true">·</span>
-                    <span>{{ slide.reasonLabelKey | translate }}</span>
-                </p>
+                @if (slide.kind === 'trending') {
+                    <!-- The large Tendencias heading belongs above the one
+                         panoramic hero. Inside it we only name the real
+                         content kind; there is no invented popularity rank. -->
+                    <p class="hero__eyebrow">
+                        <span class="hero__type">{{
+                            slide.typeLabelKey | translate
+                        }}</span>
+                    </p>
+                } @else {
+                    <p class="hero__eyebrow">
+                        <span
+                            class="hero__type"
+                            [class.hero__type--live]="
+                                slide.contentType === 'live'
+                            "
+                            >{{ slide.typeLabelKey | translate }}</span
+                        >
+                        <span class="hero__eyebrow-sep" aria-hidden="true"
+                            >·</span
+                        >
+                        <span>{{ slide.reasonLabelKey | translate }}</span>
+                    </p>
+                }
 
                 <h2 class="hero__title">{{ slide.title }}</h2>
 
@@ -232,63 +254,31 @@
         </p>
 
         @if (slides().length > 1) {
-            <div class="hero__controls">
-                @if (canRotate()) {
-                    <button
-                        type="button"
-                        class="hero__pause"
-                        data-test-id="dashboard-hero-pause"
-                        [attr.aria-pressed]="userPaused()"
-                        [attr.aria-label]="
-                            (userPaused()
-                                ? 'WORKSPACE.DASHBOARD.HERO_PLAY'
-                                : 'WORKSPACE.DASHBOARD.HERO_PAUSE'
-                            ) | translate
+            <div class="hero__indicators" aria-hidden="true">
+                @for (slide of slides(); track slide.id) {
+                    <span
+                        class="hero__indicator"
+                        data-test-id="dashboard-hero-dot"
+                        [class.hero__indicator--active]="
+                            $index === activeIndex()
                         "
-                        (click)="togglePaused()"
+                        [attr.aria-current]="
+                            $index === activeIndex() ? 'true' : null
+                        "
                     >
-                        <mat-icon aria-hidden="true">{{
-                            userPaused() ? 'play_arrow' : 'pause'
-                        }}</mat-icon>
-                    </button>
+                        <span
+                            class="hero__indicator-fill"
+                            (animationend)="onRotationTick()"
+                        ></span>
+                    </span>
                 }
-                <div
-                    class="hero__dots"
-                    role="group"
-                    [attr.aria-label]="
-                        'WORKSPACE.DASHBOARD.HERO_LABEL' | translate
-                    "
-                >
-                    @for (slide of slides(); track slide.id) {
-                        <button
-                            type="button"
-                            class="hero__dot"
-                            data-test-id="dashboard-hero-dot"
-                            [class.hero__dot--active]="$index === activeIndex()"
-                            [attr.aria-current]="
-                                $index === activeIndex() ? 'true' : null
-                            "
-                            [attr.aria-label]="
-                                'WORKSPACE.DASHBOARD.HERO_SHOW_SLIDE'
-                                    | translate: { title: slide.title }
-                            "
-                            [attr.tabindex]="$index === activeIndex() ? 0 : -1"
-                            (click)="show($index)"
-                            (keydown)="onDotKeydown($event, $index)"
-                        >
-                            <span
-                                class="hero__dot-fill"
-                                (animationend)="onRotationTick()"
-                            ></span>
-                        </button>
-                    }
-                </div>
             </div>
         }
     </section>
 } @else if (presenter.loading()) {
     <section
         class="hero hero--skeleton"
+        [class.hero--zenplay-trending]="mode() === 'zenplay-trending'"
         aria-hidden="true"
         aria-busy="true"
         data-test-id="dashboard-hero-skeleton"

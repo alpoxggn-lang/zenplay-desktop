@@ -47,24 +47,38 @@ pnpm run verify:package-layout -- windows x64
 ```
 
 The output includes `latest.yml` and a blockmap for `electron-updater`, but
-`--publishPolicy=never` prevents a build from uploading anything. A public
-release still requires the dedicated GitHub repository and Windows code
-signing; unsigned installers can trigger Microsoft Defender SmartScreen.
+`--publishPolicy=never` prevents a build from uploading anything. Local builds
+may be unsigned engineering artifacts. Tag and `master` builds fail closed
+unless GitHub Actions has `WIN_CSC_LINK` and `WIN_CSC_KEY_PASSWORD`; the former
+is the base64-encoded or securely hosted PFX/P12 issued by a CA in Microsoft's
+Trusted Root Program, and the latter unlocks its private key. A manual run can
+remain unsigned for testing, or set `sign_windows: true` to exercise the same
+production path.
+
+The production installer smoke requires trusted, timestamped Authenticode on
+both the NSIS installer and its installed `ZenPlay.exe`. A self-signed
+certificate does not satisfy this gate and does not solve Smart App Control.
+Never commit a certificate or password to the repository.
+
+Each complete release also copies the versioned Windows setup to
+`ZenPlay-Windows.exe`. The fixed name supports a durable manual download URL;
+the versioned setup, blockmap and `latest.yml` remain required for automatic
+updates.
 
 ## Release configuration still required
 
 Do not distribute a packaged ZenPlay desktop build until all of these are
 complete:
 
-1. Create and confirm `alpoxggn-lang/zenplay-desktop` and, if the nightly
-   channel is retained, `alpoxggn-lang/zenplay-desktop-nightly`. These names
-   are currently safe pending destinations that may return 404. Customer
-   update repositories must be public: shipping a GitHub token inside the app
-   to access private releases would expose that credential.
-2. Confirm that the configured GitHub `publish` destination,
-   `alpoxggn-lang/zenplay-desktop`, exists and is controlled by ZenPlay. Normal
-   builds use `--publishPolicy=never`; the entry generates updater metadata but
-   never authorizes direct uploads to the upstream IPTVnator repository.
+1. The stable destination `alpoxggn-lang/zenplay-desktop` exists and is public.
+   Create `alpoxggn-lang/zenplay-desktop-nightly` before enabling or offering
+   the nightly channel. Customer update repositories must be public: shipping
+   a GitHub token inside the app to access private releases would expose that
+   credential.
+2. Keep the configured GitHub `publish` destination on the confirmed stable
+   ZenPlay repository. Normal builds use `--publishPolicy=never`; the entry
+   generates updater metadata but never authorizes direct uploads to the
+   upstream IPTVnator repository.
 3. Run the updater and package identity tests, then verify an installed build
    never contacts or offers an IPTVnator release.
 4. Review the 1254×1254 ZenPlay PNG in a packaged macOS build. Electron Builder
@@ -72,9 +86,9 @@ complete:
    separately checked-in `.icns` is optional; no upstream IPTVnator icon is
    used.
 
-Windows code signing and Apple signing/notarization are distribution steps,
-not part of this metadata change. Unsigned development artifacts must not be
-presented as production installers.
+Windows code signing and Apple signing/notarization require external publisher
+credentials. Unsigned development artifacts must not be presented as
+production installers.
 
 ## macOS build matrix
 
@@ -98,6 +112,11 @@ The ZIP files are required by `electron-updater`; the DMG files are the normal
 manual installers. CI merges both architecture entries into one
 `latest-mac.yml`, so the updater selects the matching ZIP. Keep both matrix
 jobs and both ZIP artifacts in every public release.
+
+CI additionally publishes `ZenPlay-Mac-Intel.dmg` and
+`ZenPlay-Mac-Apple-Silicon.dmg` as fixed-name copies for durable manual links.
+These aliases do not replace the versioned DMGs, ZIPs, blockmaps or merged
+`latest-mac.yml`.
 
 Do not add an Electron `universal` target yet. The app bundles an architecture-
 specific native addon and Embedded MPV runtime. A universal Electron shell

@@ -41,6 +41,7 @@ import SettingsEvents from '../events/settings.events';
 import SharedEvents from '../events/shared.events';
 import StalkerEvents from '../events/stalker.events';
 import XtreamEvents from '../events/xtream.events';
+import ZenPlayAccountExpiryEvents from '../events/zenplay-account-expiry.events';
 import { registerStreamProbeHandlers } from '../events/stream-probe';
 import { registerConnectivityGuardHandlers } from '../events/connectivity-guard.events';
 import { traceStartupPhase } from '../services/debug-trace';
@@ -92,6 +93,7 @@ export function bootstrapDeferredEvents(
     ParentalLockEvents.bootstrapParentalLockEvents();
     StalkerEvents.bootstrapStalkerEvents();
     XtreamEvents.bootstrapXtreamEvents();
+    ZenPlayAccountExpiryEvents.bootstrap(() => App.mainWindow);
     registerStreamProbeHandlers();
     registerM3uSourceProbe();
     registerSourceProbeCancellation();

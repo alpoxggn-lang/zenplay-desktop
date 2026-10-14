@@ -125,16 +125,35 @@ export class SerialDetailsPlaybackService {
     readonly activeEpisodeId = signal<number | null>(null);
     readonly seasonWatchBatchRunning = this.seasonWatch.batchRunning;
 
+    readonly positionLoaded = computed(() => {
+        const seriesXtreamId = Number(this.selectedItem()?.series_id ?? 0);
+        const playlistId = this.currentPlaylistId();
+        return (
+            !!playlistId &&
+            Number.isSafeInteger(seriesXtreamId) &&
+            seriesXtreamId > 0 &&
+            this.playbackPositionState.isLoaded(playlistId, seriesXtreamId)
+        );
+    });
     readonly quickStartAction = computed(() => {
         const item = this.selectedItem();
         if (!item) {
             return null;
         }
 
-        return getSeriesQuickStartAction({
+        const action = getSeriesQuickStartAction({
             seasons: item.episodes ?? {},
             playbackPositions: this.episodePlaybackPositions(),
         });
+        return action
+            ? {
+                  ...action,
+                  // Details and saved progress load concurrently. Exposing a
+                  // temporary Play action before progress lands can restart a
+                  // resumable episode at zero.
+                  disabled: action.disabled || !this.positionLoaded(),
+              }
+            : null;
     });
     readonly inlineEpisodeState =
         computed<SeriesPlaybackEpisodeState<XtreamSerieEpisode> | null>(() =>
@@ -267,7 +286,7 @@ export class SerialDetailsPlaybackService {
 
     playQuickStartEpisode(): void {
         const action = this.quickStartAction();
-        if (action && !action.disabled) {
+        if (this.positionLoaded() && action && !action.disabled) {
             this.playEpisode(action.episode);
         }
     }

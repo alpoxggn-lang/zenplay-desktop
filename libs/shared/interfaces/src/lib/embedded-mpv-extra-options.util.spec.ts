@@ -82,8 +82,22 @@ describe('embedded MPV extra options', () => {
     it('keeps the user override after the default it replaces', () => {
         const options =
             resolveEmbeddedMpvSessionOptionArguments('network-timeout=3');
-        expect(options.indexOf('network-timeout=10')).toBeLessThan(
+        expect(options.indexOf('network-timeout=8')).toBeLessThan(
             options.indexOf('network-timeout=3')
+        );
+    });
+
+    it('uses a bounded network cache without delaying initial playback', () => {
+        expect(EMBEDDED_MPV_NETWORK_DEFAULT_OPTIONS).toEqual(
+            expect.arrayContaining([
+                'network-timeout=8',
+                'cache=yes',
+                'cache-pause-initial=no',
+                'cache-secs=15',
+                'demuxer-max-bytes=67108864',
+                'demuxer-max-back-bytes=33554432',
+                'demuxer-lavf-o=reconnect=1,reconnect_streamed=1,reconnect_delay_max=2',
+            ])
         );
     });
 

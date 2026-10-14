@@ -1,4 +1,4 @@
-import { signal } from '@angular/core';
+import { signal, type Signal } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { MatDialog } from '@angular/material/dialog';
 import { NavigationEnd, Router } from '@angular/router';
@@ -155,9 +155,7 @@ describe('WorkspaceShellFacade', () => {
     let playlistRefreshAction: {
         canRefresh: jest.Mock;
         isRefreshing: ReturnType<typeof signal<boolean>>;
-        refreshPreparation: ReturnType<
-            typeof signal<XtreamRefreshPreparationState | null>
-        >;
+        refreshPreparation: Signal<XtreamRefreshPreparationState | null>;
         refresh: jest.Mock;
     };
     let storeDispatch: jest.Mock;

@@ -259,13 +259,90 @@ export function runCommand(command, args, options = {}) {
     });
 }
 
-async function verifyWindows(rootPath, dependencies = {}) {
+export async function assertWindowsAuthenticodeSignature(
+    filePath,
+    commandRunner = runCommand
+) {
+    ensureFile(filePath, 'Windows signed executable');
+    const encodedPath = Buffer.from(path.resolve(filePath), 'utf8').toString(
+        'base64'
+    );
+    const trustedWindowsPowerShellModules = path.win32.join(
+        process.env.SystemRoot ?? 'C:\\Windows',
+        'System32',
+        'WindowsPowerShell',
+        'v1.0',
+        'Modules'
+    );
+    const script = [
+        `$targetPath = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encodedPath}'))`,
+        'Import-Module Microsoft.PowerShell.Security -ErrorAction Stop',
+        '$signature = Microsoft.PowerShell.Security\\Get-AuthenticodeSignature -LiteralPath $targetPath',
+        '$result = [ordered]@{',
+        'Status = $signature.Status.ToString()',
+        'StatusMessage = $signature.StatusMessage.ToString()',
+        'SignerSubject = if ($signature.SignerCertificate) { $signature.SignerCertificate.Subject } else { $null }',
+        'TimeStamperSubject = if ($signature.TimeStamperCertificate) { $signature.TimeStamperCertificate.Subject } else { $null }',
+        '}',
+        '$result | ConvertTo-Json -Compress',
+    ].join('\n');
+    const result = await commandRunner(
+        'powershell.exe',
+        [
+            '-NoProfile',
+            '-NonInteractive',
+            '-ExecutionPolicy',
+            'Bypass',
+            '-Command',
+            script,
+        ],
+        {
+            // A pwsh parent can prepend PowerShell 7 module directories. They
+            // are incompatible with Windows PowerShell 5.1 and can shadow the
+            // built-in signing cmdlet, so load only the trusted system module.
+            env: {
+                ...process.env,
+                PSModulePath: trustedWindowsPowerShellModules,
+            },
+            timeoutMs: 30_000,
+        }
+    );
+
+    let signature;
+    try {
+        signature = JSON.parse(result.stdout.trim());
+    } catch {
+        fail(`Unable to read Authenticode status for ${filePath}`);
+    }
+
+    if (signature.Status !== 'Valid' || !signature.SignerSubject) {
+        fail(
+            `Windows Authenticode signature is not trusted for ${filePath}: ${signature.Status || 'unknown'}${signature.StatusMessage ? ` (${signature.StatusMessage})` : ''}`
+        );
+    }
+    if (!signature.TimeStamperSubject) {
+        fail(`Windows Authenticode signature is not timestamped: ${filePath}`);
+    }
+
+    return signature;
+}
+
+async function verifyWindows(rootPath, requireCodeSigning, dependencies = {}) {
     if (process.platform !== 'win32') {
         fail('Windows installer smoke must run on a Windows host');
     }
     const commandRunner = dependencies.runCommand ?? runCommand;
     const { setupExecutable, msiPackages } =
         discoverWindowsInstallers(rootPath);
+    if (requireCodeSigning) {
+        await assertWindowsAuthenticodeSignature(
+            setupExecutable,
+            commandRunner
+        );
+        for (const msiPath of msiPackages) {
+            await assertWindowsAuthenticodeSignature(msiPath, commandRunner);
+        }
+    }
     const temporaryRoot = fs.mkdtempSync(
         path.join(os.tmpdir(), 'zenplay-installer-smoke-')
     );
@@ -277,6 +354,12 @@ async function verifyWindows(rootPath, dependencies = {}) {
             timeoutMs: 180_000,
         });
         const installed = assertInstalledWindowsPayload(nsisInstallRoot);
+        if (requireCodeSigning) {
+            await assertWindowsAuthenticodeSignature(
+                installed.executablePath,
+                commandRunner
+            );
+        }
         console.log(
             `Verified NSIS installer payload: ${installed.executablePath}`
         );
@@ -296,6 +379,12 @@ async function verifyWindows(rootPath, dependencies = {}) {
                 { timeoutMs: 180_000 }
             );
             const msiPayload = assertInstalledWindowsPayload(msiExtractRoot);
+            if (requireCodeSigning) {
+                await assertWindowsAuthenticodeSignature(
+                    msiPayload.executablePath,
+                    commandRunner
+                );
+            }
             console.log(
                 `Verified MSI administrative payload: ${msiPayload.executablePath}`
             );
@@ -405,10 +494,17 @@ async function verifyMacos(
 
 export function parseArguments(argv) {
     const args = argv[0] === '--' ? argv.slice(1) : argv;
-    const values = { expectedAppId: DEFAULT_APP_ID };
+    const values = {
+        expectedAppId: DEFAULT_APP_ID,
+        requireCodeSigning: false,
+    };
 
     for (let index = 0; index < args.length; index += 1) {
         const option = args[index];
+        if (option === '--require-code-signing') {
+            values.requireCodeSigning = true;
+            continue;
+        }
         if (
             ![
                 '--platform',
@@ -440,7 +536,7 @@ export function parseArguments(argv) {
 export async function main(argv = process.argv.slice(2)) {
     const options = parseArguments(argv);
     if (options.platform === 'windows') {
-        await verifyWindows(options.root);
+        await verifyWindows(options.root, options.requireCodeSigning);
         return;
     }
     await verifyMacos(

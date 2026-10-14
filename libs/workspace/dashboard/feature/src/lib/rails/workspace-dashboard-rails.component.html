@@ -19,17 +19,57 @@
              the first history load runs, and nothing when there is nothing
              to feature. Each block below renders as soon as ITS data is
              ready — no longer pinned on the slowest rail's I/O. -->
-        @if (isElectron && dashboardRails().hero) {
-            <lib-dashboard-hero />
+        <!-- One branded home on web and desktop: the hero is Tendencias from
+             the real ZenPlay catalog, never a duplicate Continue Watching
+             banner. It owns its loading/empty state. -->
+        @if (dashboardRails().hero && showZenPlayTrendingHero()) {
+            <h2
+                class="rails-page__trending-heading"
+                data-test-id="dashboard-trending-heading"
+            >
+                {{ 'WORKSPACE.DASHBOARD.ZENPLAY_TRENDING' | translate }}
+            </h2>
+            <lib-dashboard-hero mode="zenplay-trending" />
         }
 
-        <!-- ZenPlay web home: Tendencias uses the cinematic carousel with
-             real provider catalog data. The two compact rails below keep the
-             Android order for recently-added movies and series. -->
-        @if (!isElectron && dashboardRails().xtreamRecentlyAdded) {
-            <lib-dashboard-hero mode="zenplay-trending" />
+        <!-- Continue watching (movies + series) -->
+        @if (
+            dashboardRails().continueWatching &&
+            continueWatchingCards().length > 0
+        ) {
+            <lib-dashboard-rail
+                [label]="'WORKSPACE.DASHBOARD.CONTINUE_WATCHING' | translate"
+                [items]="continueWatchingCards()"
+                [totalCount]="data.continueWatchingItems().length"
+                [seeAllLink]="['/workspace/global-recent']"
+                [seeAllState]="continueWatchingSeeAllState()"
+                [testId]="'dashboard-continue-watching-rail'"
+                [reserveMetaLine]="true"
+                (actionSelected)="onContinueWatchingActionSelected($event)"
+            />
+        }
 
-            @if (!railSkeletons.xtreamRecentlyAdded()) {
+        @if (
+            railSkeletons.recentContent() &&
+            recentContentSkeletonLayout() === 'cover'
+        ) {
+            <lib-dashboard-rail-skeleton
+                layout="cover"
+                testId="dashboard-continue-watching-rail-skeleton"
+            />
+        }
+
+        <!-- Recently added is split by kind so a large movie refresh cannot
+             crowd all series out of the desktop query window (or vice versa). -->
+        @if (dashboardRails().xtreamRecentlyAdded) {
+            @if (railSkeletons.xtreamRecentlyAdded()) {
+                <lib-dashboard-rail-skeleton
+                    testId="dashboard-zenplay-recent-movies-rail-skeleton"
+                />
+                <lib-dashboard-rail-skeleton
+                    testId="dashboard-zenplay-recent-series-rail-skeleton"
+                />
+            } @else {
                 @if (zenPlayRecentMovieCards().length > 0) {
                     <lib-dashboard-rail
                         [label]="
@@ -58,24 +98,28 @@
             }
         }
 
-        <!-- Continue watching (movies + series) -->
+        <!-- Live TV belongs after films and series in the ZenPlay home. It
+             prefers history, then a bounded real catalog sample for a cold
+             account; favorites remain a separate row when the user has any. -->
         @if (
-            dashboardRails().continueWatching &&
-            continueWatchingCards().length > 0
+            dashboardRails().recentlyWatchedLive &&
+            homeLiveCardsEnriched().length > 0
         ) {
             <lib-dashboard-rail
-                [label]="'WORKSPACE.DASHBOARD.CONTINUE_WATCHING' | translate"
-                [items]="continueWatchingCards()"
-                [totalCount]="data.continueWatchingItems().length"
-                [seeAllLink]="['/workspace/global-recent']"
-                [seeAllState]="continueWatchingSeeAllState()"
-                [testId]="'dashboard-continue-watching-rail'"
-                [reserveMetaLine]="true"
-                (actionSelected)="onContinueWatchingActionSelected($event)"
+                [label]="'WORKSPACE.SHELL.RAIL_LIVE' | translate"
+                [items]="homeLiveCardsEnriched()"
+                [totalCount]="homeLiveTotalCount()"
+                [seeAllLink]="homeLiveSeeAllLink()"
+                [seeAllState]="liveSeeAllState"
+                layout="channel"
+                [testId]="'dashboard-recent-live-rail'"
+                (visibleCardsChanged)="
+                    liveEpg.setVisibleCards('recent', $event)
+                "
             />
         }
 
-        <!-- Live favorites: no fallback. Recently watched live gets its own rail. -->
+        <!-- Live favorites: no fallback and no invented channel data. -->
         @if (
             dashboardRails().liveFavorites &&
             !showLiveFavoritesSkeleton() &&
@@ -101,24 +145,6 @@
         }
 
         @if (
-            dashboardRails().recentlyWatchedLive &&
-            recentLiveCardsEnriched().length > 0
-        ) {
-            <lib-dashboard-rail
-                [label]="liveRailTitleKeyForSource('recent') | translate"
-                [items]="recentLiveCardsEnriched()"
-                [totalCount]="data.globalRecentLiveItems().length"
-                [seeAllLink]="['/workspace/global-recent']"
-                [seeAllState]="liveSeeAllState"
-                layout="channel"
-                [testId]="'dashboard-recent-live-rail'"
-                (visibleCardsChanged)="
-                    liveEpg.setVisibleCards('recent', $event)
-                "
-            />
-        }
-
-        @if (
             dashboardRails().favoriteMoviesAndSeries &&
             favoriteMoviesAndSeriesCards().length > 0
         ) {
@@ -137,87 +163,13 @@
             />
         }
 
-        @if (railSkeletons.recentContent()) {
-            <lib-dashboard-rail-skeleton
-                [layout]="recentContentSkeletonLayout()"
-                testId="dashboard-recent-content-rail-skeleton"
-            />
-        }
-
-        <!-- Sources rail -->
         @if (
-            isElectron &&
-            dashboardRails().recentSources &&
-            sourceCards().length > 0
+            railSkeletons.recentContent() &&
+            recentContentSkeletonLayout() === 'channel'
         ) {
-            <lib-dashboard-rail
-                [label]="'WORKSPACE.DASHBOARD.RECENT_SOURCES' | translate"
-                [items]="sourceCards()"
-                [totalCount]="data.playlists().length"
-                [seeAllLink]="['/workspace/sources']"
-                aspectRatio="16 / 9"
-                [testId]="'dashboard-recent-sources-rail'"
-                [reserveMetaLine]="true"
-                (actionSelected)="onSourceActionSelected($event)"
-            />
-        } @else if (isElectron && railSkeletons.sources()) {
             <lib-dashboard-rail-skeleton
-                aspectRatio="16 / 9"
-                testId="dashboard-recent-sources-rail-skeleton"
-            />
-        }
-
-        <!-- Xtream recently-added rail (only relevant if there are Xtream playlists) -->
-        @if (
-            isElectron &&
-            dashboardRails().xtreamRecentlyAdded &&
-            xtreamRecentlyAddedCards().length > 0
-        ) {
-            <lib-dashboard-rail
-                [label]="
-                    'WORKSPACE.DASHBOARD.XTREAM_RECENTLY_ADDED' | translate
-                "
-                [items]="xtreamRecentlyAddedCards()"
-                [totalCount]="data.xtreamRecentlyAddedItems().length"
-                [testId]="'dashboard-xtream-recently-added-rail'"
-                [reserveMetaLine]="true"
-            />
-        } @else if (isElectron && railSkeletons.xtreamRecentlyAdded()) {
-            <lib-dashboard-rail-skeleton
-                testId="dashboard-xtream-recently-added-rail-skeleton"
-            />
-        }
-
-        <!-- TMDB recommendations rail ("Because you watched"; opt-in; Electron only) -->
-        @if (
-            dashboardRails().tmdbRecommendations &&
-            recommendationCards().length > 0
-        ) {
-            <lib-dashboard-rail
-                [label]="recommendationsRailLabel()"
-                [items]="recommendationCards()"
-                [totalCount]="recommendationCards().length"
-                [testId]="'dashboard-tmdb-recommendations-rail'"
-                [reserveMetaLine]="true"
-            />
-        } @else if (railSkeletons.tmdbRecommendations()) {
-            <lib-dashboard-rail-skeleton
-                testId="dashboard-tmdb-recommendations-rail-skeleton"
-            />
-        }
-
-        <!-- TMDB trending rail (opt-in; Electron only — needs title matching) -->
-        @if (dashboardRails().tmdbTrending && trendingCards().length > 0) {
-            <lib-dashboard-rail
-                [label]="'WORKSPACE.DASHBOARD.TMDB_TRENDING' | translate"
-                [items]="trendingCards()"
-                [totalCount]="trendingCards().length"
-                [testId]="'dashboard-tmdb-trending-rail'"
-                [reserveMetaLine]="true"
-            />
-        } @else if (railSkeletons.tmdbTrending()) {
-            <lib-dashboard-rail-skeleton
-                testId="dashboard-tmdb-trending-rail-skeleton"
+                layout="channel"
+                testId="dashboard-recent-live-rail-skeleton"
             />
         }
     }

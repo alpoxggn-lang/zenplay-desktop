@@ -307,10 +307,52 @@ export class VodDetailsPlaybackService {
     /** The route copy's row is in hand; fails closed while a read is in flight. */
     readonly positionLoaded = this.positions.loaded;
 
+    private pendingPositionLoad: {
+        readonly playlistId: string;
+        readonly vodId: number;
+        readonly promise: Promise<void>;
+    } | null = null;
+
     loadPosition(playlistId: string, vodId: number): Promise<void> {
-        return this.positions.load(playlistId, vodId, () =>
-            this.playbackPositions.getPlaybackPosition(playlistId, vodId, 'vod')
-        );
+        const promise = this.positions
+            .load(playlistId, vodId, () =>
+                this.playbackPositions.getPlaybackPosition(
+                    playlistId,
+                    vodId,
+                    'vod'
+                )
+            )
+            .catch((error: unknown) => {
+                // Dashboard autoplay remains fail-closed because `loaded`
+                // stays false. A deliberate click may still continue from
+                // the beginning after this promise settles.
+                this.logger.warn(
+                    'Loading the saved VOD position failed',
+                    error
+                );
+            });
+        const pending = { playlistId, vodId, promise };
+        this.pendingPositionLoad = pending;
+        void promise.finally(() => {
+            if (this.pendingPositionLoad === pending) {
+                this.pendingPositionLoad = null;
+            }
+        });
+        return promise;
+    }
+
+    /**
+     * Waits only for the position read already serving this route. Tests and
+     * non-route callers that did not start a read are never held up.
+     */
+    waitForPosition(playlistId: string, vodId: number): Promise<void> {
+        if (this.positionLoaded()) {
+            return Promise.resolve();
+        }
+        const pending = this.pendingPositionLoad;
+        return pending?.playlistId === playlistId && pending.vodId === vodId
+            ? pending.promise
+            : Promise.resolve();
     }
 
     /**

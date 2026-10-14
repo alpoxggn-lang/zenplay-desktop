@@ -3,6 +3,7 @@ import {
     formatXtreamCatchupStart,
     normalizeXtreamServerUrl,
     StreamFormat,
+    VideoPlayer,
     XtreamSerieEpisode,
     XtreamVodDetails,
 } from '@iptvnator/shared/interfaces';
@@ -115,6 +116,17 @@ export function prefersTsFirstForWebLive(
     );
 }
 
+/** Native desktop engines can consume the provider's MPEG-TS stream directly. */
+export function prefersTsFirstForDesktopLive(
+    player: VideoPlayer | null | undefined
+): boolean {
+    return (
+        player === VideoPlayer.EmbeddedMpv ||
+        player === VideoPlayer.MPV ||
+        player === VideoPlayer.VLC
+    );
+}
+
 const XTREAM_CATCHUP_VARIANT_KEY_PREFIX = 'xtream-catchup-variant:v4:';
 
 /**
@@ -184,9 +196,9 @@ export class XtreamUrlService {
     }
 
     /**
-     * The single advertised alternate for Auto mode. It is TS when HLS is the
-     * primary source (Safari/Electron) and HLS when TS is primary (Chromium,
-     * Edge and Firefox PWA). Manual format choices never advertise a fallback.
+     * The single advertised alternate for Auto mode. Native desktop engines
+     * and Chromium/Edge/Firefox PWA start with TS; Safari and Electron web
+     * engines start with HLS. Manual choices never advertise a fallback.
      */
     constructAutoLiveFallbackUrl(
         credentials: XtreamCredentials,
@@ -601,15 +613,17 @@ export class XtreamUrlService {
     private resolveAutoLiveStreamFormat(
         allowedFormats: string[] | undefined
     ): string {
+        const prefersTs = this.runtime.isPwa
+            ? prefersTsFirstForWebLive(globalThis.navigator)
+            : prefersTsFirstForDesktopLive(this.settingsStore.player());
+        const supportedPreference = prefersTs
+            ? [StreamFormat.TsStreamFormat, StreamFormat.M3u8StreamFormat]
+            : [StreamFormat.M3u8StreamFormat, StreamFormat.TsStreamFormat];
+
         if (!allowedFormats?.length) {
-            return StreamFormat.M3u8StreamFormat;
+            return supportedPreference[0];
         }
 
-        const supportedPreference =
-            this.runtime.isPwa &&
-            prefersTsFirstForWebLive(globalThis.navigator)
-                ? [StreamFormat.TsStreamFormat, StreamFormat.M3u8StreamFormat]
-                : [StreamFormat.M3u8StreamFormat, StreamFormat.TsStreamFormat];
         const preferred = supportedPreference.find((format) =>
             allowedFormats.includes(format)
         );

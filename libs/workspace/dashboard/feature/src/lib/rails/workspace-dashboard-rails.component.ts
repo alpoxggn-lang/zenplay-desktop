@@ -50,7 +50,6 @@ import {
     resolveSourceExpiryBadge,
 } from '@iptvnator/workspace/dashboard/data-access';
 import { createDashboardRailSkeletons } from './dashboard-rail-skeletons';
-import { connectDashboardTmdbRails } from './dashboard-tmdb-rails';
 import { DashboardRailComponent } from './dashboard-rail.component';
 import { DashboardRailSkeletonComponent } from './dashboard-rail-skeleton.component';
 import type {
@@ -89,6 +88,7 @@ import type {
 } from './dashboard-rail.utils';
 import {
     selectZenPlayRecentItems,
+    selectZenPlayTrendingItems,
     zenPlayCatalogRating,
     ZENPLAY_CATALOG_POOL_LIMIT,
     type ZenPlayCatalogItem,
@@ -147,6 +147,13 @@ export class WorkspaceDashboardRailsComponent {
     readonly dashboardRails = computed(() =>
         normalizeDashboardRailsSettings(this.settingsStore.dashboardRails?.())
     );
+    readonly showZenPlayTrendingHero = computed(
+        () =>
+            this.data.xtreamRecentlyAddedLoading() ||
+            selectZenPlayTrendingItems(
+                this.data.xtreamRecentlyAddedItems()
+            ).length > 0
+    );
 
     readonly continueWatchingBaseCards = computed<DashboardRailCard[]>(() => {
         this.languageTick();
@@ -174,6 +181,28 @@ export class WorkspaceDashboardRailsComponent {
             .slice(0, RAIL_ITEM_LIMIT)
             .map((item) => this.toRecentCard(item))
     );
+
+    readonly liveCatalogSampleCards = computed<DashboardRailCard[]>(() =>
+        this.data
+            .xtreamRecentlyAddedItems()
+            .filter((item) => item.type === 'live')
+            .slice(0, RAIL_ITEM_LIMIT)
+            .map((item) => this.toRecentlyAddedCard(item))
+    );
+
+    /**
+     * TV en vivo is a fixed home destination, including for a new account.
+     * History is most useful, the bounded catalog sample covers cold starts,
+     * and favorites are the last truthful fallback (while keeping their own
+     * dedicated row below).
+     */
+    readonly homeLiveCards = computed<DashboardRailCard[]>(() => {
+        const recent = this.recentLiveCards();
+        if (recent.length > 0) return recent;
+
+        const sample = this.liveCatalogSampleCards();
+        return sample.length > 0 ? sample : this.liveFavoriteCards();
+    });
 
     readonly showLiveFavoritesSkeleton = computed(() =>
         shouldShowLiveFavoritesSkeleton(this.dashboardRails(), {
@@ -208,7 +237,7 @@ export class WorkspaceDashboardRailsComponent {
         buildLiveEpgCardsForEnabledRails(
             this.dashboardRails(),
             this.liveFavoriteCards(),
-            this.recentLiveCards()
+            this.homeLiveCards()
         )
     );
 
@@ -220,9 +249,28 @@ export class WorkspaceDashboardRailsComponent {
         this.liveEpg.enrich(this.liveFavoriteCards())
     );
 
-    readonly recentLiveCardsEnriched = computed<DashboardRailCard[]>(() =>
-        this.liveEpg.enrich(this.recentLiveCards())
+    readonly homeLiveCardsEnriched = computed<DashboardRailCard[]>(() =>
+        this.liveEpg.enrich(this.homeLiveCards())
     );
+
+    readonly homeLiveTotalCount = computed(() =>
+        this.recentLiveCards().length > 0
+            ? this.data.globalRecentLiveItems().length
+            : this.homeLiveCards().length
+    );
+
+    readonly homeLiveSeeAllLink = computed<string[]>(() => {
+        if (this.recentLiveCards().length > 0) {
+            return ['/workspace/global-recent'];
+        }
+
+        const sample = this.data
+            .xtreamRecentlyAddedItems()
+            .find((item) => item.type === 'live');
+        return sample
+            ? ['/workspace', 'xtreams', sample.playlist_id, 'live']
+            : ['/workspace/global-favorites'];
+    });
 
     readonly favoriteMoviesAndSeriesCards = computed<DashboardRailCard[]>(() =>
         this.data
@@ -250,21 +298,17 @@ export class WorkspaceDashboardRailsComponent {
     );
 
     readonly zenPlayRecentMovieCards = computed<DashboardRailCard[]>(() =>
-        this.isElectron
-            ? []
-            : selectZenPlayRecentItems(
-                  this.data.xtreamRecentlyAddedItems(),
-                  'movie'
-              ).map((item) => this.toZenPlayCatalogCard(item))
+        selectZenPlayRecentItems(
+            this.data.xtreamRecentlyAddedItems(),
+            'movie'
+        ).map((item) => this.toZenPlayCatalogCard(item))
     );
 
     readonly zenPlayRecentSeriesCards = computed<DashboardRailCard[]>(() =>
-        this.isElectron
-            ? []
-            : selectZenPlayRecentItems(
-                  this.data.xtreamRecentlyAddedItems(),
-                  'series'
-              ).map((item) => this.toZenPlayCatalogCard(item))
+        selectZenPlayRecentItems(
+            this.data.xtreamRecentlyAddedItems(),
+            'series'
+        ).map((item) => this.toZenPlayCatalogCard(item))
     );
 
     readonly trendingCards = computed<DashboardRailCard[]>(() => {
@@ -356,8 +400,14 @@ export class WorkspaceDashboardRailsComponent {
                 return;
             }
 
+            // The branded home needs an independent movie rail, series rail,
+            // and a current-year Tendencias pool on every runtime. A 20-row
+            // mixed desktop window can be entirely movies (or entirely
+            // series), which was why installed builds often showed only
+            // Continue Watching. The data service keeps this larger request
+            // bounded and balanced by content type.
             void this.data.reloadXtreamRecentlyAddedItems(
-                this.isElectron ? RAIL_ITEM_LIMIT : ZENPLAY_CATALOG_POOL_LIMIT
+                ZENPLAY_CATALOG_POOL_LIMIT
             );
         });
 
@@ -368,29 +418,11 @@ export class WorkspaceDashboardRailsComponent {
             untracked(() => void this.data.reloadPlaybackPositions());
         });
 
-        // Subscription-expiry badges for the source cards. Xtream rides the
-        // shared PortalStatusService cache; Stalker reads the import-time
-        // snapshot (memoized per playlist), so this stays cheap on re-entry.
-        // Gated on the sources rail being enabled — with the rail hidden no
-        // badge can render, so the status checks would be pure waste.
-        effect(() => {
-            if (!this.dashboardRails().recentSources) {
-                return;
-            }
-            const playlists = this.data.recentPlaylists();
-            untracked(() => void this.sourceExpiry.refresh(playlists));
-        });
-
-        // Trending and recommendations: after the favorites and Continue
-        // Watching, so their title match never holds the DB worker while
-        // the playback positions wait (see connectDashboardTmdbRails).
-        connectDashboardTmdbRails({
-            dashboardRails: this.dashboardRails,
-            languageTick: this.languageTick,
-            data: this.data,
-            trendingService: this.trendingService,
-            recommendationsService: this.recommendationsService,
-        });
+        // The branded ZenPlay home deliberately omits the legacy source,
+        // TMDB-trending and recommendation rails. Do not refresh those hidden
+        // models here: the cinematic hero resolves its own optional metadata,
+        // and keeping the old effects active added DB and network work during
+        // every cold start without producing any visible UI.
     }
 
     onAddPlaylist(type?: WorkspacePlaylistType): void {
@@ -562,6 +594,9 @@ export class WorkspaceDashboardRailsComponent {
             imageUrl: item.poster_url,
             icon: this.typeIcon(item.type),
             contentType: item.type,
+            epgLookupKey: item.epg_lookup_key,
+            epgPlaylistId: item.playlist_id,
+            liveEpgSourceKey: buildDashboardPortalLiveEpgKey(item),
             link: this.data.getRecentlyAddedLink(item),
             state: this.data.getRecentlyAddedNavigationState(item),
         };

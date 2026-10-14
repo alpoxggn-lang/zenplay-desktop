@@ -62,9 +62,50 @@ export class ZenPlayProfileService {
         return true;
     }
 
+    rename(profileId: string, name: string): ZenPlayProfile | null {
+        const normalizedName = name.trim();
+        if (!normalizedName) {
+            return null;
+        }
+
+        const profiles = this.storedProfiles();
+        const index = profiles.findIndex((profile) => profile.id === profileId);
+        if (index === -1) {
+            return null;
+        }
+
+        const profile = {
+            ...profiles[index],
+            name: normalizedName.slice(0, 24),
+        };
+        const updatedProfiles = [...profiles];
+        updatedProfiles[index] = profile;
+        this.storedProfiles.set(updatedProfiles);
+        this.write(PROFILES_STORAGE_KEY, JSON.stringify(updatedProfiles));
+        return profile;
+    }
+
+    remove(profileId: string): boolean {
+        const profiles = this.storedProfiles();
+        if (!profiles.some((profile) => profile.id === profileId)) {
+            return false;
+        }
+
+        const remainingProfiles = profiles.filter(
+            (profile) => profile.id !== profileId
+        );
+        this.storedProfiles.set(remainingProfiles);
+        this.write(PROFILES_STORAGE_KEY, JSON.stringify(remainingProfiles));
+        if (this.storedSelection() === profileId) {
+            this.storedSelection.set(null);
+            this.removeStoredSelection();
+        }
+        return true;
+    }
+
     requireSelection(): void {
         this.storedSelection.set(null);
-        this.remove(SELECTED_PROFILE_STORAGE_KEY);
+        this.removeStoredSelection();
     }
 
     private readProfiles(): ZenPlayProfile[] {
@@ -111,9 +152,9 @@ export class ZenPlayProfileService {
         }
     }
 
-    private remove(key: string): void {
+    private removeStoredSelection(): void {
         try {
-            localStorage.removeItem(key);
+            localStorage.removeItem(SELECTED_PROFILE_STORAGE_KEY);
         } catch {
             // Keep the in-memory state usable when storage is unavailable.
         }

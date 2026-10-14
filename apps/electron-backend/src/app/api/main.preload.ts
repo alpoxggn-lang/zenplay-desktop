@@ -9,9 +9,11 @@ import {
     APP_UPDATE_STATUS_CHANGED,
     ACKNOWLEDGE_PLAYLIST_OPEN_REQUEST,
     ANNOUNCE_PLAYLIST_OPEN_LISTENER,
+    APP_RESUMED,
     OPEN_FILE,
     WINDOW_GET_ZOOM_LEVEL,
     WINDOW_ZOOM_LEVEL_APPLIED,
+    ZENPLAY_ACCOUNT_EXPIRY_NOTIFY,
 } from '@iptvnator/shared/interfaces/ipc-commands';
 import {
     attachEmbeddedMpvFrameView,
@@ -75,6 +77,7 @@ import type {
     StreamProbeHeaders,
     VodSourcePin,
     XtreamCategory,
+    ZenPlayAccountExpiryAlert,
 } from '@iptvnator/shared/interfaces';
 import {
     DEBUG_TRACE_EVENT_CHANNEL,
@@ -101,6 +104,13 @@ const WINDOW_CANCEL_CLOSE = 'WINDOW:CANCEL_CLOSE';
 const WINDOW_CLOSE_REQUESTED = 'WINDOW:CLOSE_REQUESTED';
 const PLAYBACK_SET_KEEP_AWAKE = 'PLAYBACK:SET_KEEP_AWAKE';
 const PARENTAL_LOCK_SET_STATE = 'PARENTAL_LOCK:SET_STATE';
+
+type ZenPlayAccountExpiryBridge = {
+    onAppResume: (callback: () => void) => () => void;
+    showZenPlayAccountExpiryNotification: (
+        request: ZenPlayAccountExpiryAlert
+    ) => Promise<boolean>;
+};
 
 const dbSaveContentProgressListeners = new Set<
     (
@@ -287,7 +297,7 @@ const frameZoomPorts = {
     setZoomLevel: (level: number) => webFrame.setZoomLevel(level),
 };
 
-const electronApi: ElectronBridgeApi = {
+const electronApi: ElectronBridgeApi & ZenPlayAccountExpiryBridge = {
     // Remote control channel change listener
     onChannelChange: (
         callback: (data: { direction: 'up' | 'down' }) => void
@@ -407,6 +417,13 @@ const electronApi: ElectronBridgeApi = {
     },
     getAppVersion: () => ipcRenderer.invoke('get-app-version'),
     platform: process.platform,
+    showZenPlayAccountExpiryNotification: (request) =>
+        ipcRenderer.invoke(ZENPLAY_ACCOUNT_EXPIRY_NOTIFY, request),
+    onAppResume: (callback) => {
+        const handler = () => callback();
+        ipcRenderer.on(APP_RESUMED, handler);
+        return () => ipcRenderer.off(APP_RESUMED, handler);
+    },
     getAppUpdateStatus: () => ipcRenderer.invoke(APP_UPDATE_GET_STATUS),
     checkForAppUpdate: () => ipcRenderer.invoke(APP_UPDATE_CHECK),
     downloadAppUpdate: () => ipcRenderer.invoke(APP_UPDATE_DOWNLOAD),
@@ -915,7 +932,7 @@ const electronApi: ElectronBridgeApi = {
         );
     },
     dbGetGlobalRecentlyAdded: (
-        kind: 'all' | 'vod' | 'series',
+        kind: 'all' | 'live' | 'vod' | 'series',
         limit?: number,
         playlistType?:
             'xtream' | 'stalker' | 'm3u-file' | 'm3u-text' | 'm3u-url'

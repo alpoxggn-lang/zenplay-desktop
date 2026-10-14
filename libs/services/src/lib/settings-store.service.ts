@@ -31,6 +31,7 @@ import {
 } from '@iptvnator/shared/interfaces';
 
 import {
+    DESKTOP_NATIVE_PLAYER_MIGRATION_VERSION,
     DEFAULT_SETTINGS,
     preferSupportedEmbeddedMpvDefault,
     scheduleEmbeddedMpvPrepare,
@@ -79,7 +80,18 @@ export const SettingsStore = signalStore(
                             storedSettings,
                             'player'
                         );
-                        playerChoiceClaimed ||= hasStoredPlayer;
+                        const hasLegacyDesktopWebDefault =
+                            hasStoredPlayer &&
+                            storedSettings.player === VideoPlayer.VideoJs &&
+                            (storedSettings.desktopNativePlayerMigrationVersion ??
+                                0) < DESKTOP_NATIVE_PLAYER_MIGRATION_VERSION;
+                        // A persisted Video.js value from an older ZenPlay
+                        // release was the automatic default, not necessarily
+                        // a choice. Let the native support probe claim it once;
+                        // every player update below records the marker so a
+                        // later explicit selection remains authoritative.
+                        playerChoiceClaimed ||=
+                            hasStoredPlayer && !hasLegacyDesktopWebDefault;
                         patchState(store, {
                             ...DEFAULT_SETTINGS,
                             ...storedSettings,
@@ -96,6 +108,9 @@ export const SettingsStore = signalStore(
                                 normalizeParentalLockRelockMinutes(
                                     storedSettings.parentalLockRelockMinutes
                                 ),
+                            desktopNativePlayerMigrationVersion:
+                                storedSettings.desktopNativePlayerMigrationVersion ??
+                                0,
                         });
                         if (hasStoredPlayer) {
                             void this.sanitizeEmbeddedMpvSelection().catch(
@@ -113,6 +128,8 @@ export const SettingsStore = signalStore(
                         () =>
                             this.updateSettings({
                                 player: VideoPlayer.EmbeddedMpv,
+                                desktopNativePlayerMigrationVersion:
+                                    DESKTOP_NATIVE_PLAYER_MIGRATION_VERSION,
                             })
                     ).catch((error) => {
                         console.warn(
@@ -146,6 +163,11 @@ export const SettingsStore = signalStore(
             ) {
                 if (settings.player !== undefined) {
                     playerChoiceClaimed = true;
+                    settings = {
+                        ...settings,
+                        desktopNativePlayerMigrationVersion:
+                            DESKTOP_NATIVE_PLAYER_MIGRATION_VERSION,
+                    };
                 }
                 const previousEpgUrls = store.epgUrl();
                 patchState(store, {
@@ -211,6 +233,8 @@ export const SettingsStore = signalStore(
             getSettings() {
                 return {
                     player: store.player(),
+                    desktopNativePlayerMigrationVersion:
+                        store.desktopNativePlayerMigrationVersion?.() ?? 0,
                     webPlayerSharedControls:
                         store.webPlayerSharedControls?.() !== false,
                     playerAmbientMode:

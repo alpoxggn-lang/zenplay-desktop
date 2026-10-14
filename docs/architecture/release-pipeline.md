@@ -237,13 +237,21 @@ administratively extracts and checks its payload. On macOS, the gate mounts the
 DMG read-only, validates the ZenPlay bundle identifier, executable architecture,
 Mach-O payload and `app.asar`, then detaches it. Neither path opens the app UI.
 
+Windows tag and `master` builds, plus a manual build with `sign_windows: true`,
+also require the installer and installed `ZenPlay.exe` to carry a trusted,
+timestamped Authenticode signature. The signing certificate is injected only
+through `WIN_CSC_LINK` and `WIN_CSC_KEY_PASSWORD`; production packaging fails
+before upload when either credential is absent or the resulting signature is
+not trusted. Pull-request and default manual-dispatch builds remain explicitly
+unsigned engineering artifacts and run the structural/install smoke only.
+
 The smoke steps run before `actions/upload-artifact`; therefore a malformed or
 non-installable EXE/DMG cannot reach the release job. Their portable structural
 tests run with `pnpm run verify:desktop-installer:test`.
 
 ### Required asset set
 
-28 assets, verified against a real complete matrix build. When the build matrix
+31 assets, verified against a real complete matrix build. When the build matrix
 in `.github/workflows/build-and-make.yaml` gains or loses a target, update
 `requiredAssetRules()` in the same PR.
 
@@ -251,6 +259,7 @@ in `.github/workflows/build-and-make.yaml` gains or loses a target, update
 | ----------------- | -------------------------------------------------------------------------------------------------------- |
 | macOS             | `ZenPlay-<version>-mac-{x64,arm64}.{dmg,zip}` + a `.blockmap` for each (8)                               |
 | Windows           | `-windows-x64-setup.exe` + `.blockmap` (2)                                                               |
+| Download aliases  | `ZenPlay-Windows.exe`, `ZenPlay-Mac-Intel.dmg`, `ZenPlay-Mac-Apple-Silicon.dmg` (3)                     |
 | DEB               | `-linux-{amd64,arm64,armv7l}.deb` (3)                                                                    |
 | AppImage          | `-linux-{x86_64,arm64,armv7l}.AppImage` (3)                                                              |
 | Snap              | `-linux-{amd64,armhf}.snap` (2)                                                                          |
@@ -268,6 +277,12 @@ is sorted deterministically, and is immediately verified against the staged
 files. A duplicate basename, missing file, or hash mismatch stops publication.
 The manifest itself is attached to the release so customers can verify a
 download independently.
+
+The three download aliases are byte-for-byte copies of the corresponding
+versioned installers. They keep `/releases/latest/download/...` links stable
+for manual distribution while the versioned EXE, DMG, ZIP, blockmaps and
+channel metadata remain attached for `electron-updater`. Never replace the
+versioned packages with aliases.
 
 Electron Builder has shipped both pacman artifact shapes, so either satisfies
 that rule. Rules compare plain strings rather than a regex built from the

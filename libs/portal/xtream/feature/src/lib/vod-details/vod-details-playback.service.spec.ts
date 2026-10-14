@@ -752,6 +752,28 @@ describe('VodDetailsPlaybackService — external session ownership', () => {
             expect(service.positionLoaded()).toBe(false);
         });
 
+        it('lets an immediate start wait for the route position already loading', async () => {
+            const load = deferred<PlaybackPositionData | null>();
+            getPlaybackPosition.mockReturnValueOnce(load.promise);
+            const pending = service.loadPosition(ROUTE_PLAYLIST, ROUTE_VOD_ID);
+            let waitSettled = false;
+            const waiting = service
+                .waitForPosition(ROUTE_PLAYLIST, ROUTE_VOD_ID)
+                .then(() => {
+                    waitSettled = true;
+                });
+
+            await Promise.resolve();
+            expect(waitSettled).toBe(false);
+
+            load.resolve(positionFor(ROUTE_PLAYLIST, ROUTE_VOD_ID, 120));
+            await pending;
+            await waiting;
+
+            expect(waitSettled).toBe(true);
+            expect(service.routePlaybackPosition()?.positionSeconds).toBe(120);
+        });
+
         it('drops a pending result once a row was written since the read started', async () => {
             const oldLoad = deferred<PlaybackPositionData | null>();
             getPlaybackPosition.mockReturnValueOnce(oldLoad.promise);

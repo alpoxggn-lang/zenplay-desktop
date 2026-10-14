@@ -115,6 +115,11 @@ describe('WorkspaceShellHeaderComponent', () => {
             fixture.nativeElement.querySelector('.zenplay-brand img')
         ).not.toBeNull();
         expect(
+            fixture.nativeElement
+                .querySelector('.zenplay-brand img')
+                ?.getAttribute('src')
+        ).toBe('assets/branding/zenplay-wordmark-horizontal.png');
+        expect(
             fixture.nativeElement.querySelector(
                 '[data-test-id="zenplay-refresh"]'
             )

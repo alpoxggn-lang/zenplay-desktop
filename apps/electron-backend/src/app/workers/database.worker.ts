@@ -525,7 +525,7 @@ async function executeRequest(
 
         case 'DB_GET_GLOBAL_RECENTLY_ADDED': {
             const payload = message.payload as {
-                kind?: 'all' | 'vod' | 'series';
+                kind?: 'all' | 'live' | 'vod' | 'series';
                 limit?: number;
                 playlistType?:
                     'xtream' | 'stalker' | 'm3u-file' | 'm3u-text' | 'm3u-url';

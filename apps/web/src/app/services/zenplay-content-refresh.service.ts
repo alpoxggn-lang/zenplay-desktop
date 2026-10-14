@@ -58,7 +58,7 @@ export class ZenPlayContentRefreshService {
     private inFlight: Promise<void> | null = null;
     private automaticRefreshStarted = false;
     private lastRefreshStartedAt = 0;
-    private intervalId: ReturnType<typeof setInterval> | null = null;
+    private intervalId: number | null = null;
     private pendingStoreResetPlaylistId: string | null = null;
 
     constructor() {

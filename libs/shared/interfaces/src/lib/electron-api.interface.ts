@@ -195,6 +195,7 @@ export type ElectronBridgeAppUpdateStatusValue =
 
 export const ELECTRON_BRIDGE_GLOBAL_RECENTLY_ADDED_KINDS = {
     All: 'all',
+    Live: 'live',
     Series: 'series',
     Vod: 'vod',
 } as const;

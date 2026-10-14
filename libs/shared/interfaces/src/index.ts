@@ -84,6 +84,7 @@ export * from './lib/xtream-restore-state.util';
 export * from './lib/xtream-server-timezone.util';
 export * from './lib/xtream-recently-added.utils';
 export * from './lib/xtream-performance-marker.interface';
+export * from './lib/zenplay-account-expiry-alert.util';
 export * from './lib/xtream-serie-details.interface';
 export * from './lib/xtream-serie-item.interface';
 export * from './lib/xtream-vod-details.interface';

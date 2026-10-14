@@ -5,6 +5,7 @@ import {
     buildStalkerStateItem,
     buildXtreamItemLink,
     COLLECTION_VIEW_STATE_KEY,
+    consumeXtreamDetailAutoplayState,
     getGlobalFavoriteNavigation,
     getCollectionViewState,
     getOpenCollectionDetailItemState,
@@ -14,6 +15,8 @@ import {
     OPEN_COLLECTION_DETAIL_STATE_KEY,
     matchesOpenLiveCollectionItem,
     OPEN_LIVE_COLLECTION_ITEM_STATE_KEY,
+    withXtreamDetailAutoplayState,
+    XTREAM_DETAIL_AUTOPLAY_STATE_KEY,
 } from './workspace-portal-navigation';
 
 describe('workspace-portal-navigation', () => {
@@ -37,6 +40,45 @@ describe('workspace-portal-navigation', () => {
                 itemId: 99,
             })
         ).toEqual(['/workspace', 'xtreams', 'xtream-1', 'vod', '42', '99']);
+    });
+
+    it('consumes an identity-scoped Xtream detail autoplay handoff once', () => {
+        const state = withXtreamDetailAutoplayState(
+            { keep: true },
+            {
+                playlistId: 'xtream-1',
+                contentType: 'movie',
+                contentId: 99,
+            }
+        );
+        window.history.replaceState(state, '', window.location.href);
+
+        expect(
+            consumeXtreamDetailAutoplayState({
+                playlistId: 'xtream-1',
+                contentType: 'movie',
+                contentId: 100,
+            })
+        ).toBe(false);
+        expect(
+            window.history.state[XTREAM_DETAIL_AUTOPLAY_STATE_KEY]
+        ).toBeDefined();
+
+        expect(
+            consumeXtreamDetailAutoplayState({
+                playlistId: 'xtream-1',
+                contentType: 'movie',
+                contentId: 99,
+            })
+        ).toBe(true);
+        expect(window.history.state).toEqual({ keep: true });
+        expect(
+            consumeXtreamDetailAutoplayState({
+                playlistId: 'xtream-1',
+                contentType: 'movie',
+                contentId: 99,
+            })
+        ).toBe(false);
     });
 
     it('normalizes collection view state for history persistence', () => {

@@ -3067,21 +3067,27 @@ describe('DashboardDataService', () => {
     });
 
     it('keeps the Electron recently-added path on DatabaseService', async () => {
-        dbServiceMock.getGlobalRecentlyAdded.mockResolvedValue([
-            {
-                id: 11,
-                category_id: 77,
-                title: 'Fresh Movie (2026)',
-                rating: '7.35',
-                added: '1774298340',
-                added_at: '1774298340',
-                poster_url: 'https://example.com/poster.png',
-                xtream_id: 501,
-                type: 'movie',
-                playlist_id: 'xtream-1',
-                playlist_name: 'Xtream Playlist',
-            },
-        ]);
+        dbServiceMock.getGlobalRecentlyAdded.mockImplementation((kind) =>
+            Promise.resolve(
+                kind === 'vod'
+                    ? [
+                          {
+                              id: 11,
+                              category_id: 77,
+                              title: 'Fresh Movie (2026)',
+                              rating: '7.35',
+                              added: '1774298340',
+                              added_at: '1774298340',
+                              poster_url: 'https://example.com/poster.png',
+                              xtream_id: 501,
+                              type: 'movie',
+                              playlist_id: 'xtream-1',
+                              playlist_name: 'Xtream Playlist',
+                          },
+                      ]
+                    : []
+            )
+        );
 
         await expect(service.getXtreamRecentlyAddedItems(20)).resolves.toEqual([
             expect.objectContaining({
@@ -3090,12 +3096,59 @@ describe('DashboardDataService', () => {
                 release_year: 2026,
             }),
         ]);
-        expect(dbServiceMock.getGlobalRecentlyAdded).toHaveBeenCalledWith(
-            'all',
-            20,
-            'xtream'
-        );
+        expect(dbServiceMock.getGlobalRecentlyAdded.mock.calls).toEqual([
+            ['vod', 10, 'xtream'],
+            ['series', 10, 'xtream'],
+            ['live', 20, 'xtream'],
+        ]);
         expect(xtreamDataSourceMock.getContent).not.toHaveBeenCalled();
+    });
+
+    it('reserves equal bounded Electron windows for recent movies and series', async () => {
+        dbServiceMock.getGlobalRecentlyAdded.mockImplementation(
+            (kind, limit) =>
+                Promise.resolve(
+                    Array.from({ length: limit }, (_, index) => ({
+                        id:
+                            (kind === 'vod'
+                                ? 1000
+                                : kind === 'series'
+                                  ? 2000
+                                  : 3000) + index,
+                        category_id:
+                            kind === 'vod'
+                                ? 10
+                                : kind === 'series'
+                                  ? 20
+                                  : 30,
+                        title: `${kind} ${index}`,
+                        added: String(1_770_000_000 + index),
+                        added_at: String(1_770_000_000 + index),
+                        xtream_id:
+                            (kind === 'vod'
+                                ? 1000
+                                : kind === 'series'
+                                  ? 2000
+                                  : 3000) + index,
+                        type: kind === 'vod' ? 'movie' : kind,
+                        playlist_id: 'xtream-1',
+                        playlist_name: 'ZenPlay',
+                    }))
+                )
+        );
+
+        const items = await service.getXtreamRecentlyAddedItems(48);
+
+        expect(items.filter((item) => item.type === 'movie')).toHaveLength(24);
+        expect(items.filter((item) => item.type === 'series')).toHaveLength(
+            24
+        );
+        expect(items.filter((item) => item.type === 'live')).toHaveLength(20);
+        expect(dbServiceMock.getGlobalRecentlyAdded.mock.calls).toEqual([
+            ['vod', 24, 'xtream'],
+            ['series', 24, 'xtream'],
+            ['live', 20, 'xtream'],
+        ]);
     });
 
     it('builds the Xtream recently added route', () => {

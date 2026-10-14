@@ -109,9 +109,17 @@ async function slideKinds(page: Page): Promise<SlideKind[]> {
 }
 
 async function showSlide(page: Page, index: number): Promise<Locator> {
-    const dot = page.getByTestId('dashboard-hero-dot').nth(index);
-    await dot.click();
-    await expect(dot).toHaveAttribute('aria-current', 'true');
+    const hero = page.getByTestId('dashboard-hero');
+    const indicators = page.getByTestId('dashboard-hero-dot');
+    const count = await indicators.count();
+    const current = await indicators.evaluateAll((all) =>
+        all.findIndex((item) => item.getAttribute('aria-current') === 'true')
+    );
+    await hero.focus();
+    for (let step = 0; step < (index - current + count) % count; step += 1) {
+        await hero.press('ArrowRight');
+    }
+    await expect(indicators.nth(index)).toHaveAttribute('aria-current', 'true');
     // The backdrop crossfade and the slide's entrance have finished (not the
     // image's slow zoom, which never changes what is under the text).
     await expect
@@ -338,12 +346,11 @@ test.describe('Dashboard hero legibility', () => {
             // nothing. The hero lays out every slide and is as tall as the
             // tallest; with only the shown slide in flow, slides of different
             // heights resized it and moved every rail below by 7px (a score
-            // of 0.005). Every rotation dot keeps its width, so the active
-            // one no longer pushes its neighbours either.
+            // of 0.005). Every passive indicator keeps its width, so the
+            // active one no longer pushes its neighbours either.
             await expectStableRotation(page, 'wide', results);
 
-            const pause = page.getByTestId('dashboard-hero-pause');
-            await pause.click();
+            await page.getByTestId('dashboard-hero').focus();
             const kinds = await slideKinds(page);
             for (const theme of ['light', 'dark'] as const) {
                 await applyTheme(page, theme);
@@ -393,8 +400,10 @@ test.describe('Dashboard hero legibility', () => {
 
             // Again at the narrow width, where slides wrap the most, now that
             // every slide also carries a rating and a two-line overview.
-            await pause.click();
-            await expect(pause).toHaveAttribute('aria-pressed', 'false');
+            await page.evaluate(() =>
+                (document.activeElement as HTMLElement | null)?.blur()
+            );
+            await page.mouse.move(1, 1);
             await expectStableRotation(page, 'narrow enriched', results);
         } finally {
             const report = testInfo.outputPath('contrast.txt');

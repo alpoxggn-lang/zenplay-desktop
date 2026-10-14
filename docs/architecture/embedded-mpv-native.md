@@ -205,10 +205,12 @@ Whatever holds on to one answer follows it through `watchEmbeddedMpvSupport()`
   inconclusive, falls back to the default player only on a final unsupported
   answer, and never overwrites a player the user picked meanwhile.
 - With no persisted player choice, the desktop settings store promotes
-  Embedded MPV only after a positive support answer. Unsupported, failed, and
-  browser/PWA probes keep Video.js; an inconclusive answer may later promote
-  MPV only if the user has not selected a player meanwhile. Any persisted
-  player value is an explicit choice and is preserved.
+  Embedded MPV only after a positive support answer. Existing ZenPlay settings
+  whose persisted player is the former Video.js default receive that same
+  one-time promotion; `desktopNativePlayerMigrationVersion` then records it.
+  Unsupported, failed, and browser/PWA probes keep Video.js. Every subsequent
+  player selection records the marker, so an inconclusive answer can never
+  overwrite a choice made by the user meanwhile or on a later launch.
 - The player (`EmbeddedMpvSessionController`) and the settings page stay
   mounted on one answer: a player mounted in that window starts playback by
   itself once `mpv` is found, and the option appears without reopening the
@@ -698,12 +700,13 @@ The list never appears on a command line: an option such as
 `http-header-fields=Authorization: …` would otherwise be readable by every
 local user through `ps` / `/proc/<pid>/cmdline`.
 
-`EMBEDDED_MPV_NETWORK_DEFAULT_OPTIONS` (`network-timeout=10`,
-`demuxer-lavf-o=reconnect=1,reconnect_streamed=1,reconnect_delay_max=5`) are
-part of that list on purpose: a stalled IPTV connection then surfaces as an
-mpv error within seconds instead of libmpv's 60 s default, and ffmpeg
-re-requests a dropped HTTP stream on its own before the app-level reconnect
-has to. Options mpv rejects never fail session creation, and a rejection is
+`EMBEDDED_MPV_NETWORK_DEFAULT_OPTIONS` uses an 8-second network timeout, a
+bounded 15-second/64 MiB forward and 32 MiB backward demuxer cache without an
+initial cache pause, and ffmpeg reconnect with a 2-second maximum delay. A
+stalled IPTV connection therefore surfaces quickly, short provider/network
+gaps are absorbed without a large startup prebuffer, and ffmpeg re-requests a
+dropped HTTP stream before app-level reconnect has to. Options mpv rejects
+never fail session creation, and a rejection is
 reported without any trace flag, by key only (a value may carry credentials):
 the Windows and macOS native-view engines collect the refused keys into the
 snapshot's `rejectedOptionKeys`, which the service logs once per session as a
