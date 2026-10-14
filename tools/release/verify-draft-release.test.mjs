@@ -40,6 +40,7 @@ function completeAssets(version) {
         'latest-mac.yml',
         'latest.yml',
         'linux-frame-copy-runtime-sources.tar.xz',
+        'SHA256SUMS',
     ];
 }
 
@@ -202,7 +203,7 @@ describe('runVerification', () => {
         assert.match(result.lines[0], /Draft release v0\.24\.0 found\./);
         assert.match(
             result.lines.at(-2),
-            /All 27 required assets present \(27 attached\)\./
+            /All 28 required assets present \(28 attached\)\./
         );
         assert.match(result.lines.at(-1), /publish the release manually/);
     });
@@ -347,7 +348,7 @@ describe('runVerification', () => {
         // pre-publication gate must not pass after publication.
         assert.equal(result.exitCode, 1);
         assert.match(result.lines[0], /already published/);
-        assert.match(result.lines.at(-1), /All 27 required assets present/);
+        assert.match(result.lines.at(-1), /All 28 required assets present/);
         assert.ok(
             !result.lines.some((line) => /publish the release manually/.test(line))
         );

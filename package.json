@@ -116,6 +116,7 @@
         "release:notes:blog": "node tools/release/build-release-notes.mjs --format blog",
         "release:notes:telegram": "node tools/release/build-release-notes.mjs --format telegram",
         "release:notes:reddit": "node tools/release/build-release-notes.mjs --format reddit",
+        "release:checksums:test": "node --test tools/release/release-checksums.test.mjs",
         "release:verify:draft": "node tools/release/verify-draft-release.mjs",
         "release:cards:dry-run": "node tools/release/generate-highlight-cards.mjs --dry-run",
         "release:cards:generate": "node tools/release/generate-highlight-cards.mjs --generate",

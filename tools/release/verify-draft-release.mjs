@@ -108,6 +108,7 @@ export function requiredAssetRules(version) {
     rules.push(
         exact('Source archive', 'linux-frame-copy-runtime-sources.tar.xz')
     );
+    rules.push(exact('Checksum manifest', 'SHA256SUMS'));
 
     return rules;
 }

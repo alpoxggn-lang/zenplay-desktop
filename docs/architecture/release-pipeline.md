@@ -228,7 +228,7 @@ pre-publication gate after publication would claim a boundary already crossed.
 
 ### Required asset set
 
-27 assets, verified against a real complete matrix build. When the build matrix
+28 assets, verified against a real complete matrix build. When the build matrix
 in `.github/workflows/build-and-make.yaml` gains or loses a target, update
 `requiredAssetRules()` in the same PR.
 
@@ -244,6 +244,15 @@ in `.github/workflows/build-and-make.yaml` gains or loses a target, update
 | Pacman | `-linux-x64.pacman` **or** `-linux-x86_64.pkg.tar.*` (1) |
 | Updater metadata | `latest.yml`, `latest-mac.yml`, `latest-linux.yml`, `latest-linux-arm.yml`, `latest-linux-arm64.yml` (5) |
 | Source compliance | `linux-frame-copy-runtime-sources.tar.xz` (1) |
+| Integrity | `SHA256SUMS` (1) |
+
+Before either a draft upload or nightly publication, the workflow generates
+`SHA256SUMS` for every public Windows and macOS package, its blockmap, and all
+updater channel metadata. The manifest uses the flattened GitHub asset names,
+is sorted deterministically, and is immediately verified against the staged
+files. A duplicate basename, missing file, or hash mismatch stops publication.
+The manifest itself is attached to the release so customers can verify a
+download independently.
 
 Electron Builder has shipped both pacman artifact shapes, so either satisfies
 that rule. Rules compare plain strings rather than a regex built from the

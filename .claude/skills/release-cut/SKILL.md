@@ -69,7 +69,7 @@ git push upstream v0.25.1
 Master and `v*` pushes can publish Docker images. The tag build creates a draft
 GitHub release. Run `pnpm run release:verify:draft` — it waits for the tag
 build, then checks draft status, warns on an empty authored body, and verifies
-the complete 27-asset set documented in `docs/architecture/release-pipeline.md`.
+the complete 28-asset set documented in `docs/architecture/release-pipeline.md`.
 It is read-only, and fails on an already-published release. Still review the
 authored text and generated commits by eye.
 
