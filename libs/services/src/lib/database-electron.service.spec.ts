@@ -99,4 +99,27 @@ describe('DatabaseService browser guards', () => {
             bridgeError
         );
     });
+
+    it('forwards an optional recent-catalog search without changing legacy calls', async () => {
+        const dbGetGlobalRecentlyAdded = jest.fn().mockResolvedValue([]);
+        Object.defineProperty(window, 'electron', {
+            configurable: true,
+            writable: true,
+            value: { dbGetGlobalRecentlyAdded },
+        });
+
+        await service.getGlobalRecentlyAddedPage(
+            'vod',
+            48,
+            'xtream',
+            96,
+            'matrix'
+        );
+        await service.getGlobalRecentlyAddedPage('series', 48, 'xtream', 48);
+
+        expect(dbGetGlobalRecentlyAdded.mock.calls).toEqual([
+            ['vod', 48, 'xtream', 96, 'matrix'],
+            ['series', 48, 'xtream', 48],
+        ]);
+    });
 });

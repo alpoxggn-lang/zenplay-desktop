@@ -1106,7 +1106,8 @@ export interface ElectronBridgeApi {
         kind: ElectronBridgeGlobalRecentlyAddedKind,
         limit?: number,
         playlistType?: ElectronBridgePlaylistType,
-        offset?: number
+        offset?: number,
+        searchTerm?: string
     ) => Promise<ElectronBridgeGlobalRecentlyAddedItem[]>;
     dbGetRecentlyViewed: () => Promise<ElectronBridgeGlobalRecentItem[]>;
     dbClearRecentlyViewed: () => Promise<ElectronBridgeResult>;

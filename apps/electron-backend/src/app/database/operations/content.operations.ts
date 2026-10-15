@@ -735,7 +735,8 @@ export async function getGlobalRecentlyAdded(
     kind: GlobalRecentlyAddedKind = 'all',
     limit = 200,
     playlistType?: RecentlyAddedPlaylistType,
-    offset = 0
+    offset = 0,
+    searchTerm?: string
 ) {
     const normalizedLimit = Number.isFinite(limit)
         ? Math.min(Math.max(Math.trunc(limit), 1), 200)
@@ -743,6 +744,19 @@ export async function getGlobalRecentlyAdded(
     const normalizedOffset = Number.isFinite(offset)
         ? Math.max(Math.trunc(offset), 0)
         : 0;
+    const normalizedSearchTerm = normalizeSearchText(searchTerm);
+
+    // Preserve the legacy empty-query feed, but do not turn a non-empty query
+    // made only of punctuation or symbols into an unfiltered catalog request.
+    // The shared title-search builders intentionally discard those characters,
+    // so short-circuit before paging when no searchable letters or digits
+    // remain.
+    if (
+        normalizedSearchTerm &&
+        !normalizeSearchMatchText(normalizedSearchTerm)
+    ) {
+        return [];
+    }
 
     const contentTypes = getRecentlyAddedContentTypes(kind);
 
@@ -758,7 +772,8 @@ export async function getGlobalRecentlyAdded(
                     type,
                     windowLimit,
                     playlistType,
-                    0
+                    0,
+                    normalizedSearchTerm
                 )
             )
         );
@@ -778,7 +793,8 @@ export async function getGlobalRecentlyAdded(
         contentTypes[0],
         normalizedLimit,
         playlistType,
-        normalizedOffset
+        normalizedOffset,
+        normalizedSearchTerm
     );
 }
 
@@ -796,7 +812,8 @@ function getGlobalRecentlyAddedByType(
     type: 'live' | 'movie' | 'series',
     limit: number,
     playlistType?: RecentlyAddedPlaylistType,
-    offset = 0
+    offset = 0,
+    searchTerm = ''
 ) {
     const whereConditions = [
         eq(schema.content.type, type),
@@ -817,6 +834,9 @@ function getGlobalRecentlyAddedByType(
 
     if (playlistType) {
         whereConditions.push(eq(schema.playlists.type, playlistType));
+    }
+    if (searchTerm) {
+        whereConditions.push(...buildContentTitleSearchConditions(searchTerm));
     }
 
     // Sort by `added` directly. Xtream import and DB startup migrations

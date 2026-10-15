@@ -1,7 +1,8 @@
 import { signal } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { ActivatedRoute, convertToParamMap, Router } from '@angular/router';
-import { of } from 'rxjs';
+import { BehaviorSubject } from 'rxjs';
+import { XtreamStore } from '@iptvnator/portal/xtream/data-access';
 import {
     DatabaseService,
     type GlobalRecentlyAddedItem,
@@ -35,6 +36,16 @@ describe('RecentlyAddedCollectionComponent', () => {
     const navigate = jest.fn();
     const lockVersion = signal(0);
     const withholdsEverything = signal(false);
+    const queryParamMap = new BehaviorSubject(convertToParamMap({}));
+    const activeImportSessionId = signal<string | null>(null);
+    const contentLoadStateByType = signal({
+        live: 'ready' as const,
+        vod: 'ready' as const,
+        series: 'ready' as const,
+    });
+    const isContentInitialized = signal(true);
+    const isPendingRestoreBlocked = signal(false);
+    const contentInitBlockReason = signal<string | null>(null);
 
     function createComponent(
         kind: 'vod' | 'series' = 'vod'
@@ -45,7 +56,7 @@ describe('RecentlyAddedCollectionComponent', () => {
                     provide: ActivatedRoute,
                     useValue: {
                         snapshot: { data: { recentlyAddedKind: kind } },
-                        queryParamMap: of(convertToParamMap({})),
+                        queryParamMap,
                     },
                 },
                 {
@@ -59,6 +70,16 @@ describe('RecentlyAddedCollectionComponent', () => {
                 {
                     provide: ParentalLockService,
                     useValue: { version: lockVersion, withholdsEverything },
+                },
+                {
+                    provide: XtreamStore,
+                    useValue: {
+                        activeImportSessionId,
+                        contentInitBlockReason,
+                        contentLoadStateByType,
+                        isContentInitialized,
+                        isPendingRestoreBlocked,
+                    },
                 },
                 { provide: Router, useValue: { navigate } },
             ],
@@ -74,6 +95,16 @@ describe('RecentlyAddedCollectionComponent', () => {
         navigate.mockReset();
         lockVersion.set(0);
         withholdsEverything.set(false);
+        queryParamMap.next(convertToParamMap({}));
+        activeImportSessionId.set(null);
+        contentLoadStateByType.set({
+            live: 'ready',
+            vod: 'ready',
+            series: 'ready',
+        });
+        isContentInitialized.set(true);
+        isPendingRestoreBlocked.set(false);
+        contentInitBlockReason.set(null);
     });
 
     it('loads later pages from every eligible Xtream playlist without a fixed total cap', async () => {
@@ -143,7 +174,24 @@ describe('RecentlyAddedCollectionComponent', () => {
         expect(component.items()).toEqual([]);
     });
 
-    it('deduplicates the same catalog title across Xtream sources', async () => {
+    it('discards a page that resolves after parental filtering becomes fail-closed', async () => {
+        let resolvePage!: (value: GlobalRecentlyAddedItem[]) => void;
+        getGlobalRecentlyAddedPage.mockReturnValueOnce(
+            new Promise<GlobalRecentlyAddedItem[]>((resolve) => {
+                resolvePage = resolve;
+            })
+        );
+        const component = createComponent();
+
+        const load = component.loadNextPage();
+        withholdsEverything.set(true);
+        resolvePage([item(1)]);
+        await load;
+
+        expect(component.items()).toEqual([]);
+    });
+
+    it('keeps source, language, and quality variants with the same catalog title', async () => {
         getGlobalRecentlyAddedPage.mockResolvedValueOnce([
             item(1, {
                 title: '(4K) Arrival (2026)',
@@ -161,8 +209,165 @@ describe('RecentlyAddedCollectionComponent', () => {
 
         await component.loadNextPage();
 
-        expect(component.items()).toHaveLength(1);
-        expect(component.items()[0].playlist_id).toBe('playlist-a');
+        expect(component.items()).toHaveLength(2);
+        expect(component.items().map(({ playlist_id }) => playlist_id)).toEqual(
+            ['playlist-a', 'playlist-b']
+        );
+    });
+
+    it('sends q to the database so search covers unloaded recent pages', async () => {
+        queryParamMap.next(convertToParamMap({ q: 'matrix' }));
+        getGlobalRecentlyAddedPage.mockResolvedValueOnce([
+            item(120, { title: 'The Matrix' }),
+        ]);
+        const component = createComponent();
+
+        await component.loadNextPage();
+
+        expect(getGlobalRecentlyAddedPage).toHaveBeenCalledWith(
+            'vod',
+            48,
+            'xtream',
+            0,
+            'matrix'
+        );
+        expect(component.items()).toEqual([item(120, { title: 'The Matrix' })]);
+    });
+
+    it('discards an older in-flight page and restarts a changed query at offset zero', async () => {
+        let resolveInitialPage!: (value: GlobalRecentlyAddedItem[]) => void;
+        getGlobalRecentlyAddedPage
+            .mockReturnValueOnce(
+                new Promise<GlobalRecentlyAddedItem[]>((resolve) => {
+                    resolveInitialPage = resolve;
+                })
+            )
+            .mockResolvedValueOnce([item(120, { title: 'The Matrix' })]);
+        const component = createComponent();
+        component.ngOnInit();
+        TestBed.flushEffects();
+
+        queryParamMap.next(convertToParamMap({ q: 'matrix' }));
+        TestBed.flushEffects();
+        resolveInitialPage([item(1, { title: 'Old page' })]);
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+
+        expect(getGlobalRecentlyAddedPage.mock.calls).toEqual([
+            ['vod', 48, 'xtream', 0],
+            ['vod', 48, 'xtream', 0, 'matrix'],
+        ]);
+        expect(component.items()).toEqual([item(120, { title: 'The Matrix' })]);
+    });
+
+    it('reloads after the active Xtream import has fully completed', async () => {
+        activeImportSessionId.set('import-1');
+        isContentInitialized.set(false);
+        contentLoadStateByType.set({
+            live: 'ready',
+            vod: 'loading',
+            series: 'loading',
+        });
+        getGlobalRecentlyAddedPage
+            .mockResolvedValueOnce([])
+            .mockResolvedValueOnce([item(2, { title: 'Imported movie' })]);
+        const component = createComponent();
+        component.ngOnInit();
+        TestBed.flushEffects();
+        await Promise.resolve();
+
+        contentLoadStateByType.set({
+            live: 'ready',
+            vod: 'ready',
+            series: 'ready',
+        });
+        isContentInitialized.set(true);
+        TestBed.flushEffects();
+        await Promise.resolve();
+
+        expect(getGlobalRecentlyAddedPage).toHaveBeenCalledTimes(1);
+
+        activeImportSessionId.set(null);
+        TestBed.flushEffects();
+        await Promise.resolve();
+        await Promise.resolve();
+
+        expect(getGlobalRecentlyAddedPage).toHaveBeenCalledTimes(2);
+        expect(component.items()).toEqual([
+            item(2, { title: 'Imported movie' }),
+        ]);
+    });
+
+    it('reloads after cached deep-link hydration becomes ready without an import session', async () => {
+        isContentInitialized.set(false);
+        contentLoadStateByType.set({
+            live: 'ready',
+            vod: 'loading',
+            series: 'loading',
+        });
+        getGlobalRecentlyAddedPage
+            .mockResolvedValueOnce([])
+            .mockResolvedValueOnce([item(3, { title: 'Hydrated movie' })]);
+        const component = createComponent();
+        component.ngOnInit();
+        TestBed.flushEffects();
+        await Promise.resolve();
+
+        contentLoadStateByType.set({
+            live: 'ready',
+            vod: 'ready',
+            series: 'loading',
+        });
+        isContentInitialized.set(true);
+        TestBed.flushEffects();
+        await Promise.resolve();
+        await Promise.resolve();
+
+        expect(getGlobalRecentlyAddedPage).toHaveBeenCalledTimes(2);
+        expect(component.items()).toEqual([
+            item(3, { title: 'Hydrated movie' }),
+        ]);
+    });
+
+    it('defers an import-terminal reload until pending restore is unblocked', async () => {
+        activeImportSessionId.set('import-1');
+        isContentInitialized.set(false);
+        contentLoadStateByType.set({
+            live: 'ready',
+            vod: 'loading',
+            series: 'loading',
+        });
+        getGlobalRecentlyAddedPage
+            .mockResolvedValueOnce([])
+            .mockResolvedValueOnce([item(4, { title: 'Restored movie' })]);
+        const component = createComponent();
+        component.ngOnInit();
+        TestBed.flushEffects();
+        await Promise.resolve();
+
+        contentLoadStateByType.set({
+            live: 'ready',
+            vod: 'ready',
+            series: 'ready',
+        });
+        isContentInitialized.set(true);
+        isPendingRestoreBlocked.set(true);
+        activeImportSessionId.set(null);
+        TestBed.flushEffects();
+        await Promise.resolve();
+
+        expect(getGlobalRecentlyAddedPage).toHaveBeenCalledTimes(1);
+
+        isPendingRestoreBlocked.set(false);
+        TestBed.flushEffects();
+        await Promise.resolve();
+        await Promise.resolve();
+
+        expect(getGlobalRecentlyAddedPage).toHaveBeenCalledTimes(2);
+        expect(component.items()).toEqual([
+            item(4, { title: 'Restored movie' }),
+        ]);
     });
 
     it('uses the series feed whose imported timestamp prefers last_modified', async () => {

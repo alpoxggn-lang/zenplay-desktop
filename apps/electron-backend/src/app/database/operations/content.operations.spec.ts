@@ -494,6 +494,48 @@ describe('content.operations', () => {
         ]);
     });
 
+    it('applies a parameterized title search before paging recent catalog rows', async () => {
+        const { db, queries } = createRecentlyAddedDbMock([
+            [
+                {
+                    id: 43,
+                    added_at: '199',
+                    type: 'movie',
+                    title: 'The Matrix',
+                },
+            ],
+        ]);
+
+        await getGlobalRecentlyAdded(db, 'vod', 48, 'xtream', 48, '  matrix  ');
+
+        expect(queries[0].offset).toHaveBeenCalledWith(48);
+        expect(queries[0].limit).toHaveBeenCalledWith(48);
+        expect(queries[0].where.mock.calls[0][0].conditions).toEqual(
+            expect.arrayContaining([expect.objectContaining({ kind: 'and' })])
+        );
+        expect(
+            sqlMock.mock.calls
+                .flatMap(([, ...values]) => values)
+                .filter((value): value is string => typeof value === 'string')
+        ).toContain('%matrix%');
+    });
+
+    it('returns no rows for a non-empty recent-catalog query without searchable text', async () => {
+        const { db, select } = createRecentlyAddedDbMock([]);
+
+        const result = await getGlobalRecentlyAdded(
+            db,
+            'vod',
+            48,
+            'xtream',
+            0,
+            '--- 🚀'
+        );
+
+        expect(result).toEqual([]);
+        expect(select).not.toHaveBeenCalled();
+    });
+
     it('forms a mixed recently-added page after merging the required prefixes', async () => {
         const { db, queries } = createRecentlyAddedDbMock([
             [

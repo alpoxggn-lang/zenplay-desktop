@@ -495,11 +495,18 @@ page buttons.
 Desktop movie and series sections expose fixed virtual collections at
 `vod/recently-added` and `series/recently-added`. They query the local database
 across every eligible Xtream playlist in bounded, newest-first pages; hidden or
-parentally locked categories stay excluded. The renderer removes duplicate
-titles across sources by TMDB and normalized title/year aliases, then opens a
-chosen item in the playlist and category that supplied it.
+parentally locked categories stay excluded. Each distinct provider row remains
+visible, including source, language, and quality variants, and opens in the
+playlist and category that supplied it. The optional route `q` is applied by
+the database before limit/offset, so scrolling searches the complete recent
+catalog rather than only the pages already loaded in the renderer.
 If parental filtering is fail-closed, the virtual collection is hidden and no
 catalog page is queried or rendered until the lock index is trustworthy again.
+The collection observes both per-type hydration readiness and the routed
+Xtream import session. It reloads from page zero only after initialization is
+complete and any pending restore has cleared. This covers cold deep links and
+destructive content refreshes without publishing partial imports; parental
+generations still invalidate any query that was already in flight.
 
 Movie recency uses the provider's `added` timestamp, with `last_modified` as a
 fallback. Series recency prefers `last_modified`, so a provider-reported new

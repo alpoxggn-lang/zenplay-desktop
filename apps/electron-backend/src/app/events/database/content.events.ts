@@ -37,12 +37,14 @@ handleWorkerRequest(
         limit = 200,
         playlistType?:
             'xtream' | 'stalker' | 'm3u-file' | 'm3u-text' | 'm3u-url',
-        offset?: number
+        offset?: number,
+        searchTerm?: string
     ) => ({
         kind,
         limit,
         playlistType,
         ...(offset === undefined ? {} : { offset }),
+        ...(searchTerm === undefined ? {} : { searchTerm }),
     })
 );
 

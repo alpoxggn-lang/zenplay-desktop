@@ -16,6 +16,7 @@ import {
     GridListComponent,
     InfiniteScrollDirective,
 } from '@iptvnator/portal/shared/ui';
+import { XtreamStore } from '@iptvnator/portal/xtream/data-access';
 import { buildXtreamNavigationTarget } from '@iptvnator/portal/shared/util';
 import {
     DatabaseService,
@@ -23,10 +24,6 @@ import {
     ParentalLockService,
     RuntimeCapabilitiesService,
 } from '@iptvnator/services';
-import {
-    foldSearchText,
-    normalizeTitleKeys,
-} from '@iptvnator/shared/interfaces';
 
 type RecentlyAddedCollectionKind = 'vod' | 'series';
 type RecentlyAddedGridItem = GlobalRecentlyAddedItem & Record<string, unknown>;
@@ -46,6 +43,7 @@ export class RecentlyAddedCollectionComponent implements OnInit {
     private readonly parentalLock = inject(ParentalLockService);
     private readonly router = inject(Router);
     private readonly runtime = inject(RuntimeCapabilitiesService);
+    private readonly xtreamStore = inject(XtreamStore);
     private readonly allItemsState = signal<GlobalRecentlyAddedItem[]>([]);
     private readonly seenItemKeys = new Set<string>();
     private loadInFlight = false;
@@ -56,6 +54,9 @@ export class RecentlyAddedCollectionComponent implements OnInit {
     private observedLockVersion = this.parentalLock.version();
     private observedWithholdsEverything =
         this.parentalLock.withholdsEverything();
+    private observedContentLoadState =
+        this.xtreamStore.contentLoadStateByType()[this.resolveKind()];
+    private contentRefreshPending = false;
 
     readonly kind = this.resolveKind();
     readonly titleKey =
@@ -74,6 +75,8 @@ export class RecentlyAddedCollectionComponent implements OnInit {
         ),
         { initialValue: '' }
     );
+    private observedSearchTerm = this.searchTerm();
+    private observedImportSessionId = this.xtreamStore.activeImportSessionId();
     readonly items = computed(() => {
         const lockVersion = this.parentalLock.version();
         if (
@@ -82,13 +85,7 @@ export class RecentlyAddedCollectionComponent implements OnInit {
         ) {
             return [];
         }
-        const query = foldSearchText(this.searchTerm());
-        const all = this.allItemsState();
-        return query
-            ? all.filter((item) =>
-                  foldSearchText(item.title ?? '').includes(query)
-              )
-            : all;
+        return this.allItemsState();
     });
     readonly gridItems = computed<RecentlyAddedGridItem[]>(() =>
         this.items().map((item) => ({ ...item }) as RecentlyAddedGridItem)
@@ -120,18 +117,52 @@ export class RecentlyAddedCollectionComponent implements OnInit {
 
                 this.observedLockVersion = lockVersion;
                 this.observedWithholdsEverything = withholdsEverything;
-                this.resetCollection();
-                if (withholdsEverything) {
-                    this.reloadAfterCurrent = false;
-                    this.isLoading.set(false);
+                this.reloadCollection();
+            });
+        });
+
+        effect(() => {
+            const searchTerm = this.searchTerm();
+            const importSessionId = this.xtreamStore.activeImportSessionId();
+            const contentLoadState =
+                this.xtreamStore.contentLoadStateByType()[this.kind];
+            const contentInitialized = this.xtreamStore.isContentInitialized();
+            const restoreBlocked = this.xtreamStore.isPendingRestoreBlocked();
+            const initBlockReason = this.xtreamStore.contentInitBlockReason();
+            untracked(() => {
+                if (!this.initialized) {
+                    this.observedSearchTerm = searchTerm;
+                    this.observedImportSessionId = importSessionId;
+                    this.observedContentLoadState = contentLoadState;
                     return;
                 }
 
-                this.isLoading.set(true);
-                if (this.loadInFlight) {
-                    this.reloadAfterCurrent = true;
-                } else {
-                    void this.loadNextPage();
+                const searchChanged = searchTerm !== this.observedSearchTerm;
+                const importSessionCompleted =
+                    this.observedImportSessionId !== null &&
+                    importSessionId === null;
+                const contentBecameReady =
+                    this.observedContentLoadState !== 'ready' &&
+                    contentLoadState === 'ready';
+                if (importSessionCompleted || contentBecameReady) {
+                    this.contentRefreshPending = true;
+                }
+                const contentRefreshCompleted =
+                    this.contentRefreshPending &&
+                    importSessionId === null &&
+                    contentInitialized &&
+                    contentLoadState === 'ready' &&
+                    !restoreBlocked &&
+                    initBlockReason === null;
+                this.observedSearchTerm = searchTerm;
+                this.observedImportSessionId = importSessionId;
+                this.observedContentLoadState = contentLoadState;
+
+                if (contentRefreshCompleted) {
+                    this.contentRefreshPending = false;
+                }
+                if (searchChanged || contentRefreshCompleted) {
+                    this.reloadCollection();
                 }
             });
         });
@@ -177,12 +208,21 @@ export class RecentlyAddedCollectionComponent implements OnInit {
         try {
             let added = 0;
             do {
-                const page = await this.database.getGlobalRecentlyAddedPage(
-                    this.kind,
-                    PAGE_SIZE,
-                    'xtream',
-                    this.offset
-                );
+                const searchTerm = this.searchTerm();
+                const page = searchTerm
+                    ? await this.database.getGlobalRecentlyAddedPage(
+                          this.kind,
+                          PAGE_SIZE,
+                          'xtream',
+                          this.offset,
+                          searchTerm
+                      )
+                    : await this.database.getGlobalRecentlyAddedPage(
+                          this.kind,
+                          PAGE_SIZE,
+                          'xtream',
+                          this.offset
+                      );
                 if (
                     loadGeneration !== this.loadGeneration ||
                     lockVersion !== this.parentalLock.version() ||
@@ -205,6 +245,7 @@ export class RecentlyAddedCollectionComponent implements OnInit {
             if (this.reloadAfterCurrent) {
                 this.reloadAfterCurrent = false;
                 if (!this.parentalLock.withholdsEverything()) {
+                    this.isLoading.set(true);
                     void this.loadNextPage();
                 }
             }
@@ -228,10 +269,9 @@ export class RecentlyAddedCollectionComponent implements OnInit {
     private appendUnique(page: readonly GlobalRecentlyAddedItem[]): number {
         const unique: GlobalRecentlyAddedItem[] = [];
         for (const item of page) {
-            const keys = this.itemKeys(item);
-            const duplicate = keys.some((key) => this.seenItemKeys.has(key));
-            keys.forEach((key) => this.seenItemKeys.add(key));
-            if (duplicate) continue;
+            const key = `${item.playlist_id}:${item.type}:${item.xtream_id}`;
+            if (this.seenItemKeys.has(key)) continue;
+            this.seenItemKeys.add(key);
             unique.push(item);
         }
 
@@ -241,23 +281,20 @@ export class RecentlyAddedCollectionComponent implements OnInit {
         return unique.length;
     }
 
-    private itemKeys(item: GlobalRecentlyAddedItem): string[] {
-        const keys: string[] = [];
-        const tmdbId = Number(item.tmdb_id);
-        if (Number.isInteger(tmdbId) && tmdbId > 0) {
-            keys.push(`${item.type}:tmdb:${tmdbId}`);
+    private reloadCollection(): void {
+        this.resetCollection();
+        if (this.parentalLock.withholdsEverything()) {
+            this.reloadAfterCurrent = false;
+            this.isLoading.set(false);
+            return;
         }
 
-        const normalized = normalizeTitleKeys(item.title);
-        const titleKey = normalized.base || normalized.exact;
-        const year = item.release_year ?? normalized.trailingYear ?? '';
-        if (titleKey) {
-            keys.push(`${item.type}:title:${titleKey}:${year}`);
+        this.isLoading.set(true);
+        if (this.loadInFlight) {
+            this.reloadAfterCurrent = true;
+            return;
         }
-        if (keys.length === 0) {
-            keys.push(`${item.playlist_id}:${item.type}:${item.xtream_id}`);
-        }
-        return keys;
+        void this.loadNextPage();
     }
 
     private resetCollection(): void {

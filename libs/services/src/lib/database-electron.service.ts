@@ -679,14 +679,16 @@ export class DatabaseService {
         kind: GlobalRecentlyAddedKind,
         limit = 200,
         playlistType?: GlobalRecentlyAddedPlaylistType,
-        offset?: number
+        offset?: number,
+        searchTerm?: string
     ): Promise<GlobalRecentlyAddedItem[]> {
         try {
             return await this.getGlobalRecentlyAddedPage(
                 kind,
                 limit,
                 playlistType,
-                offset
+                offset,
+                searchTerm
             );
         } catch (error) {
             console.error('Error getting global recently added items:', error);
@@ -703,14 +705,24 @@ export class DatabaseService {
         kind: GlobalRecentlyAddedKind,
         limit = 200,
         playlistType?: GlobalRecentlyAddedPlaylistType,
-        offset?: number
+        offset?: number,
+        searchTerm?: string
     ): Promise<GlobalRecentlyAddedItem[]> {
-        const items = await window.electron.dbGetGlobalRecentlyAdded(
-            kind,
-            limit,
-            playlistType,
-            offset
-        );
+        const items =
+            searchTerm === undefined
+                ? await window.electron.dbGetGlobalRecentlyAdded(
+                      kind,
+                      limit,
+                      playlistType,
+                      offset
+                  )
+                : await window.electron.dbGetGlobalRecentlyAdded(
+                      kind,
+                      limit,
+                      playlistType,
+                      offset,
+                      searchTerm
+                  );
         return items || [];
     }
 

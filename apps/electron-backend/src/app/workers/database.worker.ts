@@ -530,13 +530,15 @@ async function executeRequest(
                 playlistType?:
                     'xtream' | 'stalker' | 'm3u-file' | 'm3u-text' | 'm3u-url';
                 offset?: number;
+                searchTerm?: string;
             };
             return getGlobalRecentlyAdded(
                 db,
                 payload.kind,
                 payload.limit,
                 payload.playlistType,
-                payload.offset
+                payload.offset,
+                payload.searchTerm
             );
         }
 

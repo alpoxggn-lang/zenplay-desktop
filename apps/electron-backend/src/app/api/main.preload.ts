@@ -936,22 +936,35 @@ const electronApi: ElectronBridgeApi & ZenPlayAccountExpiryBridge = {
         limit?: number,
         playlistType?:
             'xtream' | 'stalker' | 'm3u-file' | 'm3u-text' | 'm3u-url',
-        offset?: number
-    ) =>
-        offset === undefined
-            ? ipcRenderer.invoke(
-                  'DB_GET_GLOBAL_RECENTLY_ADDED',
-                  kind,
-                  limit,
-                  playlistType
-              )
-            : ipcRenderer.invoke(
-                  'DB_GET_GLOBAL_RECENTLY_ADDED',
-                  kind,
-                  limit,
-                  playlistType,
-                  offset
-              ),
+        offset?: number,
+        searchTerm?: string
+    ) => {
+        if (searchTerm !== undefined) {
+            return ipcRenderer.invoke(
+                'DB_GET_GLOBAL_RECENTLY_ADDED',
+                kind,
+                limit,
+                playlistType,
+                offset,
+                searchTerm
+            );
+        }
+        if (offset !== undefined) {
+            return ipcRenderer.invoke(
+                'DB_GET_GLOBAL_RECENTLY_ADDED',
+                kind,
+                limit,
+                playlistType,
+                offset
+            );
+        }
+        return ipcRenderer.invoke(
+            'DB_GET_GLOBAL_RECENTLY_ADDED',
+            kind,
+            limit,
+            playlistType
+        );
+    },
     dbGetRecentlyViewed: () => ipcRenderer.invoke('DB_GET_RECENTLY_VIEWED'),
     dbClearRecentlyViewed: () => ipcRenderer.invoke('DB_CLEAR_RECENTLY_VIEWED'),
     // Favorites
