@@ -10,6 +10,7 @@ import {
     XtreamStore,
 } from '@iptvnator/portal/xtream/data-access';
 import { GlobalSearchResult } from '@iptvnator/shared/interfaces';
+import { GLOBAL_SEARCH_SCOPE_STORAGE_KEY } from './global-search-scope';
 
 jest.mock('@iptvnator/portal/shared/ui', () => ({
     ContentCardComponent: class {},
@@ -80,6 +81,8 @@ describe('SearchResultsComponent global search', () => {
     let routerNavigateMock: jest.Mock;
 
     beforeEach(() => {
+        localStorage.removeItem(GLOBAL_SEARCH_SCOPE_STORAGE_KEY);
+        localStorage.removeItem('global-search-type-filters');
         routerNavigateMock = jest.fn();
 
         TestBed.configureTestingModule({
@@ -116,6 +119,11 @@ describe('SearchResultsComponent global search', () => {
         });
     });
 
+    afterEach(() => {
+        localStorage.removeItem(GLOBAL_SEARCH_SCOPE_STORAGE_KEY);
+        localStorage.removeItem('global-search-type-filters');
+    });
+
     it('clears the workspace global search term when the route q param is empty', () => {
         const store = TestBed.inject(XtreamStore) as unknown as MockXtreamStore;
         store.searchTerm.set('matrix');
@@ -129,6 +137,38 @@ describe('SearchResultsComponent global search', () => {
         expect(component.searchTerm()).toBe('');
         expect(component.isGlobalSearch).toBe(true);
         expect(component.backAvailable).toBe(false);
+    });
+
+    it('searches only the content type chosen in the global scope control', () => {
+        const component = TestBed.runInInjectionContext(
+            () => new SearchResultsComponent()
+        );
+        const store = TestBed.inject(XtreamStore) as unknown as MockXtreamStore;
+        const databaseService = TestBed.inject(DatabaseService) as unknown as {
+            globalSearchContent: jest.Mock;
+        };
+        TestBed.flushEffects();
+        store.setSearchTerm('matrix');
+        databaseService.globalSearchContent.mockClear();
+
+        component.setGlobalSearchScope('series');
+
+        expect(store.searchFilters()).toEqual({
+            live: false,
+            movie: false,
+            series: true,
+        });
+        expect(component.globalSearchScope()).toBe('series');
+        expect(databaseService.globalSearchContent).toHaveBeenCalledWith(
+            'matrix',
+            ['series'],
+            false,
+            undefined,
+            { limit: 101, offset: 0 }
+        );
+        expect(localStorage.getItem(GLOBAL_SEARCH_SCOPE_STORAGE_KEY)).toBe(
+            'series'
+        );
     });
 
     it('navigates global search selection to workspace xtream route', () => {

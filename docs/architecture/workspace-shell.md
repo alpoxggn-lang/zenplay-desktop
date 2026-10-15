@@ -371,7 +371,11 @@ Search is shell-owned and route-aware:
 7. Global search uses the header input as its primary input and writes the
    search phrase to the `q` query parameter, so history/back-forward behavior
    matches the rest of the workspace.
-8. The URL is authoritative for the search box only when it carries search
+8. Its content scope is one exclusive choice: all content, live TV, movies, or
+   series. The choice is persisted locally and is passed to the existing
+   paged database search; legacy multi-checkbox preferences migrate to their
+   single matching type, or to all content when they were mixed.
+9. The URL is authoritative for the search box only when it carries search
    intent. `WorkspaceShellSearchSyncService` re-reads `q` on every
    `NavigationEnd`, but an **app-initiated** navigation that stays on the same
    page and carries the term already applied is always ignored — whether or
@@ -386,10 +390,10 @@ Search is shell-owned and route-aware:
    keeps exactly what the user typed. Pages are free to write their own query
    params while the user types; they must not assume the shell will re-apply
    the search afterwards.
-9. Browser history overrides that guard. The exemption is keyed on
+10. Browser history overrides that guard. The exemption is keyed on
    `Navigation.trigger === 'imperative'`, so back/forward always re-applies
    what the history entry carries, even mid-typing.
-10. Applying a term explicitly supersedes a queued one. `applySearchQuery()`
+11. Applying a term explicitly supersedes a queued one. `applySearchQuery()`
     cancels any pending debounce, so the Enter key committing a trimmed term
     cannot be overwritten a moment later by the untrimmed keystroke still
     waiting behind it.

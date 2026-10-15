@@ -10,6 +10,7 @@ import {
     untracked,
 } from '@angular/core';
 import { FormsModule } from '@angular/forms';
+import { MatButtonToggleModule } from '@angular/material/button-toggle';
 import { MatCheckboxModule } from '@angular/material/checkbox';
 import { MatIcon } from '@angular/material/icon';
 import { MatProgressSpinner } from '@angular/material/progress-spinner';
@@ -35,6 +36,14 @@ import {
     GlobalSearchResult,
     isM3uGlobalSearchResult,
 } from '@iptvnator/shared/interfaces';
+import {
+    filtersForGlobalSearchScope,
+    globalSearchScopeFromFilters,
+    GLOBAL_SEARCH_SCOPE_STORAGE_KEY,
+    GlobalSearchScope,
+    isGlobalSearchScope,
+    readStoredGlobalSearchScope,
+} from './global-search-scope';
 
 interface GlobalSearchResultGroup {
     playlistId: string;
@@ -77,6 +86,7 @@ function groupResultsByPlaylistId(
     imports: [
         ContentCardComponent,
         FormsModule,
+        MatButtonToggleModule,
         MatCheckboxModule,
         MatIcon,
         MatProgressSpinner,
@@ -116,11 +126,14 @@ export class SearchResultsComponent implements AfterViewInit {
         'global-search-group-by-playlist';
     private static readonly EXCLUDE_HIDDEN_STORAGE_KEY =
         'xtream-search-exclude-hidden';
-    private static readonly TYPE_FILTERS_STORAGE_KEY =
-        'global-search-type-filters';
 
     readonly isGlobalSearch =
         this.activatedRoute.snapshot.data?.['isGlobalSearch'] === true;
+
+    /** One explicit global scope; in-portal search keeps its multi-filter UI. */
+    readonly globalSearchScope = computed(() =>
+        globalSearchScopeFromFilters(this.filters())
+    );
 
     /** Nothing of the portal's catalog is loading or importing any more. */
     private readonly isCatalogReady = computed(
@@ -239,23 +252,11 @@ export class SearchResultsComponent implements AfterViewInit {
 
     constructor() {
         if (this.isGlobalSearch) {
-            const savedFilters = localStorage.getItem(
-                SearchResultsComponent.TYPE_FILTERS_STORAGE_KEY
+            this.xtreamStore.setSearchFilters(
+                filtersForGlobalSearchScope(
+                    readStoredGlobalSearchScope(localStorage)
+                )
             );
-            if (savedFilters) {
-                try {
-                    const parsed = JSON.parse(
-                        savedFilters
-                    ) as Partial<SearchFilters>;
-                    this.xtreamStore.setSearchFilters({
-                        live: parsed.live !== false,
-                        movie: parsed.movie !== false,
-                        series: parsed.series !== false,
-                    });
-                } catch {
-                    // Ignore malformed storage value and keep defaults.
-                }
-            }
         }
 
         // Created first so a route `q` reaches the store before the search
@@ -330,12 +331,18 @@ export class SearchResultsComponent implements AfterViewInit {
     updateFilter(key: keyof SearchFilters, value: boolean) {
         this.xtreamStore.updateSearchFilter(key, value);
 
-        if (this.isGlobalSearch) {
-            localStorage.setItem(
-                SearchResultsComponent.TYPE_FILTERS_STORAGE_KEY,
-                JSON.stringify(this.xtreamStore.searchFilters())
-            );
+        if (this.searchTerm().length >= this.minSearchLength) {
+            this.executeSearch();
         }
+    }
+
+    setGlobalSearchScope(scope: GlobalSearchScope): void {
+        if (!isGlobalSearchScope(scope)) {
+            return;
+        }
+
+        this.xtreamStore.setSearchFilters(filtersForGlobalSearchScope(scope));
+        localStorage.setItem(GLOBAL_SEARCH_SCOPE_STORAGE_KEY, scope);
 
         if (this.searchTerm().length >= this.minSearchLength) {
             this.executeSearch();

@@ -1,3 +1,4 @@
+@use '@angular/material' as mat;
 @use '../../../../../shared/ui/src/lib/styles/content-grid' as grid;
 
 :host {
@@ -44,7 +45,7 @@
         flex-wrap: wrap;
     }
 
-    .global-search-filters,
+    .global-search-scope-field,
     .global-search-options {
         display: flex;
         align-items: center;
@@ -62,6 +63,34 @@
     }
 }
 
+.global-search-scope-field {
+    min-width: 0;
+}
+
+.global-search-scope-label {
+    color: var(--app-eyebrow-color);
+    font-size: 0.78rem;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.global-search-scope {
+    max-width: 100%;
+    app-region: no-drag;
+
+    @include mat.button-toggle-overrides(
+        (
+            background-color: var(--app-widget-bg),
+            divider-color: var(--app-widget-border),
+            height: 36px,
+            selected-state-background-color: var(--app-selection-surface-strong),
+            selected-state-text-color: var(--app-selection-color),
+            shape: 18px,
+            text-color: var(--app-on-surface),
+        )
+    );
+}
+
 @media (max-width: 900px) {
     .global-search-subheader {
         .global-search-controls {
@@ -72,6 +101,10 @@
             width: 100%;
             padding-inline-start: 0;
             border-inline-start: 0;
+        }
+
+        .global-search-scope-field {
+            flex-wrap: wrap;
         }
     }
 }

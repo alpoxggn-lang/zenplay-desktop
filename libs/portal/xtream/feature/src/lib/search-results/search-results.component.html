@@ -51,17 +51,33 @@
                     </span>
                 </div>
                 <div class="global-search-controls">
-                    <div class="global-search-filters">
-                        @for (filter of filterConfig; track filter.key) {
-                            <mat-checkbox
-                                [ngModel]="filters()[filter.key]"
-                                (ngModelChange)="
-                                    updateFilter(filter.key, $event)
-                                "
-                            >
-                                {{ filter.translationKey | translate }}
-                            </mat-checkbox>
-                        }
+                    <div class="global-search-scope-field">
+                        <span
+                            id="global-search-scope-label"
+                            class="global-search-scope-label"
+                        >
+                            {{ 'WORKSPACE.CONTEXT.FILTER_BY_TYPE' | translate }}
+                        </span>
+                        <mat-button-toggle-group
+                            class="global-search-scope"
+                            [value]="globalSearchScope()"
+                            (change)="setGlobalSearchScope($event.value)"
+                            aria-labelledby="global-search-scope-label"
+                            hideSingleSelectionIndicator
+                        >
+                            <mat-button-toggle value="all">
+                                {{ 'PORTALS.ALL_ITEMS' | translate }}
+                            </mat-button-toggle>
+                            <mat-button-toggle value="live">
+                                {{ 'PORTALS.LIVE_TV' | translate }}
+                            </mat-button-toggle>
+                            <mat-button-toggle value="movie">
+                                {{ 'PORTALS.MOVIES' | translate }}
+                            </mat-button-toggle>
+                            <mat-button-toggle value="series">
+                                {{ 'PORTALS.SERIES' | translate }}
+                            </mat-button-toggle>
+                        </mat-button-toggle-group>
                     </div>
                     <div class="global-search-options">
                         <mat-checkbox
