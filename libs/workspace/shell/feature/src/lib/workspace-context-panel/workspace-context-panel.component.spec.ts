@@ -1,9 +1,9 @@
 import { computed, signal } from '@angular/core';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { NoopAnimationsModule } from '@angular/platform-browser/animations';
-import { Router } from '@angular/router';
+import { NavigationEnd, Router } from '@angular/router';
 import { TranslateService } from '@ngx-translate/core';
-import { of } from 'rxjs';
+import { of, Subject } from 'rxjs';
 import { MatDialog } from '@angular/material/dialog';
 import {
     StalkerPortalError,
@@ -16,7 +16,10 @@ import {
     XtreamStore,
 } from '@iptvnator/portal/xtream/data-access';
 import { LiveLayoutSidebarStateService } from '@iptvnator/portal/shared/util';
-import { ParentalLockService } from '@iptvnator/services';
+import {
+    ParentalLockService,
+    RuntimeCapabilitiesService,
+} from '@iptvnator/services';
 import { WorkspaceContextPanelComponent } from './workspace-context-panel.component';
 
 const translations: Record<string, string> = {
@@ -31,6 +34,9 @@ const translations: Record<string, string> = {
     'WORKSPACE.SORT_SERVER': 'Server sorting',
     'WORKSPACE.SHELL.XTREAM_IMPORT_LOADING':
         'Fetching playlist data from source...',
+    'WORKSPACE.DASHBOARD.ZENPLAY_RECENT_MOVIES': 'Recently added · Movies',
+    'WORKSPACE.DASHBOARD.ZENPLAY_RECENT_SERIES':
+        'Recently added or updated · Series',
     'PORTALS.ALL_CATEGORIES': 'All Categories',
 };
 
@@ -120,7 +126,10 @@ describe('WorkspaceContextPanelComponent', () => {
         setPage: jest.fn(),
         clearSelectedItem: jest.fn(),
     };
+    const routerEvents = new Subject<NavigationEnd>();
     const router = {
+        url: '',
+        events: routerEvents.asObservable(),
         routerState: {
             snapshot: {
                 root: createRouteSnapshot(null),
@@ -131,6 +140,7 @@ describe('WorkspaceContextPanelComponent', () => {
     const dialog = {
         open: jest.fn(),
     };
+    const runtime = { supportsPortalActivityStorage: false };
     const drawerOpen = signal(false);
 
     beforeEach(async () => {
@@ -156,8 +166,10 @@ describe('WorkspaceContextPanelComponent', () => {
         router.routerState.snapshot.root = createRouteSnapshot(null, false, [
             createRouteSnapshot('live'),
         ]);
+        router.url = '';
         router.navigate.mockClear();
         dialog.open.mockClear();
+        runtime.supportsPortalActivityStorage = false;
         drawerOpen.set(false);
 
         await TestBed.configureTestingModule({
@@ -193,6 +205,10 @@ describe('WorkspaceContextPanelComponent', () => {
                     useValue: dialog,
                 },
                 {
+                    provide: RuntimeCapabilitiesService,
+                    useValue: runtime,
+                },
+                {
                     // Root-provided in production; stubbed because the spec's
                     // Router mock has no `events` stream for the real service.
                     provide: WorkspaceShellContextDrawerService,
@@ -206,6 +222,91 @@ describe('WorkspaceContextPanelComponent', () => {
             provider: 'xtreams',
             playlistId: 'playlist-1',
         });
+    });
+
+    it('adds a fixed recently-added collection inside Movies and navigates to it', () => {
+        runtime.supportsPortalActivityStorage = true;
+        xtreamSelectedTypeContentState.set('ready');
+        xtreamIsImporting.set(false);
+        fixture.componentRef.setInput('section', 'vod');
+        fixture.detectChanges();
+
+        expect(getCategoryLabels(fixture)).toEqual([
+            'Recently added · Movies',
+            'News',
+            'Sports',
+        ]);
+
+        const recentButton = fixture.nativeElement.querySelector(
+            '[data-category-id="__recently-added__"]'
+        ) as HTMLButtonElement;
+        expect(
+            recentButton.querySelector('mat-icon')?.textContent?.trim()
+        ).toBe('folder_special');
+        expect(recentButton.querySelector('.item-count')).toBeNull();
+
+        recentButton.click();
+        fixture.detectChanges();
+
+        expect(xtreamStore.setSelectedItem).toHaveBeenCalledWith(null);
+        expect(xtreamStore.setSelectedCategory).toHaveBeenCalledWith(null);
+        expect(router.navigate).toHaveBeenCalledWith([
+            '/workspace',
+            'xtreams',
+            'playlist-1',
+            'vod',
+            'recently-added',
+        ]);
+        expect(recentButton.getAttribute('aria-current')).toBe('true');
+    });
+
+    it('labels the fixed Series collection as added or updated', () => {
+        runtime.supportsPortalActivityStorage = true;
+        xtreamSelectedTypeContentState.set('ready');
+        xtreamIsImporting.set(false);
+        fixture.componentRef.setInput('section', 'series');
+        fixture.detectChanges();
+
+        routerEvents.next(
+            new NavigationEnd(
+                1,
+                '/workspace/xtreams/playlist-1/series/recently-added',
+                '/workspace/xtreams/playlist-1/series/recently-added'
+            )
+        );
+        fixture.detectChanges();
+
+        expect(getCategoryLabels(fixture)[0]).toBe(
+            'Recently added or updated · Series'
+        );
+        expect(
+            fixture.nativeElement
+                .querySelector('[data-category-id="__recently-added__"]')
+                ?.getAttribute('aria-current')
+        ).toBe('true');
+    });
+
+    it('hides the fixed collection while parental filtering is fail-closed', () => {
+        runtime.supportsPortalActivityStorage = true;
+        Object.defineProperty(
+            TestBed.inject(ParentalLockService),
+            'withholdsEverything',
+            {
+                configurable: true,
+                value: signal(true),
+            }
+        );
+        xtreamSelectedTypeContentState.set('ready');
+        xtreamIsImporting.set(false);
+        fixture.componentRef.setInput('section', 'vod');
+        fixture.detectChanges();
+
+        expect(getCategoryLabels(fixture)).toEqual(['News', 'Sports']);
+        expect(
+            fixture.nativeElement.querySelector(
+                '[data-category-id="__recently-added__"]'
+            )
+        ).toBeNull();
     });
 
     it('renders loading meta and blocks xtream category clicks until counts are ready', () => {

@@ -678,19 +678,40 @@ export class DatabaseService {
     async getGlobalRecentlyAdded(
         kind: GlobalRecentlyAddedKind,
         limit = 200,
-        playlistType?: GlobalRecentlyAddedPlaylistType
+        playlistType?: GlobalRecentlyAddedPlaylistType,
+        offset?: number
     ): Promise<GlobalRecentlyAddedItem[]> {
         try {
-            const items = await window.electron.dbGetGlobalRecentlyAdded(
+            return await this.getGlobalRecentlyAddedPage(
                 kind,
                 limit,
-                playlistType
+                playlistType,
+                offset
             );
-            return items || [];
         } catch (error) {
             console.error('Error getting global recently added items:', error);
             return [];
         }
+    }
+
+    /**
+     * Fetch one bounded collection page while preserving bridge failures for
+     * callers that expose an explicit retry state. Dashboard rails continue to
+     * use {@link getGlobalRecentlyAdded}, whose legacy fallback remains `[]`.
+     */
+    async getGlobalRecentlyAddedPage(
+        kind: GlobalRecentlyAddedKind,
+        limit = 200,
+        playlistType?: GlobalRecentlyAddedPlaylistType,
+        offset?: number
+    ): Promise<GlobalRecentlyAddedItem[]> {
+        const items = await window.electron.dbGetGlobalRecentlyAdded(
+            kind,
+            limit,
+            playlistType,
+            offset
+        );
+        return items || [];
     }
 
     /**

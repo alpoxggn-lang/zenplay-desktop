@@ -18,8 +18,9 @@ import { MatDialog } from '@angular/material/dialog';
 import { MatIcon } from '@angular/material/icon';
 import { MatMenuModule } from '@angular/material/menu';
 import { MatTooltip } from '@angular/material/tooltip';
-import { Router } from '@angular/router';
+import { NavigationEnd, Router } from '@angular/router';
 import { TranslatePipe, TranslateService } from '@ngx-translate/core';
+import { filter } from 'rxjs';
 import {
     StalkerStore,
     asStalkerPortalError,
@@ -34,6 +35,7 @@ import { XtreamStore } from '@iptvnator/portal/xtream/data-access';
 import {
     ParentalLockService,
     injectTranslationTick,
+    RuntimeCapabilitiesService,
 } from '@iptvnator/services';
 import {
     toParentalLockStalkerCategoryType,
@@ -73,9 +75,13 @@ interface WorkspaceCategoryLike {
     readonly category_id?: string | number;
     readonly category_name?: string;
     readonly id?: string | number;
+    readonly icon?: string;
+    readonly hideCount?: boolean;
     readonly labelKey?: string;
     readonly name?: string;
 }
+
+const XTREAM_RECENTLY_ADDED_CATEGORY_ID = '__recently-added__';
 
 @Component({
     selector: 'app-workspace-context-panel',
@@ -120,6 +126,7 @@ export class WorkspaceContextPanelComponent {
     );
     private readonly liveSidebarState = inject(LiveLayoutSidebarStateService);
     private readonly parentalLock = inject(ParentalLockService);
+    private readonly runtime = inject(RuntimeCapabilitiesService);
     private readonly categoryLockAction = inject(
         WorkspaceCategoryLockActionService
     );
@@ -187,6 +194,24 @@ export class WorkspaceContextPanelComponent {
     readonly xtreamCategories = this.xtreamStore.getCategoriesBySelectedType;
     readonly xtreamCategoryItemCounts = this.xtreamStore.getCategoryItemCounts;
     readonly xtreamSelectedCategoryId = this.xtreamStore.selectedCategoryId;
+    private readonly currentUrl = signal(this.router.url ?? '');
+    readonly isXtreamRecentlyAddedRoute = computed(() => {
+        const segments = this.currentUrl()
+            .split(/[?#]/, 1)[0]
+            .split('/')
+            .filter(Boolean);
+        return (
+            segments[1] === 'xtreams' &&
+            segments[2] === this.context().playlistId &&
+            segments[3] === this.section() &&
+            segments[4] === 'recently-added'
+        );
+    });
+    readonly xtreamSelectedCategoryForView = computed(() =>
+        this.isXtreamRecentlyAddedRoute()
+            ? XTREAM_RECENTLY_ADDED_CATEGORY_ID
+            : this.xtreamSelectedCategoryId()
+    );
     readonly xtreamSelectedTypeContentState =
         this.xtreamStore.selectedTypeContentState;
     readonly xtreamSelectedTypeContentReady =
@@ -394,7 +419,7 @@ export class WorkspaceContextPanelComponent {
 
     readonly filteredXtreamCategories = computed(() => {
         this.languageTick();
-        const cats = this.xtreamCategories();
+        const cats = this.withRecentlyAddedCollection(this.xtreamCategories());
         const term = foldSearchText(this.categorySearchTerm().trim());
         const filtered = term
             ? cats.filter((category) =>
@@ -406,7 +431,7 @@ export class WorkspaceContextPanelComponent {
             filtered,
             this.categorySortMode(),
             (category) => this.getCategoryLabel(category),
-            (category) => this.isAllCategory(category)
+            (category) => this.isPinnedXtreamCategory(category)
         );
     });
 
@@ -473,6 +498,16 @@ export class WorkspaceContextPanelComponent {
                 });
             }
         });
+
+        this.router.events
+            ?.pipe(
+                filter(
+                    (event): event is NavigationEnd =>
+                        event instanceof NavigationEnd
+                ),
+                takeUntilDestroyed(this.destroyRef)
+            )
+            .subscribe((event) => this.currentUrl.set(event.urlAfterRedirects));
     }
 
     /**
@@ -528,6 +563,12 @@ export class WorkspaceContextPanelComponent {
         provider: 'xtreams' | 'stalker',
         request: { item: WorkspaceCategoryViewItem; event: MouseEvent }
     ): void {
+        if (
+            String(request.item.category_id ?? request.item.id) ===
+            XTREAM_RECENTLY_ADDED_CATEGORY_ID
+        ) {
+            return;
+        }
         if (!this.categoryLockAction.enabled()) {
             return;
         }
@@ -678,6 +719,25 @@ export class WorkspaceContextPanelComponent {
         if (rawCategoryId === undefined || rawCategoryId === null) {
             return;
         }
+        if (
+            rawCategoryId === XTREAM_RECENTLY_ADDED_CATEGORY_ID &&
+            (section === 'vod' || section === 'series')
+        ) {
+            this.contextDrawer?.close();
+            this.categorySelected.emit();
+            this.xtreamStore.setSelectedItem(null);
+            this.xtreamStore.setSelectedCategory(null);
+            const destination = [
+                '/workspace',
+                'xtreams',
+                context.playlistId,
+                section,
+                'recently-added',
+            ];
+            this.currentUrl.set(destination.join('/'));
+            void this.router.navigate(destination);
+            return;
+        }
         const numericCategoryId = Number(rawCategoryId);
         if (Number.isNaN(numericCategoryId)) {
             return;
@@ -817,5 +877,44 @@ export class WorkspaceContextPanelComponent {
 
     private isAllCategory(category: WorkspaceCategoryLike): boolean {
         return String(category.category_id ?? category.id) === '*';
+    }
+
+    private isPinnedXtreamCategory(category: WorkspaceCategoryLike): boolean {
+        const id = String(category.category_id ?? category.id);
+        return id === '*' || id === XTREAM_RECENTLY_ADDED_CATEGORY_ID;
+    }
+
+    private withRecentlyAddedCollection<T extends WorkspaceCategoryLike>(
+        categories: readonly T[]
+    ): ReadonlyArray<T | WorkspaceCategoryLike> {
+        const section = this.section();
+        if (
+            !this.runtime.supportsPortalActivityStorage ||
+            this.parentalLock.withholdsEverything() ||
+            (section !== 'vod' && section !== 'series')
+        ) {
+            return categories;
+        }
+
+        const recent: WorkspaceCategoryLike = {
+            category_id: XTREAM_RECENTLY_ADDED_CATEGORY_ID,
+            labelKey:
+                section === 'series'
+                    ? 'WORKSPACE.DASHBOARD.ZENPLAY_RECENT_SERIES'
+                    : 'WORKSPACE.DASHBOARD.ZENPLAY_RECENT_MOVIES',
+            icon: 'folder_special',
+            hideCount: true,
+        };
+        const allIndex = categories.findIndex((category) =>
+            this.isAllCategory(category)
+        );
+        if (allIndex < 0) {
+            return [recent, ...categories];
+        }
+        return [
+            ...categories.slice(0, allIndex + 1),
+            recent,
+            ...categories.slice(allIndex + 1),
+        ];
     }
 }

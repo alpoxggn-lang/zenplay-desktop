@@ -1711,7 +1711,7 @@
             "XTREAM_RECENTLY_ADDED": "Xtream 最近新增",
             "ZENPLAY_TRENDING": "熱門趨勢",
             "ZENPLAY_RECENT_MOVIES": "最近新增 · 電影",
-            "ZENPLAY_RECENT_SERIES": "最近新增 · 影集",
+            "ZENPLAY_RECENT_SERIES": "最近新增或更新 · 影集",
             "TMDB_TRENDING": "本週熱門",
             "TMDB_RECOMMENDED": "為您推薦",
             "TMDB_RECOMMENDED_BECAUSE": "因為您觀看了《{{title}}》",

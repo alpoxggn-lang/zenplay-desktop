@@ -45,6 +45,11 @@ const loadRecentlyAddedComponent: ComponentLoader = () =>
         (c) => c.RecentlyAddedComponent
     );
 
+const loadRecentlyAddedCollectionComponent: ComponentLoader = () =>
+    import('./recently-added-collection/recently-added-collection.component').then(
+        (c) => c.RecentlyAddedCollectionComponent
+    );
+
 const loadVodDetailsRouteComponent: ComponentLoader = () =>
     import('./vod-details/vod-details-route.component').then(
         (c) => c.VodDetailsRouteComponent
@@ -96,6 +101,12 @@ export function createXtreamRoutes(): Route[] {
                             providers: provideXtreamCatalogFacade(),
                             children: [
                                 {
+                                    path: 'recently-added',
+                                    data: { recentlyAddedKind: 'vod' },
+                                    loadComponent:
+                                        loadRecentlyAddedCollectionComponent,
+                                },
+                                {
                                     path: '',
                                     loadComponent:
                                         loadCategoryContentViewComponent,
@@ -121,6 +132,12 @@ export function createXtreamRoutes(): Route[] {
                             path: 'series',
                             providers: provideXtreamCatalogFacade(),
                             children: [
+                                {
+                                    path: 'recently-added',
+                                    data: { recentlyAddedKind: 'series' },
+                                    loadComponent:
+                                        loadRecentlyAddedCollectionComponent,
+                                },
                                 {
                                     path: '',
                                     loadComponent:

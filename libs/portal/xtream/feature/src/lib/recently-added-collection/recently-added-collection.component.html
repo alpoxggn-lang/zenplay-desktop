@@ -1,0 +1,37 @@
+<section
+    class="recently-added-collection"
+    [attr.aria-labelledby]="'recently-added-' + kind + '-title'"
+>
+    <header class="recently-added-collection__header">
+        <div>
+            <h2 [id]="'recently-added-' + kind + '-title'">
+                {{ titleKey | translate }}
+            </h2>
+            <p aria-live="polite">
+                {{
+                    (loadedCount() === 1
+                        ? 'WORKSPACE.CONTEXT.ITEM_COUNT_ONE'
+                        : 'WORKSPACE.CONTEXT.ITEM_COUNT_OTHER'
+                    ) | translate: { count: loadedCount() }
+                }}
+            </p>
+        </div>
+    </header>
+
+    <app-grid-list
+        appInfiniteScroll
+        [infiniteHasMore]="hasMore()"
+        [infiniteAppending]="isAppending()"
+        [infiniteItemCount]="items().length"
+        [infiniteResetKey]="resetKey()"
+        (infiniteLoadMore)="onLoadMore()"
+        [isLoading]="isLoading()"
+        [isAppending]="isAppending()"
+        [appendError]="appendError()"
+        (retryLoadMore)="retryLoadMore()"
+        [items]="gridItems()"
+        [searchTerm]="searchTerm()"
+        [type]="gridType"
+        (itemClicked)="openItem($any($event))"
+    />
+</section>

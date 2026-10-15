@@ -734,22 +734,31 @@ export async function getGlobalRecentlyAdded(
     db: AppDatabase,
     kind: GlobalRecentlyAddedKind = 'all',
     limit = 200,
-    playlistType?: RecentlyAddedPlaylistType
+    playlistType?: RecentlyAddedPlaylistType,
+    offset = 0
 ) {
     const normalizedLimit = Number.isFinite(limit)
         ? Math.min(Math.max(Math.trunc(limit), 1), 200)
         : 200;
+    const normalizedOffset = Number.isFinite(offset)
+        ? Math.max(Math.trunc(offset), 0)
+        : 0;
 
     const contentTypes = getRecentlyAddedContentTypes(kind);
 
     if (contentTypes.length > 1) {
+        // A mixed page cannot apply the offset independently to each type:
+        // movies and series interleave after sorting. Read only the bounded
+        // prefix required to form this page, merge it, then take the window.
+        const windowLimit = normalizedLimit + normalizedOffset;
         const rows = await Promise.all(
             contentTypes.map((type) =>
                 getGlobalRecentlyAddedByType(
                     db,
                     type,
-                    normalizedLimit,
-                    playlistType
+                    windowLimit,
+                    playlistType,
+                    0
                 )
             )
         );
@@ -761,14 +770,15 @@ export async function getGlobalRecentlyAdded(
                     getRecentlyAddedSortValue(right) -
                     getRecentlyAddedSortValue(left)
             )
-            .slice(0, normalizedLimit);
+            .slice(normalizedOffset, windowLimit);
     }
 
     return getGlobalRecentlyAddedByType(
         db,
         contentTypes[0],
         normalizedLimit,
-        playlistType
+        playlistType,
+        normalizedOffset
     );
 }
 
@@ -785,7 +795,8 @@ function getGlobalRecentlyAddedByType(
     db: AppDatabase,
     type: 'live' | 'movie' | 'series',
     limit: number,
-    playlistType?: RecentlyAddedPlaylistType
+    playlistType?: RecentlyAddedPlaylistType,
+    offset = 0
 ) {
     const whereConditions = [
         eq(schema.content.type, type),
@@ -814,9 +825,11 @@ function getGlobalRecentlyAddedByType(
     // CAST(... AS INTEGER) blocks SQLite from using idx_content_type_added and
     // forces a full table scan + sort on the entire content table (often 100k+
     // rows) on every dashboard load.
-    return db
+    const query = db
         .select({
             ...selectContentFields(),
+            tmdb_id: schema.content.tmdbId,
+            release_year: schema.content.releaseYear,
             added_at: schema.content.added,
             playlist_id: schema.playlists.id,
             playlist_name: schema.playlists.name,
@@ -834,9 +847,14 @@ function getGlobalRecentlyAddedByType(
         .orderBy(
             type === 'live'
                 ? asc(schema.content.id)
-                : desc(schema.content.added)
-        )
-        .limit(limit);
+                : desc(schema.content.added),
+            type === 'live' ? asc(schema.content.id) : desc(schema.content.id)
+        );
+
+    // Keep the long-standing zero-offset query shape unchanged for dashboard
+    // callers. Collection pages opt into indexed, bounded pages as the user
+    // scrolls instead of loading an arbitrary fixed catalog window.
+    return offset > 0 ? query.offset(offset).limit(limit) : query.limit(limit);
 }
 
 type XtreamContentSource = Record<string, unknown> & {
@@ -883,15 +901,18 @@ function toXtreamContentValue(
               source.title ||
               `Unknown Stream ${source.stream_id ?? ''}`.trim();
 
+    const preferredAdded = toXtreamRecentlyAddedEpochSeconds(
+        type === 'series' ? source.last_modified : source.added
+    );
+    const fallbackAdded = toXtreamRecentlyAddedEpochSeconds(
+        type === 'series' ? source.added : source.last_modified
+    );
+
     return {
         categoryId,
         title,
         rating: String(source.rating || source.rating_imdb || ''),
-        added: toXtreamRecentlyAddedEpochSeconds(
-            type === 'series'
-                ? source.last_modified || source.added
-                : source.added || source.last_modified
-        ),
+        added: preferredAdded || fallbackAdded,
         posterUrl: String(
             source.stream_icon || source.poster || source.cover || ''
         ),

@@ -1711,7 +1711,7 @@
             "XTREAM_RECENTLY_ADDED": "Недавно добавленные на Xtream",
             "ZENPLAY_TRENDING": "В тренде",
             "ZENPLAY_RECENT_MOVIES": "Недавно добавленные · Фильмы",
-            "ZENPLAY_RECENT_SERIES": "Недавно добавленные · Сериалы",
+            "ZENPLAY_RECENT_SERIES": "Недавно добавленные или обновлённые · Сериалы",
             "TMDB_TRENDING": "В тренде на этой неделе",
             "TMDB_RECOMMENDED": "Рекомендации для вас",
             "TMDB_RECOMMENDED_BECAUSE": "Потому что вы смотрели {{title}}",

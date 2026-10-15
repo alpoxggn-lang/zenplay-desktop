@@ -36,15 +36,13 @@ handleWorkerRequest(
         kind: 'all' | 'live' | 'vod' | 'series' = 'all',
         limit = 200,
         playlistType?:
-            | 'xtream'
-            | 'stalker'
-            | 'm3u-file'
-            | 'm3u-text'
-            | 'm3u-url'
+            'xtream' | 'stalker' | 'm3u-file' | 'm3u-text' | 'm3u-url',
+        offset?: number
     ) => ({
         kind,
         limit,
         playlistType,
+        ...(offset === undefined ? {} : { offset }),
     })
 );
 

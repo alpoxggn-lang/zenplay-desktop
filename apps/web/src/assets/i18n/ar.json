@@ -1711,7 +1711,7 @@
             "XTREAM_RECENTLY_ADDED": "أُضيفت مؤخرًا على Xtream",
             "ZENPLAY_TRENDING": "الرائج",
             "ZENPLAY_RECENT_MOVIES": "أُضيفت مؤخرًا · أفلام",
-            "ZENPLAY_RECENT_SERIES": "أُضيفت مؤخرًا · مسلسلات",
+            "ZENPLAY_RECENT_SERIES": "أُضيفت أو حُدِّثت مؤخرًا · مسلسلات",
             "TMDB_TRENDING": "الرائج هذا الأسبوع",
             "TMDB_RECOMMENDED": "مقترحات لك",
             "TMDB_RECOMMENDED_BECAUSE": "لأنك شاهدت {{title}}",

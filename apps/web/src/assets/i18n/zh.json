@@ -1711,7 +1711,7 @@
             "XTREAM_RECENTLY_ADDED": "Xtream 最近添加",
             "ZENPLAY_TRENDING": "热门趋势",
             "ZENPLAY_RECENT_MOVIES": "最近添加 · 电影",
-            "ZENPLAY_RECENT_SERIES": "最近添加 · 剧集",
+            "ZENPLAY_RECENT_SERIES": "最近添加或更新 · 剧集",
             "TMDB_TRENDING": "本周热门",
             "TMDB_RECOMMENDED": "为您推荐",
             "TMDB_RECOMMENDED_BECAUSE": "因为您观看了《{{title}}》",

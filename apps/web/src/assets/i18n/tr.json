@@ -1711,7 +1711,7 @@
             "XTREAM_RECENTLY_ADDED": "Xtream'de Yeni Eklenenler",
             "ZENPLAY_TRENDING": "Trendler",
             "ZENPLAY_RECENT_MOVIES": "Yeni eklenenler · Filmler",
-            "ZENPLAY_RECENT_SERIES": "Yeni eklenenler · Diziler",
+            "ZENPLAY_RECENT_SERIES": "Yeni eklenen veya güncellenen · Diziler",
             "TMDB_TRENDING": "Bu hafta trend olanlar",
             "TMDB_RECOMMENDED": "Size özel öneriler",
             "TMDB_RECOMMENDED_BECAUSE": "{{title}} izlediğiniz için",

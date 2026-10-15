@@ -247,6 +247,12 @@ export const dbPreloadCases: PreloadInvokeCase[] = [
         forwardedArgs: ['vod', 50, 'xtream'],
     },
     {
+        method: 'dbGetGlobalRecentlyAdded',
+        args: ['series', 48, 'xtream', 96],
+        channel: 'DB_GET_GLOBAL_RECENTLY_ADDED',
+        forwardedArgs: ['series', 48, 'xtream', 96],
+    },
+    {
         method: 'dbGetRecentlyViewed',
         args: [],
         channel: 'DB_GET_RECENTLY_VIEWED',

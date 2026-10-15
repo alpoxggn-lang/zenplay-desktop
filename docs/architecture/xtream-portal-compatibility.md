@@ -490,6 +490,25 @@ and the facade maps page 0 to the skeleton and later pages to the tail
 spinner. These catalog/search surfaces use incremental loading instead of
 page buttons.
 
+### Recently added catalog collections
+
+Desktop movie and series sections expose fixed virtual collections at
+`vod/recently-added` and `series/recently-added`. They query the local database
+across every eligible Xtream playlist in bounded, newest-first pages; hidden or
+parentally locked categories stay excluded. The renderer removes duplicate
+titles across sources by TMDB and normalized title/year aliases, then opens a
+chosen item in the playlist and category that supplied it.
+If parental filtering is fail-closed, the virtual collection is hidden and no
+catalog page is queried or rendered until the lock index is trustworthy again.
+
+Movie recency uses the provider's `added` timestamp, with `last_modified` as a
+fallback. Series recency prefers `last_modified`, so a provider-reported new
+episode or catalog update moves the series forward, and falls back to `added`
+when the provider does not expose update timestamps. A provider that supplies
+neither field cannot place that title in the collection; no viewing-history
+timestamp is substituted because recently viewed and recently added are
+separate concepts.
+
 ## Forced external launches from detail pages
 
 The "…" menu's MPV/VLC launch follows the shared rules in

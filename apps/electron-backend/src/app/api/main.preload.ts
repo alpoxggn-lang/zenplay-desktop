@@ -935,14 +935,23 @@ const electronApi: ElectronBridgeApi & ZenPlayAccountExpiryBridge = {
         kind: 'all' | 'live' | 'vod' | 'series',
         limit?: number,
         playlistType?:
-            'xtream' | 'stalker' | 'm3u-file' | 'm3u-text' | 'm3u-url'
+            'xtream' | 'stalker' | 'm3u-file' | 'm3u-text' | 'm3u-url',
+        offset?: number
     ) =>
-        ipcRenderer.invoke(
-            'DB_GET_GLOBAL_RECENTLY_ADDED',
-            kind,
-            limit,
-            playlistType
-        ),
+        offset === undefined
+            ? ipcRenderer.invoke(
+                  'DB_GET_GLOBAL_RECENTLY_ADDED',
+                  kind,
+                  limit,
+                  playlistType
+              )
+            : ipcRenderer.invoke(
+                  'DB_GET_GLOBAL_RECENTLY_ADDED',
+                  kind,
+                  limit,
+                  playlistType,
+                  offset
+              ),
     dbGetRecentlyViewed: () => ipcRenderer.invoke('DB_GET_RECENTLY_VIEWED'),
     dbClearRecentlyViewed: () => ipcRenderer.invoke('DB_CLEAR_RECENTLY_VIEWED'),
     // Favorites

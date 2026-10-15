@@ -75,4 +75,28 @@ describe('DatabaseService browser guards', () => {
 
         expect(consoleErrorSpy).not.toHaveBeenCalled();
     });
+
+    it('preserves recently-added page failures for collection retry while keeping the dashboard fallback', async () => {
+        const bridgeError = new Error('database unavailable');
+        Object.defineProperty(window, 'electron', {
+            configurable: true,
+            writable: true,
+            value: {
+                dbGetGlobalRecentlyAdded: jest
+                    .fn()
+                    .mockRejectedValue(bridgeError),
+            },
+        });
+
+        await expect(
+            service.getGlobalRecentlyAddedPage('vod', 48, 'xtream', 0)
+        ).rejects.toBe(bridgeError);
+        await expect(
+            service.getGlobalRecentlyAdded('vod', 48, 'xtream', 0)
+        ).resolves.toEqual([]);
+        expect(consoleErrorSpy).toHaveBeenCalledWith(
+            'Error getting global recently added items:',
+            bridgeError
+        );
+    });
 });

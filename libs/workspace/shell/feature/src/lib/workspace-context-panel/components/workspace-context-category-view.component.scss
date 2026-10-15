@@ -37,6 +37,13 @@
     width: auto;
 }
 
+.category-item__icon {
+    flex: 0 0 auto;
+    width: 18px;
+    height: 18px;
+    font-size: 18px;
+}
+
 .category-item--disabled,
 .category-item--disabled:hover {
     cursor: progress;
@@ -79,11 +86,7 @@
 // Selected row: tint badge surface with selection accent. Text colour comes
 // from the parent `.nav-item.selected *` rule in nav-list.scss.
 .category-item--selected .item-count.app-count-badge {
-    background: color-mix(
-        in srgb,
-        var(--app-selection-color) 18%,
-        transparent
-    );
+    background: color-mix(in srgb, var(--app-selection-color) 18%, transparent);
 }
 
 mat-card-content {

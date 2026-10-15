@@ -1711,7 +1711,7 @@
             "XTREAM_RECENTLY_ADDED": "Recently Added on Xtream",
             "ZENPLAY_TRENDING": "Trending",
             "ZENPLAY_RECENT_MOVIES": "Recently added · Movies",
-            "ZENPLAY_RECENT_SERIES": "Recently added · Series",
+            "ZENPLAY_RECENT_SERIES": "Recently added or updated · Series",
             "TMDB_TRENDING": "Trending this week",
             "TMDB_RECOMMENDED": "Recommended for you",
             "TMDB_RECOMMENDED_BECAUSE": "Because you watched {{title}}",

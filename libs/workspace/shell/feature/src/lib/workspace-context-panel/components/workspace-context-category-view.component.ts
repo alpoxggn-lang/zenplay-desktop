@@ -9,6 +9,7 @@ import {
     output,
 } from '@angular/core';
 import { MatListModule } from '@angular/material/list';
+import { MatIcon } from '@angular/material/icon';
 import { TranslatePipe } from '@ngx-translate/core';
 import { WorkspaceContextErrorViewComponent } from './workspace-context-error-view.component';
 
@@ -17,6 +18,8 @@ export interface WorkspaceCategoryViewItem {
     readonly category_name?: string;
     readonly count?: number;
     readonly id?: string | number;
+    readonly icon?: string;
+    readonly hideCount?: boolean;
     /**
      * Translation key of an entry the app adds itself (a provider's "All"
      * genre); rendered through the pipe so a language switch re-labels it.
@@ -27,7 +30,12 @@ export interface WorkspaceCategoryViewItem {
 
 @Component({
     selector: 'app-workspace-context-category-view',
-    imports: [MatListModule, TranslatePipe, WorkspaceContextErrorViewComponent],
+    imports: [
+        MatIcon,
+        MatListModule,
+        TranslatePipe,
+        WorkspaceContextErrorViewComponent,
+    ],
     changeDetection: ChangeDetectionStrategy.OnPush,
     templateUrl: './workspace-context-category-view.component.html',
     styleUrl: './workspace-context-category-view.component.scss',

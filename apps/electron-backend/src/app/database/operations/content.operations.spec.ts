@@ -77,6 +77,7 @@ function createRecentlyAddedDbMock(resultsByCall: unknown[][]) {
         from: jest.Mock;
         innerJoin: jest.Mock;
         limit: jest.Mock;
+        offset: jest.Mock;
         orderBy: jest.Mock;
         where: jest.Mock;
     }> = [];
@@ -86,6 +87,7 @@ function createRecentlyAddedDbMock(resultsByCall: unknown[][]) {
             from: jest.fn(),
             innerJoin: jest.fn(),
             limit: jest.fn(),
+            offset: jest.fn(),
             orderBy: jest.fn(),
             where: jest.fn(),
         };
@@ -93,6 +95,7 @@ function createRecentlyAddedDbMock(resultsByCall: unknown[][]) {
         query.innerJoin.mockReturnValue(query);
         query.where.mockReturnValue(query);
         query.orderBy.mockReturnValue(query);
+        query.offset.mockReturnValue(query);
         query.limit.mockImplementation(async () => {
             const result = resultsByCall[resultIndex] ?? [];
             resultIndex += 1;
@@ -308,6 +311,13 @@ describe('content.operations', () => {
                         name: 'Modified Movie',
                         stream_id: '102',
                     },
+                    {
+                        added: '0',
+                        category_id: '201',
+                        last_modified: '1778889600',
+                        name: 'Movie With Fallback Date',
+                        stream_id: '103',
+                    },
                 ],
                 'movie'
             );
@@ -324,6 +334,75 @@ describe('content.operations', () => {
                 expect.objectContaining({
                     title: 'Modified Movie',
                     added: '1778976000',
+                }),
+                expect.objectContaining({
+                    title: 'Movie With Fallback Date',
+                    added: '1778889600',
+                }),
+            ]);
+        } finally {
+            dateNowSpy.mockRestore();
+        }
+    });
+
+    it('falls back to added when a series provider reports last_modified as zero', async () => {
+        const dateNowSpy = jest
+            .spyOn(Date, 'now')
+            .mockReturnValue(Date.parse('2026-05-19T00:00:00.000Z'));
+        const existingContentWhere = jest
+            .fn()
+            .mockResolvedValue([{ count: 0 }]);
+        const existingContentInnerJoin = jest
+            .fn()
+            .mockReturnValue({ where: existingContentWhere });
+        const existingContentFrom = jest
+            .fn()
+            .mockReturnValue({ innerJoin: existingContentInnerJoin });
+        const categoriesWhere = jest.fn().mockResolvedValue([
+            {
+                id: 42,
+                xtreamId: 201,
+            },
+        ]);
+        const categoriesFrom = jest
+            .fn()
+            .mockReturnValue({ where: categoriesWhere });
+        const select = jest
+            .fn()
+            .mockReturnValueOnce({ from: existingContentFrom })
+            .mockReturnValueOnce({ from: categoriesFrom });
+        const run = jest.fn();
+        const onConflictDoNothing = jest.fn().mockReturnValue({ run });
+        const values = jest.fn().mockReturnValue({ onConflictDoNothing });
+        const insert = jest.fn().mockReturnValue({ values });
+        const transaction = jest.fn((callback: (tx: unknown) => unknown) =>
+            callback({ insert })
+        );
+        const db = {
+            select,
+            transaction,
+        } as unknown as AppDatabase;
+
+        try {
+            await saveContent(
+                db,
+                'playlist-1',
+                [
+                    {
+                        added: '1779062400',
+                        category_id: '201',
+                        last_modified: '0',
+                        name: 'Series With Fallback Date',
+                        series_id: '200',
+                    },
+                ],
+                'series'
+            );
+
+            expect(values).toHaveBeenCalledWith([
+                expect.objectContaining({
+                    title: 'Series With Fallback Date',
+                    added: '1779062400',
                 }),
             ]);
         } finally {
@@ -386,6 +465,54 @@ describe('content.operations', () => {
                 type: 'live',
             }),
         ]);
+    });
+
+    it('pages a single recently-added content type with an indexed offset', async () => {
+        const { db, queries } = createRecentlyAddedDbMock([
+            [
+                {
+                    id: 42,
+                    added_at: '200',
+                    type: 'movie',
+                    title: 'Later page movie',
+                },
+            ],
+        ]);
+
+        const result = await getGlobalRecentlyAdded(
+            db,
+            'vod',
+            48,
+            'xtream',
+            96
+        );
+
+        expect(queries[0].offset).toHaveBeenCalledWith(96);
+        expect(queries[0].limit).toHaveBeenCalledWith(48);
+        expect(result).toEqual([
+            expect.objectContaining({ title: 'Later page movie' }),
+        ]);
+    });
+
+    it('forms a mixed recently-added page after merging the required prefixes', async () => {
+        const { db, queries } = createRecentlyAddedDbMock([
+            [
+                { id: 1, added_at: '500', type: 'movie' },
+                { id: 2, added_at: '300', type: 'movie' },
+            ],
+            [
+                { id: 3, added_at: '400', type: 'series' },
+                { id: 4, added_at: '200', type: 'series' },
+            ],
+        ]);
+
+        const result = await getGlobalRecentlyAdded(db, 'all', 2, 'xtream', 1);
+
+        expect(queries[0].offset).not.toHaveBeenCalled();
+        expect(queries[1].offset).not.toHaveBeenCalled();
+        expect(queries[0].limit).toHaveBeenCalledWith(3);
+        expect(queries[1].limit).toHaveBeenCalledWith(3);
+        expect(result.map((item) => item.id)).toEqual([3, 2]);
     });
 
     it('builds M3U global search results from playlist payloads and respects hidden groups', () => {
@@ -895,10 +1022,7 @@ describe('content.operations', () => {
             .mockResolvedValueOnce([makeRow(1, 'A&E')])
             // FTS arm: compound substring matches, overlapping with the
             // prefix arm to prove candidates are deduplicated.
-            .mockResolvedValueOnce([
-                makeRow(2, 'US: A&E'),
-                makeRow(1, 'A&E'),
-            ]);
+            .mockResolvedValueOnce([makeRow(2, 'US: A&E'), makeRow(1, 'A&E')]);
         const select = jest.fn();
         const db = {
             all,
@@ -1015,7 +1139,9 @@ describe('content.operations', () => {
         const all = jest
             .fn()
             .mockResolvedValueOnce([globRow])
-            .mockRejectedValueOnce(new Error('no such table: content_title_fts'));
+            .mockRejectedValueOnce(
+                new Error('no such table: content_title_fts')
+            );
         const limit = jest.fn().mockResolvedValue([globRow, scanRow]);
         const orderBy = jest.fn().mockReturnValue({ limit });
         const where = jest.fn().mockReturnValue({ orderBy });

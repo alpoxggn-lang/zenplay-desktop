@@ -525,6 +525,9 @@ export interface ElectronBridgeXtreamContent {
     added: string;
     poster_url: string;
     backdrop_url?: string | null;
+    tmdb_id?: number | null;
+    release_year?: number | null;
+    original_title?: string | null;
     epg_channel_id?: string | null;
     tv_archive?: number | null;
     tv_archive_duration?: number | null;
@@ -1102,7 +1105,8 @@ export interface ElectronBridgeApi {
     dbGetGlobalRecentlyAdded: (
         kind: ElectronBridgeGlobalRecentlyAddedKind,
         limit?: number,
-        playlistType?: ElectronBridgePlaylistType
+        playlistType?: ElectronBridgePlaylistType,
+        offset?: number
     ) => Promise<ElectronBridgeGlobalRecentlyAddedItem[]>;
     dbGetRecentlyViewed: () => Promise<ElectronBridgeGlobalRecentItem[]>;
     dbClearRecentlyViewed: () => Promise<ElectronBridgeResult>;

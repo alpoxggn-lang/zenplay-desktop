@@ -194,6 +194,16 @@ export const workerIpcContractCases: WorkerIpcContractCase[] = [
         payload: { kind: 'vod', limit: 50, playlistType: 'xtream' },
     },
     {
+        operation: 'DB_GET_GLOBAL_RECENTLY_ADDED',
+        args: ['series', 48, 'xtream', 96],
+        payload: {
+            kind: 'series',
+            limit: 48,
+            playlistType: 'xtream',
+            offset: 96,
+        },
+    },
+    {
         operation: 'DB_SAVE_CONTENT',
         args: [playlistId, streams, 'movie', operationId],
         payload: { playlistId, streams, type: 'movie', operationId },
