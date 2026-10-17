@@ -205,12 +205,14 @@ Whatever holds on to one answer follows it through `watchEmbeddedMpvSupport()`
   inconclusive, falls back to the default player only on a final unsupported
   answer, and never overwrites a player the user picked meanwhile.
 - With no persisted player choice, the desktop settings store promotes
-  Embedded MPV only after a positive support answer. Existing ZenPlay settings
-  whose persisted player is the former Video.js default receive that same
-  one-time promotion; `desktopNativePlayerMigrationVersion` then records it.
-  Unsupported, failed, and browser/PWA probes keep Video.js. Every subsequent
-  player selection records the marker, so an inconclusive answer can never
-  overwrite a choice made by the user meanwhile or on a later launch.
+  Embedded MPV only after a positive support answer. On Windows and macOS,
+  existing ZenPlay settings whose persisted player is the former Video.js
+  default receive that same one-time promotion;
+  `desktopNativePlayerMigrationVersion` then records it. Linux preserves a
+  persisted Video.js choice. Unsupported, failed, and browser/PWA probes keep
+  Video.js. Every subsequent player selection records the marker, so an
+  inconclusive answer can never overwrite a choice made by the user meanwhile
+  or on a later launch.
 - The player (`EmbeddedMpvSessionController`) and the settings page stay
   mounted on one answer: a player mounted in that window starts playback by
   itself once `mpv` is found, and the option appears without reopening the

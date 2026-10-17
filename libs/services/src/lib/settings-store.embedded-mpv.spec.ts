@@ -29,7 +29,10 @@ const SUPPORTED: EmbeddedMpvSupport = {
 
 describe('SettingsStore saved Embedded MPV selection', () => {
     const testWindow = window as unknown as {
-        electron?: { getEmbeddedMpvSupport: jest.Mock };
+        electron?: {
+            getEmbeddedMpvSupport: jest.Mock;
+            platform: string;
+        };
     };
     const originalElectron = testWindow.electron;
     let getEmbeddedMpvSupport: jest.Mock;
@@ -56,7 +59,7 @@ describe('SettingsStore saved Embedded MPV selection', () => {
             set: jest.fn(() => of(undefined)),
         };
         getEmbeddedMpvSupport = jest.fn();
-        testWindow.electron = { getEmbeddedMpvSupport };
+        testWindow.electron = { getEmbeddedMpvSupport, platform: 'linux' };
         injector = Injector.create({
             providers: [
                 SettingsStore,
@@ -191,7 +194,10 @@ describe('SettingsStore saved Embedded MPV selection', () => {
 
 describe('SettingsStore desktop player default', () => {
     const testWindow = window as unknown as {
-        electron?: { getEmbeddedMpvSupport: jest.Mock };
+        electron?: {
+            getEmbeddedMpvSupport: jest.Mock;
+            platform: string;
+        };
     };
     const originalElectron = testWindow.electron;
     let getEmbeddedMpvSupport: jest.Mock;
@@ -224,7 +230,7 @@ describe('SettingsStore desktop player default', () => {
     beforeEach(() => {
         jest.useFakeTimers();
         getEmbeddedMpvSupport = jest.fn();
-        testWindow.electron = { getEmbeddedMpvSupport };
+        testWindow.electron = { getEmbeddedMpvSupport, platform: 'win32' };
     });
 
     afterEach(() => {
@@ -253,19 +259,37 @@ describe('SettingsStore desktop player default', () => {
         expect(storage.set).not.toHaveBeenCalled();
     });
 
-    it('migrates the legacy persisted Video.js default to supported Embedded MPV once', async () => {
+    it.each(['win32', 'darwin'])(
+        'migrates the legacy persisted Video.js default on %s once',
+        async (platform) => {
+            testWindow.electron = { getEmbeddedMpvSupport, platform };
+            getEmbeddedMpvSupport.mockResolvedValue({
+                ...SUPPORTED,
+                platform,
+            });
+
+            const store = await createStore({ player: VideoPlayer.VideoJs });
+
+            expect(store.player()).toBe(VideoPlayer.EmbeddedMpv);
+            expect(storage.set).toHaveBeenCalledWith(
+                STORE_KEY.Settings,
+                expect.objectContaining({
+                    player: VideoPlayer.EmbeddedMpv,
+                    desktopNativePlayerMigrationVersion: 1,
+                })
+            );
+        }
+    );
+
+    it('preserves the legacy persisted Video.js default on Linux', async () => {
+        testWindow.electron = { getEmbeddedMpvSupport, platform: 'linux' };
         getEmbeddedMpvSupport.mockResolvedValue(SUPPORTED);
 
         const store = await createStore({ player: VideoPlayer.VideoJs });
 
-        expect(store.player()).toBe(VideoPlayer.EmbeddedMpv);
-        expect(storage.set).toHaveBeenCalledWith(
-            STORE_KEY.Settings,
-            expect.objectContaining({
-                player: VideoPlayer.EmbeddedMpv,
-                desktopNativePlayerMigrationVersion: 1,
-            })
-        );
+        expect(store.player()).toBe(VideoPlayer.VideoJs);
+        expect(getEmbeddedMpvSupport).not.toHaveBeenCalled();
+        expect(storage.set).not.toHaveBeenCalled();
     });
 
     it('preserves Video.js after the desktop native-player migration was acknowledged', async () => {

@@ -80,16 +80,22 @@ export const SettingsStore = signalStore(
                             storedSettings,
                             'player'
                         );
+                        const desktopPlatform =
+                            typeof window === 'undefined'
+                                ? undefined
+                                : window.electron?.platform;
                         const hasLegacyDesktopWebDefault =
                             hasStoredPlayer &&
                             storedSettings.player === VideoPlayer.VideoJs &&
+                            (desktopPlatform === 'win32' ||
+                                desktopPlatform === 'darwin') &&
                             (storedSettings.desktopNativePlayerMigrationVersion ??
                                 0) < DESKTOP_NATIVE_PLAYER_MIGRATION_VERSION;
-                        // A persisted Video.js value from an older ZenPlay
-                        // release was the automatic default, not necessarily
-                        // a choice. Let the native support probe claim it once;
-                        // every player update below records the marker so a
-                        // later explicit selection remains authoritative.
+                        // On Windows and macOS, a persisted Video.js value from
+                        // an older ZenPlay release was the automatic default,
+                        // not necessarily a choice. Let the native support
+                        // probe claim it once; every player update below records
+                        // the marker so a later explicit choice remains final.
                         playerChoiceClaimed ||=
                             hasStoredPlayer && !hasLegacyDesktopWebDefault;
                         patchState(store, {

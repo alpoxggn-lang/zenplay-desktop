@@ -63,9 +63,9 @@ export const DEFAULT_SETTINGS: Settings = {
 };
 
 /**
- * Existing ZenPlay profiles persisted Video.js when it was still the desktop
- * default. This marker lets one supported native-runtime migration happen
- * without repeatedly overriding a later explicit player choice.
+ * Existing ZenPlay Windows and macOS profiles persisted Video.js when it was
+ * still the desktop default. This marker lets one supported native-runtime
+ * migration happen without repeatedly overriding a later explicit choice.
  */
 export const DESKTOP_NATIVE_PLAYER_MIGRATION_VERSION = 1;
 
