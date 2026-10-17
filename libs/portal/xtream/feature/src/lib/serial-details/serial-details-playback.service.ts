@@ -135,6 +135,16 @@ export class SerialDetailsPlaybackService {
             this.playbackPositionState.isLoaded(playlistId, seriesXtreamId)
         );
     });
+    private readonly positionLoadSettled = computed(() => {
+        const seriesXtreamId = Number(this.selectedItem()?.series_id ?? 0);
+        const playlistId = this.currentPlaylistId();
+        return (
+            !!playlistId &&
+            Number.isSafeInteger(seriesXtreamId) &&
+            seriesXtreamId > 0 &&
+            this.playbackPositionState.isSettled(playlistId, seriesXtreamId)
+        );
+    });
     readonly quickStartAction = computed(() => {
         const item = this.selectedItem();
         if (!item) {
@@ -150,8 +160,9 @@ export class SerialDetailsPlaybackService {
                   ...action,
                   // Details and saved progress load concurrently. Exposing a
                   // temporary Play action before progress lands can restart a
-                  // resumable episode at zero.
-                  disabled: action.disabled || !this.positionLoaded(),
+                  // resumable episode at zero. Once a failed read settles, a
+                  // deliberate click may still start the first episode.
+                  disabled: action.disabled || !this.positionLoadSettled(),
               }
             : null;
     });
@@ -286,7 +297,7 @@ export class SerialDetailsPlaybackService {
 
     playQuickStartEpisode(): void {
         const action = this.quickStartAction();
-        if (this.positionLoaded() && action && !action.disabled) {
+        if (this.positionLoadSettled() && action && !action.disabled) {
             this.playEpisode(action.episode);
         }
     }

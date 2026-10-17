@@ -22,16 +22,22 @@ export class SerialDetailsPlaybackPositionState {
 
     private loadRequestId = 0;
     private readonly loadedKey = signal<string | null>(null);
+    private readonly settledKey = signal<string | null>(null);
     private readonly consumedResumeKey = signal<string | null>(null);
 
     reset(): void {
         this.loadRequestId++;
         this.positions.set(new Map());
         this.loadedKey.set(null);
+        this.settledKey.set(null);
     }
 
     isLoaded(playlistId: string, seriesXtreamId: number): boolean {
         return this.loadedKey() === this.createKey(playlistId, seriesXtreamId);
+    }
+
+    isSettled(playlistId: string, seriesXtreamId: number): boolean {
+        return this.settledKey() === this.createKey(playlistId, seriesXtreamId);
     }
 
     async load(
@@ -41,6 +47,7 @@ export class SerialDetailsPlaybackPositionState {
     ): Promise<void> {
         const requestId = ++this.loadRequestId;
         this.loadedKey.set(null);
+        this.settledKey.set(null);
         let positions: PlaybackPositionData[] = [];
         let loadSucceeded = true;
 
@@ -72,6 +79,7 @@ export class SerialDetailsPlaybackPositionState {
         if (loadSucceeded) {
             this.loadedKey.set(this.createKey(playlistId, seriesXtreamId));
         }
+        this.settledKey.set(this.createKey(playlistId, seriesXtreamId));
     }
 
     takeResumeEpisode(

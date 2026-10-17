@@ -91,6 +91,21 @@ describe('SerialDetailsPlaybackPositionState', () => {
     }
 
     describe('load', () => {
+        it('marks a failed read as settled without marking it loaded', async () => {
+            const warnSpy = jest
+                .spyOn(console, 'warn')
+                .mockImplementation(() => undefined);
+
+            await state.load('xtream-1', 103, () =>
+                Promise.reject(new Error('storage unavailable'))
+            );
+
+            expect(state.isSettled('xtream-1', 103)).toBe(true);
+            expect(state.isLoaded('xtream-1', 103)).toBe(false);
+            expect(state.positions()).toEqual(new Map());
+            warnSpy.mockRestore();
+        });
+
         it('keeps only the latest concurrent load result', async () => {
             let resolveFirst!: (value: PlaybackPositionData[]) => void;
             const first = state.load(

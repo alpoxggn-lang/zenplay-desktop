@@ -46,6 +46,8 @@ describe('RecentlyAddedCollectionComponent', () => {
     const isContentInitialized = signal(true);
     const isPendingRestoreBlocked = signal(false);
     const contentInitBlockReason = signal<string | null>(null);
+    const vodCategories = signal([{ category_id: '10' }]);
+    const serialCategories = signal([{ category_id: '20' }]);
 
     function createComponent(
         kind: 'vod' | 'series' = 'vod'
@@ -79,6 +81,8 @@ describe('RecentlyAddedCollectionComponent', () => {
                         contentLoadStateByType,
                         isContentInitialized,
                         isPendingRestoreBlocked,
+                        serialCategories,
+                        vodCategories,
                     },
                 },
                 { provide: Router, useValue: { navigate } },
@@ -105,6 +109,8 @@ describe('RecentlyAddedCollectionComponent', () => {
         isContentInitialized.set(true);
         isPendingRestoreBlocked.set(false);
         contentInitBlockReason.set(null);
+        vodCategories.set([{ category_id: '10' }]);
+        serialCategories.set([{ category_id: '20' }]);
     });
 
     it('loads later pages from every eligible Xtream playlist without a fixed total cap', async () => {
@@ -162,6 +168,34 @@ describe('RecentlyAddedCollectionComponent', () => {
 
         expect(component.appendError()).toBe(false);
         expect(component.items()).toEqual([item(1)]);
+    });
+
+    it('waits for the explicit retry action after an appended page fails', async () => {
+        const firstPage = Array.from({ length: 48 }, (_, index) =>
+            item(index + 1)
+        );
+        getGlobalRecentlyAddedPage
+            .mockResolvedValueOnce(firstPage)
+            .mockRejectedValueOnce(new Error('database unavailable'))
+            .mockResolvedValueOnce([item(49)]);
+        const component = createComponent();
+
+        await component.loadNextPage();
+        await component.loadNextPage();
+        component.onLoadMore();
+        await Promise.resolve();
+
+        expect(getGlobalRecentlyAddedPage).toHaveBeenCalledTimes(2);
+        expect(component.appendError()).toBe(true);
+        expect(component.items()).toEqual(firstPage);
+
+        component.retryLoadMore();
+        await Promise.resolve();
+        await Promise.resolve();
+
+        expect(getGlobalRecentlyAddedPage).toHaveBeenCalledTimes(3);
+        expect(component.appendError()).toBe(false);
+        expect(component.items()).toEqual([...firstPage, item(49)]);
     });
 
     it('does not query or expose catalog rows while parental filtering is fail-closed', async () => {
@@ -328,6 +362,24 @@ describe('RecentlyAddedCollectionComponent', () => {
         expect(component.items()).toEqual([
             item(3, { title: 'Hydrated movie' }),
         ]);
+    });
+
+    it('reloads when the visible categories change', async () => {
+        getGlobalRecentlyAddedPage
+            .mockResolvedValueOnce([item(1, { title: 'Before' })])
+            .mockResolvedValueOnce([item(2, { title: 'After' })]);
+        const component = createComponent();
+        component.ngOnInit();
+        TestBed.flushEffects();
+        await Promise.resolve();
+
+        vodCategories.set([{ category_id: '11' }]);
+        TestBed.flushEffects();
+        await Promise.resolve();
+        await Promise.resolve();
+
+        expect(getGlobalRecentlyAddedPage).toHaveBeenCalledTimes(2);
+        expect(component.items()).toEqual([item(2, { title: 'After' })]);
     });
 
     it('defers an import-terminal reload until pending restore is unblocked', async () => {

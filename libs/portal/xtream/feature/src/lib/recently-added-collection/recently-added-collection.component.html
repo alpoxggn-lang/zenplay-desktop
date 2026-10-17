@@ -20,7 +20,7 @@
 
     <app-grid-list
         appInfiniteScroll
-        [infiniteHasMore]="hasMore()"
+        [infiniteHasMore]="hasMore() && !appendError()"
         [infiniteAppending]="isAppending()"
         [infiniteItemCount]="items().length"
         [infiniteResetKey]="resetKey()"

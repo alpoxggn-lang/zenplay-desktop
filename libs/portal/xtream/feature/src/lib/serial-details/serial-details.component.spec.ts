@@ -83,6 +83,54 @@ describe('SerialDetailsComponent', () => {
         expect(openResolvedPlayback).toHaveBeenCalledTimes(1);
     });
 
+    it('keeps failed position reads fail-closed for dashboard autoplay but allows manual quick start', async () => {
+        const warnSpy = jest
+            .spyOn(console, 'warn')
+            .mockImplementation(() => undefined);
+        getSeriesPlaybackPositions.mockRejectedValue(
+            new Error('storage unavailable')
+        );
+        window.history.replaceState(
+            {
+                [XTREAM_DETAIL_AUTOPLAY_STATE_KEY]: {
+                    playlistId: 'xtream-1',
+                    contentType: 'series',
+                    contentId: 103,
+                },
+            },
+            '',
+            window.location.href
+        );
+
+        fixture.detectChanges();
+        await fixture.whenStable();
+        fixture.detectChanges();
+
+        const playback = fixture.debugElement.injector.get(
+            SerialDetailsPlaybackService
+        );
+        const quickStartButton: HTMLButtonElement | null =
+            fixture.nativeElement.querySelector(
+                '[data-testid="series-quick-start"]'
+            );
+        expect(playback.positionLoaded()).toBe(false);
+        expect(openResolvedPlayback).not.toHaveBeenCalled();
+        expect(quickStartButton?.disabled).toBe(false);
+
+        quickStartButton?.click();
+
+        expect(openResolvedPlayback).toHaveBeenCalledWith(
+            expect.objectContaining({
+                startTime: undefined,
+                contentInfo: expect.objectContaining({
+                    contentXtreamId: 1001,
+                }),
+            }),
+            true
+        );
+        warnSpy.mockRestore();
+    });
+
     it('initializes series metadata and renders the season container', async () => {
         fixture.detectChanges();
         await fixture.whenStable();

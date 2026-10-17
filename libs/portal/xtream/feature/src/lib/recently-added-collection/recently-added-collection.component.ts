@@ -44,6 +44,7 @@ export class RecentlyAddedCollectionComponent implements OnInit {
     private readonly router = inject(Router);
     private readonly runtime = inject(RuntimeCapabilitiesService);
     private readonly xtreamStore = inject(XtreamStore);
+    readonly kind = this.resolveKind();
     private readonly allItemsState = signal<GlobalRecentlyAddedItem[]>([]);
     private readonly seenItemKeys = new Set<string>();
     private loadInFlight = false;
@@ -55,10 +56,10 @@ export class RecentlyAddedCollectionComponent implements OnInit {
     private observedWithholdsEverything =
         this.parentalLock.withholdsEverything();
     private observedContentLoadState =
-        this.xtreamStore.contentLoadStateByType()[this.resolveKind()];
+        this.xtreamStore.contentLoadStateByType()[this.kind];
+    private observedCategoryVisibilityKey = this.categoryVisibilityKey();
     private contentRefreshPending = false;
 
-    readonly kind = this.resolveKind();
     readonly titleKey =
         this.kind === 'series'
             ? 'WORKSPACE.DASHBOARD.ZENPLAY_RECENT_SERIES'
@@ -129,11 +130,13 @@ export class RecentlyAddedCollectionComponent implements OnInit {
             const contentInitialized = this.xtreamStore.isContentInitialized();
             const restoreBlocked = this.xtreamStore.isPendingRestoreBlocked();
             const initBlockReason = this.xtreamStore.contentInitBlockReason();
+            const categoryVisibilityKey = this.categoryVisibilityKey();
             untracked(() => {
                 if (!this.initialized) {
                     this.observedSearchTerm = searchTerm;
                     this.observedImportSessionId = importSessionId;
                     this.observedContentLoadState = contentLoadState;
+                    this.observedCategoryVisibilityKey = categoryVisibilityKey;
                     return;
                 }
 
@@ -144,6 +147,9 @@ export class RecentlyAddedCollectionComponent implements OnInit {
                 const contentBecameReady =
                     this.observedContentLoadState !== 'ready' &&
                     contentLoadState === 'ready';
+                const categoryVisibilityChanged =
+                    categoryVisibilityKey !==
+                    this.observedCategoryVisibilityKey;
                 if (importSessionCompleted || contentBecameReady) {
                     this.contentRefreshPending = true;
                 }
@@ -157,11 +163,16 @@ export class RecentlyAddedCollectionComponent implements OnInit {
                 this.observedSearchTerm = searchTerm;
                 this.observedImportSessionId = importSessionId;
                 this.observedContentLoadState = contentLoadState;
+                this.observedCategoryVisibilityKey = categoryVisibilityKey;
 
                 if (contentRefreshCompleted) {
                     this.contentRefreshPending = false;
                 }
-                if (searchChanged || contentRefreshCompleted) {
+                if (
+                    searchChanged ||
+                    contentRefreshCompleted ||
+                    categoryVisibilityChanged
+                ) {
                     this.reloadCollection();
                 }
             });
@@ -178,6 +189,7 @@ export class RecentlyAddedCollectionComponent implements OnInit {
     }
 
     onLoadMore(): void {
+        if (this.appendError()) return;
         void this.loadNextPage();
     }
 
@@ -306,6 +318,20 @@ export class RecentlyAddedCollectionComponent implements OnInit {
         this.hasMore.set(true);
         this.appendError.set(false);
         this.isAppending.set(false);
+    }
+
+    private categoryVisibilityKey(): string {
+        const categories =
+            this.kind === 'series'
+                ? this.xtreamStore.serialCategories()
+                : this.xtreamStore.vodCategories();
+        return categories
+            .map((category) =>
+                'category_id' in category
+                    ? `api:${category.category_id}`
+                    : `db:${category.xtream_id}:${category.hidden ? 1 : 0}`
+            )
+            .join('\u001f');
     }
 
     private resolveKind(): RecentlyAddedCollectionKind {
