@@ -1847,6 +1847,8 @@
             "XTREAM_IMPORT_PREPARING": "Προετοιμασία τοπικής βιβλιοθήκης...",
             "XTREAM_IMPORT_LOADING_CACHED": "Φόρτωση του αποθηκευμένου καταλόγου από αυτήν τη συσκευή...",
             "XTREAM_IMPORT_LOADING": "Λήψη δεδομένων λίστας αναπαραγωγής από την πηγή...",
+            "XTREAM_CATALOG_RECOVERED": "{{count}} στοιχεία · ανακτήθηκαν {{recovered}} παραλλαγές που παρέλειψε ο πάροχος",
+            "XTREAM_CATALOG_PARTIAL": "Μερικός κατάλογος: {{count}} διαθέσιμα · απέτυχαν {{failed}} κατηγορίες · {{omitted}} σειρές χωρίς απομακρυσμένο ID",
             "XTREAM_IMPORT_SAVING": "Αποθήκευση δεδομένων λίστας αναπαραγωγής τοπικά...",
             "XTREAM_IMPORT_RESTORING_FAVORITES": "Επαναφορά αγαπημένων από την τοπική βιβλιοθήκη...",
             "XTREAM_IMPORT_RESTORING_RECENT": "Επαναφορά πρόσφατων προβολών από την τοπική βιβλιοθήκη...",

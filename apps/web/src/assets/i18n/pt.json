@@ -1847,6 +1847,8 @@
             "XTREAM_IMPORT_PREPARING": "Preparando biblioteca local...",
             "XTREAM_IMPORT_LOADING_CACHED": "Carregando o catálogo salvo deste dispositivo...",
             "XTREAM_IMPORT_LOADING": "Buscando dados da playlist na fonte...",
+            "XTREAM_CATALOG_RECOVERED": "{{count}} itens · {{recovered}} variantes omitidas pelo provedor foram recuperadas",
+            "XTREAM_CATALOG_PARTIAL": "Catálogo parcial: {{count}} itens disponíveis · {{failed}} categorias falharam · {{omitted}} linhas sem ID remoto",
             "XTREAM_IMPORT_SAVING": "Salvando dados da playlist localmente...",
             "XTREAM_IMPORT_RESTORING_FAVORITES": "Restaurando favoritos da biblioteca local...",
             "XTREAM_IMPORT_RESTORING_RECENT": "Restaurando assistidos recentemente da biblioteca local...",

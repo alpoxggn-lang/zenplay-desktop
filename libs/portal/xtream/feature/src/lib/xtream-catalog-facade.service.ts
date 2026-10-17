@@ -2,6 +2,7 @@ import { Provider, Injectable, computed, inject } from '@angular/core';
 import {
     PortalCatalogFacade,
     PortalCatalogItemProgress,
+    PortalCatalogNotice,
     PortalCatalogPlaylistMeta,
     PortalCatalogSortMode,
     PORTAL_CATALOG_FACADE,
@@ -53,6 +54,33 @@ export class XtreamCatalogFacadeService implements PortalCatalogFacade<
     readonly categoryItemCount = computed(
         () => this.xtreamStore.selectItemsFromSelectedCategory().length
     );
+    readonly catalogNotice = computed<PortalCatalogNotice | null>(() => {
+        const type = this.contentType();
+        if (!type) return null;
+        const diagnostics = this.xtreamStore.catalogDiagnosticsByType()[type];
+        if (!diagnostics || diagnostics.status === 'complete') return null;
+        if (diagnostics.status === 'recovered') {
+            const params: Record<string, string | number> = {
+                count: diagnostics.totalCount,
+                recovered: diagnostics.recoveredCount,
+            };
+            return {
+                key: 'WORKSPACE.SHELL.XTREAM_CATALOG_RECOVERED',
+                params,
+                tone: 'info' as const,
+            };
+        }
+        const params: Record<string, string | number> = {
+            count: diagnostics.totalCount,
+            failed: diagnostics.failedCategoryCount,
+            omitted: diagnostics.invalidItemCount,
+        };
+        return {
+            key: 'WORKSPACE.SHELL.XTREAM_CATALOG_PARTIAL',
+            params,
+            tone: 'warning' as const,
+        };
+    });
     readonly contentSortMode = computed<PortalCatalogSortMode>(() => {
         const mode = this.xtreamStore.contentSortMode();
 

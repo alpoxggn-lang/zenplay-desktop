@@ -2,6 +2,7 @@ import { signal } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { PortalCatalogSortMode } from '@iptvnator/portal/shared/util';
 import {
+    XtreamCatalogDiagnostics,
     XtreamPlaylistData,
     XtreamStore,
 } from '@iptvnator/portal/xtream/data-access';
@@ -45,6 +46,9 @@ describe('XtreamCatalogFacadeService', () => {
     const contentSortMode = signal<PortalCatalogSortMode>('date-desc');
     const minRating = signal<number | null>(null);
     const currentPlaylist = signal<XtreamPlaylistData | null>(PLAYLIST_ONE);
+    const catalogDiagnosticsByType = signal<
+        Partial<Record<'live' | 'vod' | 'series', XtreamCatalogDiagnostics>>
+    >({});
 
     const xtreamStore = {
         selectedContentType: contentType,
@@ -58,6 +62,7 @@ describe('XtreamCatalogFacadeService', () => {
         contentSortMode,
         minRating,
         currentPlaylist,
+        catalogDiagnosticsByType,
         loadAllPositions: jest.fn().mockResolvedValue(undefined),
         setCategorySearchTerm: jest.fn(),
         setSelectedItem: jest.fn((item: Record<string, unknown> | null) => {
@@ -95,6 +100,7 @@ describe('XtreamCatalogFacadeService', () => {
         contentSortMode.set('date-desc');
         minRating.set(null);
         currentPlaylist.set(PLAYLIST_ONE);
+        catalogDiagnosticsByType.set({});
 
         xtreamStore.loadAllPositions.mockClear();
         xtreamStore.setCategorySearchTerm.mockClear();
@@ -162,6 +168,46 @@ describe('XtreamCatalogFacadeService', () => {
         ]);
         expect(service.hasMore()).toBe(true);
         expect(service.categoryItemCount()).toBe(3);
+    });
+
+    it('exposes recovered and partial PWA catalog notices with clear counts', () => {
+        catalogDiagnosticsByType.set({
+            vod: {
+                totalCount: 12,
+                globalCount: 10,
+                recoveredCount: 2,
+                invalidItemCount: 0,
+                failedCategoryCount: 0,
+                recoveredCategoryCount: 1,
+                status: 'recovered' as const,
+            },
+        });
+        expect(service.catalogNotice()).toEqual(
+            expect.objectContaining({
+                key: 'WORKSPACE.SHELL.XTREAM_CATALOG_RECOVERED',
+                params: { count: 12, recovered: 2 },
+                tone: 'info',
+            })
+        );
+
+        catalogDiagnosticsByType.set({
+            vod: {
+                totalCount: 10,
+                globalCount: 10,
+                recoveredCount: 0,
+                invalidItemCount: 1,
+                failedCategoryCount: 2,
+                recoveredCategoryCount: 0,
+                status: 'partial' as const,
+            },
+        });
+        expect(service.catalogNotice()).toEqual(
+            expect.objectContaining({
+                key: 'WORKSPACE.SHELL.XTREAM_CATALOG_PARTIAL',
+                params: { count: 10, failed: 2, omitted: 1 },
+                tone: 'warning',
+            })
+        );
     });
 
     it('delegates loadMore and the scroll-position handoff to the store', () => {

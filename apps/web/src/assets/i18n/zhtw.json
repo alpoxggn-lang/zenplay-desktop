@@ -1847,6 +1847,8 @@
             "XTREAM_IMPORT_PREPARING": "正在準備本機媒體庫...",
             "XTREAM_IMPORT_LOADING_CACHED": "正在從此裝置載入已儲存的目錄...",
             "XTREAM_IMPORT_LOADING": "正在從來源擷取播放清單資料...",
+            "XTREAM_CATALOG_RECOVERED": "共 {{count}} 項 · 已復原供應商遺漏的 {{recovered}} 個版本",
+            "XTREAM_CATALOG_PARTIAL": "目錄不完整：可用 {{count}} 項 · {{failed}} 個分類請求失敗 · {{omitted}} 列缺少遠端 ID",
             "XTREAM_IMPORT_SAVING": "正在將播放清單資料儲存至本機...",
             "XTREAM_IMPORT_RESTORING_FAVORITES": "正在從本機媒體庫還原我的最愛...",
             "XTREAM_IMPORT_RESTORING_RECENT": "正在從本機媒體庫還原最近觀看記錄...",

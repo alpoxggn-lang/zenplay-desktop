@@ -98,6 +98,9 @@ export class CategoryContentViewComponent implements OnInit, OnDestroy {
     readonly paginatedContent = this.catalog.paginatedContent;
     readonly selectedCategoryTitle = this.catalog.selectedCategoryTitle;
     readonly categoryItemCount = this.catalog.categoryItemCount;
+    readonly catalogNotice = computed(
+        () => this.catalog.catalogNotice?.() ?? null
+    );
     readonly selectedItem = this.catalog.selectedItem;
     readonly contentSortMode = this.catalog.contentSortMode;
     readonly isPaginatedContentLoading = this.catalog.isPaginatedContentLoading;

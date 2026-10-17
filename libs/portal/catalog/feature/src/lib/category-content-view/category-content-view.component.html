@@ -20,6 +20,26 @@
                         @let subtitle = categoryItemSubtitle();
                         {{ subtitle.key | translate: subtitle.params }}
                     </div>
+                    @if (catalogNotice(); as notice) {
+                        <div
+                            class="catalog-notice"
+                            [class.catalog-notice--warning]="
+                                notice.tone === 'warning'
+                            "
+                            [attr.role]="
+                                notice.tone === 'warning' ? 'alert' : 'status'
+                            "
+                        >
+                            <mat-icon aria-hidden="true">{{
+                                notice.tone === 'warning'
+                                    ? 'warning'
+                                    : 'check_circle'
+                            }}</mat-icon>
+                            <span>{{
+                                notice.key | translate: notice.params
+                            }}</span>
+                        </div>
+                    }
                 </div>
                 @if (hasRefineControls()) {
                     <div class="active-refinements" aria-live="polite">

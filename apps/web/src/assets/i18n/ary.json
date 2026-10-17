@@ -1847,6 +1847,8 @@
             "XTREAM_IMPORT_PREPARING": "كتوجد المكتبة المحلية...",
             "XTREAM_IMPORT_LOADING_CACHED": "جاري تشريج الفهرس المحفوظ من الجهاز ديالك...",
             "XTREAM_IMPORT_LOADING": "جاري جلب بيانات قائمة التشغيل من المصدر...",
+            "XTREAM_CATALOG_RECOVERED": "{{count}} عنصر · ترجعو {{recovered}} نسخ لي فوتهم المزوّد",
+            "XTREAM_CATALOG_PARTIAL": "الكاتالوغ ناقص: {{count}} عنصر موجود · فشلو {{failed}} ديال الفئات · {{omitted}} سطور بلا معرّف بعيد",
             "XTREAM_IMPORT_SAVING": "جاري حفظ بيانات قائمة التشغيل محلياً...",
             "XTREAM_IMPORT_RESTORING_FAVORITES": "كيترجعو المفضلات من المكتبة المحلية...",
             "XTREAM_IMPORT_RESTORING_RECENT": "كيترجعو المتشافين مؤخراً من المكتبة المحلية...",

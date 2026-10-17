@@ -6,7 +6,7 @@
         class="content-card__activation"
         role="button"
         tabindex="0"
-        [attr.aria-label]="title()"
+        [attr.aria-label]="accessibleLabel()"
         (click)="onCardClick()"
         (keydown.enter)="onCardKey($event)"
         (keydown.space)="onCardKey($event)"
@@ -57,11 +57,17 @@
         @if (!postersOnly()) {
             <div class="card-info">
                 <h3>{{ title() }}</h3>
+                @if (subtitle()) {
+                    <p class="variant-info">{{ subtitle() }}</p>
+                }
                 @if (date()) {
                     <p class="date-info">
                         {{
                             date()
-                                | date: 'd MMM, HH:mm' : undefined : currentLocale()
+                                | date
+                                    : 'd MMM, HH:mm'
+                                    : undefined
+                                    : currentLocale()
                         }}
                     </p>
                 }

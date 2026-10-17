@@ -1847,6 +1847,8 @@
             "XTREAM_IMPORT_PREPARING": "Preparando biblioteca local...",
             "XTREAM_IMPORT_LOADING_CACHED": "Cargando el catálogo guardado desde este dispositivo...",
             "XTREAM_IMPORT_LOADING": "Obteniendo datos de la lista desde la fuente…",
+            "XTREAM_CATALOG_RECOVERED": "{{count}} elementos · se recuperaron {{recovered}} variantes omitidas por el proveedor",
+            "XTREAM_CATALOG_PARTIAL": "Catálogo parcial: {{count}} elementos disponibles · fallaron {{failed}} categorías · {{omitted}} filas no tenían ID remoto",
             "XTREAM_IMPORT_SAVING": "Guardando datos de la lista localmente…",
             "XTREAM_IMPORT_RESTORING_FAVORITES": "Restaurando favoritos desde la biblioteca local...",
             "XTREAM_IMPORT_RESTORING_RECENT": "Restaurando vistos recientemente desde la biblioteca local...",

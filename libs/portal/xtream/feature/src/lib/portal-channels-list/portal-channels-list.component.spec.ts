@@ -206,6 +206,30 @@ describe('PortalChannelsListComponent', () => {
         ).not.toBeNull();
     });
 
+    it('distinguishes homonymous channels with provider variant metadata', () => {
+        selectedTypeContentLoading.set(false);
+        selectedChannels.set([
+            {
+                title: 'News',
+                variant_label: 'ES · FHD',
+                xtream_id: 50,
+            },
+        ]);
+
+        fixture.detectChanges();
+
+        expect(
+            fixture.componentInstance.channelDisplayName(
+                fixture.componentInstance.filteredChannels()[0]
+            )
+        ).toBe('News · ES · FHD');
+        expect(fixture.componentInstance.filteredChannels()).toHaveLength(1);
+
+        fixture.componentRef.setInput('searchTermInput', 'fhd');
+        fixture.detectChanges();
+        expect(fixture.componentInstance.filteredChannels()).toHaveLength(1);
+    });
+
     it('selects the current preview program by timestamps, preserves them, and updates progress from them', () => {
         jest.useFakeTimers();
         const currentStartTimestamp = Math.floor(

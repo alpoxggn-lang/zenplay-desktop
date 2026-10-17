@@ -1847,6 +1847,8 @@
             "XTREAM_IMPORT_PREPARING": "Helyi médiatár előkészítése…",
             "XTREAM_IMPORT_LOADING_CACHED": "Az eszközön mentett katalógus betöltése…",
             "XTREAM_IMPORT_LOADING": "Lejátszási lista adatainak lekérése a forrásból…",
+            "XTREAM_CATALOG_RECOVERED": "{{count}} elem · {{recovered}} szolgáltató által kihagyott változat helyreállítva",
+            "XTREAM_CATALOG_PARTIAL": "Részleges katalógus: {{count}} elem érhető el · {{failed}} kategória lekérése sikertelen · {{omitted}} sor távoli azonosító nélkül",
             "XTREAM_IMPORT_SAVING": "Lejátszási lista adatainak helyi mentése…",
             "XTREAM_IMPORT_RESTORING_FAVORITES": "Kedvencek visszaállítása a helyi médiatárból…",
             "XTREAM_IMPORT_RESTORING_RECENT": "Megtekintési előzmények visszaállítása a helyi médiatárból…",

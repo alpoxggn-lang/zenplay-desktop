@@ -98,6 +98,23 @@ describe('GridListComponent', () => {
         );
     });
 
+    it('renders provider metadata beneath homonymous catalog titles', () => {
+        fixture.componentRef.setInput('items', [
+            {
+                name: 'Shared title',
+                variant_label: 'EN · HD · MP4',
+            },
+        ]);
+        fixture.componentRef.setInput('type', 'vod');
+
+        fixture.detectChanges();
+
+        expect(
+            fixture.debugElement.query(By.css('.variant-label')).nativeElement
+                .textContent
+        ).toContain('EN · HD · MP4');
+    });
+
     it.each(['live', 'vod', 'series'] as const)(
         'does not render a redundant %s type badge in homogeneous grids',
         (type) => {
@@ -214,9 +231,7 @@ describe('GridListComponent', () => {
         // The icon is aria-hidden — the status must also exist as
         // visually-hidden text for assistive technology.
         const srText = badge.query(By.css('.visually-hidden'));
-        expect(srText.nativeElement.textContent).toContain(
-            'CATCHUP_AVAILABLE'
-        );
+        expect(srText.nativeElement.textContent).toContain('CATCHUP_AVAILABLE');
     });
 
     it('hides the catch-up badge for live cards without a playable archive', () => {
@@ -319,9 +334,7 @@ describe('GridListComponent with strip country prefix enabled', () => {
     });
 
     it('keeps VOD titles untouched', () => {
-        fixture.componentRef.setInput('items', [
-            { title: 'US | Some Movie' },
-        ]);
+        fixture.componentRef.setInput('items', [{ title: 'US | Some Movie' }]);
         fixture.componentRef.setInput('type', 'vod');
 
         fixture.detectChanges();
@@ -376,9 +389,7 @@ describe('GridListComponent posters-only wall', () => {
             'grid-list--posters-only'
         );
         expect(fixture.debugElement.query(By.css('.title'))).toBeNull();
-        expect(overlay().nativeElement.textContent.trim()).toBe(
-            'Blade Runner'
-        );
+        expect(overlay().nativeElement.textContent.trim()).toBe('Blade Runner');
         expect(overlay().nativeElement.classList).not.toContain(
             'cover-title-overlay--pinned'
         );

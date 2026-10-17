@@ -29,6 +29,7 @@ import {
 import {
     DbCategoryType,
     XTREAM_DATA_SOURCE,
+    XtreamCatalogDiagnostics,
     XtreamCategoryFromDb,
 } from '../../data-sources/xtream-data-source.interface';
 import {
@@ -98,6 +99,9 @@ export interface ContentState {
     isLoadingContent: boolean;
     isImporting: boolean;
     contentLoadStateByType: XtreamContentLoadStateByType;
+    catalogDiagnosticsByType: Partial<
+        Record<ContentType, XtreamCatalogDiagnostics>
+    >;
     isCancellingImport: boolean;
     importCount: number;
     importPhase: string | null;
@@ -134,6 +138,7 @@ const initialContentState: ContentState = {
     isLoadingContent: false,
     isImporting: false,
     contentLoadStateByType: { ...initialContentLoadStateByType },
+    catalogDiagnosticsByType: {},
     isCancellingImport: false,
     importCount: 0,
     importPhase: null,
@@ -360,6 +365,23 @@ export function withContent() {
                     contentLoadStateByType: {
                         ...state.contentLoadStateByType,
                         [type]: loadState,
+                    },
+                }));
+            };
+
+            const publishCatalogDiagnostics = (
+                playlistId: string,
+                type: ContentType
+            ): void => {
+                const diagnostics = dataSource.getCatalogDiagnostics?.(
+                    playlistId,
+                    toStreamType(type)
+                );
+                if (!diagnostics) return;
+                patchState(store, (state) => ({
+                    catalogDiagnosticsByType: {
+                        ...state.catalogDiagnosticsByType,
+                        [type]: diagnostics,
                     },
                 }));
             };
@@ -936,6 +958,7 @@ export function withContent() {
                     activeImportTotalCount: 0,
                     activeImportSessionId: importSessionId,
                     activeImportOperationIds: [],
+                    catalogDiagnosticsByType: {},
                     contentLoadStateByType: {
                         live: 'loading',
                         vod: 'loading',
@@ -1269,6 +1292,7 @@ export function withContent() {
                                 onPhaseChange: publishTypedImportPhase('live'),
                             }
                         )) as XtreamLiveStream[];
+                        publishCatalogDiagnostics(ctx.playlistId, 'live');
                         throwIfImportCancelled(options?.importSessionId);
                         await setImportStatus(
                             ctx.playlistId,
@@ -1308,6 +1332,7 @@ export function withContent() {
                                 onPhaseChange: publishTypedImportPhase('vod'),
                             }
                         )) as XtreamVodStream[];
+                        publishCatalogDiagnostics(ctx.playlistId, 'vod');
                         throwIfImportCancelled(options?.importSessionId);
                         await setImportStatus(
                             ctx.playlistId,
@@ -1349,6 +1374,7 @@ export function withContent() {
                                     publishTypedImportPhase('series'),
                             }
                         )) as XtreamSerieItem[];
+                        publishCatalogDiagnostics(ctx.playlistId, 'series');
                         throwIfImportCancelled(options?.importSessionId);
                         await setImportStatus(
                             ctx.playlistId,
@@ -1647,6 +1673,7 @@ export function withContent() {
                                 'live'
                             )) as XtreamLiveStream[];
                             if (!shouldPublish()) return;
+                            publishCatalogDiagnostics(ctx.playlistId, 'live');
                             patchState(store, { liveStreams: live });
                         } catch (error) {
                             logger.error('Error reloading live streams', error);
@@ -1663,6 +1690,7 @@ export function withContent() {
                                 'movie'
                             )) as XtreamVodStream[];
                             if (!shouldPublish()) return;
+                            publishCatalogDiagnostics(ctx.playlistId, 'vod');
                             patchState(store, {
                                 vodStreams: vod,
                                 vodStreamsPlaylistId: ctx.playlistId,
@@ -1682,6 +1710,7 @@ export function withContent() {
                                 'series'
                             )) as XtreamSerieItem[];
                             if (!shouldPublish()) return;
+                            publishCatalogDiagnostics(ctx.playlistId, 'series');
                             patchState(store, { serialStreams: series });
                         } catch (error) {
                             logger.error('Error reloading series', error);

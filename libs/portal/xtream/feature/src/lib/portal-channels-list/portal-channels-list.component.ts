@@ -80,6 +80,7 @@ export interface XtreamChannelListItem {
     readonly stream_icon?: string;
     readonly title?: string;
     readonly type?: 'live' | 'movie' | 'series' | 'vod';
+    readonly variant_label?: string;
     readonly xtream_id: number;
     readonly epg_channel_id?: string | null;
     readonly tv_archive?: number | null;
@@ -169,11 +170,16 @@ export class PortalChannelsListComponent implements AfterViewInit, OnDestroy {
         }
 
         return channels.filter((item) =>
-            foldSearchText(`${item.title ?? ''} ${item.name ?? ''}`).includes(
-                term
-            )
+            foldSearchText(
+                `${item.title ?? ''} ${item.name ?? ''} ${item.variant_label ?? ''}`
+            ).includes(term)
         );
     });
+
+    channelDisplayName(item: XtreamChannelListItem): string {
+        const title = item.title || item.name || '';
+        return item.variant_label ? `${title} · ${item.variant_label}` : title;
+    }
 
     favorites = new Map<string, boolean>();
     epgPrograms = new Map<number, EpgProgram>();

@@ -1847,6 +1847,8 @@
             "XTREAM_IMPORT_PREPARING": "Przygotowywanie biblioteki lokalnej...",
             "XTREAM_IMPORT_LOADING_CACHED": "Wczytywanie zapisanego katalogu z tego urządzenia...",
             "XTREAM_IMPORT_LOADING": "Pobieranie danych listy odtwarzania ze źródła...",
+            "XTREAM_CATALOG_RECOVERED": "{{count}} elementów · przywrócono {{recovered}} wariantów pominiętych przez dostawcę",
+            "XTREAM_CATALOG_PARTIAL": "Niepełny katalog: dostępnych {{count}} elementów · nie udało się pobrać {{failed}} kategorii · {{omitted}} wierszy bez zdalnego ID",
             "XTREAM_IMPORT_SAVING": "Zapisywanie danych listy odtwarzania lokalnie...",
             "XTREAM_IMPORT_RESTORING_FAVORITES": "Przywracanie ulubionych z biblioteki lokalnej...",
             "XTREAM_IMPORT_RESTORING_RECENT": "Przywracanie ostatnio oglądanych z biblioteki lokalnej...",

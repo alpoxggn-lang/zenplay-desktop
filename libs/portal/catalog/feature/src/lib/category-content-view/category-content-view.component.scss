@@ -50,6 +50,30 @@
     background: transparent;
 }
 
+.catalog-notice {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    max-width: min(560px, 100%);
+    padding: 6px 10px;
+    color: var(--mat-sys-on-secondary-container);
+    background: var(--mat-sys-secondary-container);
+    border-radius: 10px;
+    font-size: 0.78rem;
+
+    mat-icon {
+        flex: 0 0 auto;
+        width: 18px;
+        height: 18px;
+        font-size: 18px;
+    }
+
+    &--warning {
+        color: var(--mat-sys-on-error-container);
+        background: var(--mat-sys-error-container);
+    }
+}
+
 // ─── Refine controls — show current sort/filter state compactly ──────────────
 // A chip shows its icon and a short value at every width; screen readers
 // get the full "Sort: …" text from a visually hidden span.

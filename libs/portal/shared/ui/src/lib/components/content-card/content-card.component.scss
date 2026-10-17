@@ -35,6 +35,16 @@
 
     .card-info {
         @include grid.card-info;
+
+        .variant-info {
+            margin: 2px 0 0;
+            overflow: hidden;
+            color: var(--mat-sys-on-surface-variant);
+            font-size: 0.72rem;
+            line-height: 1.25;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
     }
 }
 

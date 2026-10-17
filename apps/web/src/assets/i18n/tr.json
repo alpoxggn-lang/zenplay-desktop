@@ -1847,6 +1847,8 @@
             "XTREAM_IMPORT_PREPARING": "Yerel kitaplık hazırlanıyor...",
             "XTREAM_IMPORT_LOADING_CACHED": "Bu cihazdan kaydedilmiş katalog yükleniyor...",
             "XTREAM_IMPORT_LOADING": "Kaynaktan oynatma listesi verileri alınıyor...",
+            "XTREAM_CATALOG_RECOVERED": "{{count}} öğe · sağlayıcının atladığı {{recovered}} varyant geri yüklendi",
+            "XTREAM_CATALOG_PARTIAL": "Kısmi katalog: {{count}} öğe kullanılabilir · {{failed}} kategori isteği başarısız · {{omitted}} satırda uzak kimlik yok",
             "XTREAM_IMPORT_SAVING": "Oynatma listesi verileri yerel olarak kaydediliyor...",
             "XTREAM_IMPORT_RESTORING_FAVORITES": "Favoriler yerel kitaplıktan geri yükleniyor...",
             "XTREAM_IMPORT_RESTORING_RECENT": "Son görüntülenenler yerel kitaplıktan geri yükleniyor...",

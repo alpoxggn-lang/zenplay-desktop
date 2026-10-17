@@ -1847,6 +1847,8 @@
             "XTREAM_IMPORT_PREPARING": "Preparing local library...",
             "XTREAM_IMPORT_LOADING_CACHED": "Loading the saved catalog from this device...",
             "XTREAM_IMPORT_LOADING": "Fetching playlist data from source...",
+            "XTREAM_CATALOG_RECOVERED": "{{count}} items · restored {{recovered}} omitted provider variants",
+            "XTREAM_CATALOG_PARTIAL": "Partial catalog: {{count}} items available · {{failed}} category requests failed · {{omitted}} rows had no remote ID",
             "XTREAM_IMPORT_SAVING": "Saving playlist data locally...",
             "XTREAM_IMPORT_RESTORING_FAVORITES": "Restoring favorites from local library...",
             "XTREAM_IMPORT_RESTORING_RECENT": "Restoring recently viewed from local library...",

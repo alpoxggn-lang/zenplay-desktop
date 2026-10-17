@@ -90,6 +90,28 @@ export interface XtreamContentItem {
     description?: string;
     playlist_id?: string;
     playlist_name?: string;
+    /**
+     * Compact provider-supplied variant metadata (for example `ES · 4K · MKV`).
+     * It never participates in identity; it only distinguishes otherwise
+     * homonymous cards when the panel exposes useful metadata.
+     */
+    variant_label?: string;
+}
+
+export interface XtreamCatalogDiagnostics {
+    /** Valid, unique rows published for this playlist and content type. */
+    readonly totalCount: number;
+    /** Valid rows received from the provider's unfiltered endpoint. */
+    readonly globalCount: number;
+    /** Rows restored by category-scoped fallback requests. */
+    readonly recoveredCount: number;
+    /** Provider rows omitted because they had no usable remote Xtream ID. */
+    readonly invalidItemCount: number;
+    /** Category-scoped fallback requests which still failed. */
+    readonly failedCategoryCount: number;
+    /** Category-scoped fallback requests that succeeded. */
+    readonly recoveredCategoryCount: number;
+    readonly status: 'complete' | 'recovered' | 'partial';
 }
 
 /**
@@ -286,6 +308,15 @@ export interface IXtreamDataSource {
         | XtreamSerieItem[]
         | XtreamContentItem[]
     >;
+
+    /**
+     * Optional runtime diagnostics. PWA uses them to explain provider
+     * recovery/partial catalogs; the SQLite source has no such fallback.
+     */
+    getCatalogDiagnostics?(
+        playlistId: string,
+        type: StreamType
+    ): XtreamCatalogDiagnostics | null;
 
     /**
      * Get persisted content without contacting the Xtream API.

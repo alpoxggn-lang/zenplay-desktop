@@ -1847,6 +1847,8 @@
             "XTREAM_IMPORT_PREPARING": "Lokale bibliotheek voorbereiden...",
             "XTREAM_IMPORT_LOADING_CACHED": "Gecachte catalogus van dit apparaat laden...",
             "XTREAM_IMPORT_LOADING": "Afspeellijstgegevens ophalen van de bron...",
+            "XTREAM_CATALOG_RECOVERED": "{{count}} items · {{recovered}} door de provider overgeslagen varianten hersteld",
+            "XTREAM_CATALOG_PARTIAL": "Gedeeltelijke catalogus: {{count}} items beschikbaar · {{failed}} categorieaanvragen mislukt · {{omitted}} rijen zonder externe ID",
             "XTREAM_IMPORT_SAVING": "Afspeellijstgegevens lokaal opslaan...",
             "XTREAM_IMPORT_RESTORING_FAVORITES": "Favorieten herstellen vanuit lokale bibliotheek...",
             "XTREAM_IMPORT_RESTORING_RECENT": "Recent bekeken herstellen vanuit lokale bibliotheek...",

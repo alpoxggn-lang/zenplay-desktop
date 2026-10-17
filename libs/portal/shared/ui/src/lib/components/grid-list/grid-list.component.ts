@@ -41,6 +41,7 @@ interface GridListItem {
     title?: string;
     o_name?: string;
     name?: string;
+    variant_label?: string;
     rating?: string | number;
     rating_imdb?: string | number;
     progress?: number;
@@ -118,7 +119,8 @@ function normalizeArtworkUrl(value: string | undefined): string | undefined {
                         (keydown.space)="onSpaceKey($event, item)"
                     >
                         @let poster = resolvePoster(i);
-                        @let artworkMissing = !poster || hasArtworkFailed(poster);
+                        @let artworkMissing =
+                            !poster || hasArtworkFailed(poster);
                         <div class="card-thumbnail-container">
                             @if (!artworkMissing) {
                                 <img
@@ -214,7 +216,14 @@ function normalizeArtworkUrl(value: string | undefined): string | undefined {
                         }
                         @if (!postersOnly()) {
                             <mat-card-actions>
-                                <div class="title">{{ title }}</div>
+                                <div class="card-copy">
+                                    <div class="title">{{ title }}</div>
+                                    @if (i.variant_label) {
+                                        <div class="variant-label">
+                                            {{ i.variant_label }}
+                                        </div>
+                                    }
+                                </div>
                             </mat-card-actions>
                         }
                     </mat-card>

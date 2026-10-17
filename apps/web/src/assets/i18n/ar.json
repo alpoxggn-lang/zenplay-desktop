@@ -1847,6 +1847,8 @@
             "XTREAM_IMPORT_PREPARING": "جارٍ تجهيز المكتبة المحلية...",
             "XTREAM_IMPORT_LOADING_CACHED": "جارٍ تحميل الكتالوج المحفوظ من هذا الجهاز...",
             "XTREAM_IMPORT_LOADING": "جارٍ جلب بيانات قائمة التشغيل من المصدر...",
+            "XTREAM_CATALOG_RECOVERED": "{{count}} عنصرًا · تمت استعادة {{recovered}} نسخة أغفلها المزوّد",
+            "XTREAM_CATALOG_PARTIAL": "كتالوج جزئي: {{count}} عنصرًا متاحًا · فشل طلب {{failed}} فئات · {{omitted}} صفوف بلا معرّف بعيد",
             "XTREAM_IMPORT_SAVING": "جارٍ حفظ بيانات قائمة التشغيل محليًا...",
             "XTREAM_IMPORT_RESTORING_FAVORITES": "جارٍ استعادة المفضلات من المكتبة المحلية...",
             "XTREAM_IMPORT_RESTORING_RECENT": "جارٍ استعادة العناصر المشاهدة مؤخرًا من المكتبة المحلية...",

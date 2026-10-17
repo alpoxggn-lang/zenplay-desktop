@@ -29,7 +29,7 @@
                     trackBy: trackBy;
                     templateCacheSize: 0
                 "
-                [name]="item.title || item.name || ''"
+                [name]="channelDisplayName(item)"
                 [logo]="item.stream_icon ?? item.poster_url"
                 [selected]="
                     xtreamStore.selectedItem()?.xtream_id === item.xtream_id

@@ -49,9 +49,12 @@ export interface XtreamRequestOptions {
     suppressErrorLog?: boolean;
 }
 
-export interface XtreamVodCatalogRequestOptions extends XtreamRequestOptions {
+export interface XtreamCatalogRequestOptions extends XtreamRequestOptions {
     categoryId?: string | number;
 }
+
+/** @deprecated Use the content-type-neutral catalog request options. */
+export type XtreamVodCatalogRequestOptions = XtreamCatalogRequestOptions;
 
 const XTREAM_ACCOUNT_ACTIONS = [
     XtreamCodeActions.GetAccountInfo,
@@ -183,7 +186,7 @@ export class XtreamApiService {
      */
     async getLiveStreams(
         credentials: XtreamCredentials,
-        options?: XtreamRequestOptions
+        options?: XtreamCatalogRequestOptions
     ): Promise<XtreamLiveStream[]> {
         const response = await this.sendRequest(
             credentials.serverUrl,
@@ -191,6 +194,9 @@ export class XtreamApiService {
                 action: XtreamCodeActions.GetLiveStreams,
                 username: credentials.username,
                 password: credentials.password,
+                ...(options?.categoryId !== undefined
+                    ? { category_id: options.categoryId }
+                    : {}),
             },
             options
         );
@@ -203,7 +209,7 @@ export class XtreamApiService {
      */
     async getVodStreams(
         credentials: XtreamCredentials,
-        options?: XtreamVodCatalogRequestOptions
+        options?: XtreamCatalogRequestOptions
     ): Promise<XtreamVodStream[]> {
         const response = await this.sendRequest(
             credentials.serverUrl,
@@ -244,7 +250,7 @@ export class XtreamApiService {
      */
     async getSeriesStreams(
         credentials: XtreamCredentials,
-        options?: XtreamRequestOptions
+        options?: XtreamCatalogRequestOptions
     ): Promise<XtreamSerieItem[]> {
         const response = await this.sendRequest(
             credentials.serverUrl,
@@ -252,6 +258,9 @@ export class XtreamApiService {
                 action: XtreamCodeActions.GetSeries,
                 username: credentials.username,
                 password: credentials.password,
+                ...(options?.categoryId !== undefined
+                    ? { category_id: options.categoryId }
+                    : {}),
             },
             options
         );
@@ -265,7 +274,7 @@ export class XtreamApiService {
     async getStreams(
         credentials: XtreamCredentials,
         type: StreamType,
-        options?: XtreamRequestOptions
+        options?: XtreamCatalogRequestOptions
     ): Promise<XtreamLiveStream[] | XtreamVodStream[] | XtreamSerieItem[]> {
         switch (type) {
             case 'live':

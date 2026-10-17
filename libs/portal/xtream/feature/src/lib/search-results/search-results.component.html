@@ -151,6 +151,7 @@
                                             item.poster_url ?? undefined
                                         "
                                         [title]="item.title"
+                                        [subtitle]="item.variant_label"
                                         [type]="getDisplayType(item)"
                                         [showPlaceholder]="true"
                                         (cardClick)="selectItem(item)"
@@ -168,6 +169,7 @@
                             [allowPostersOnly]="false"
                             [posterUrl]="item.poster_url ?? undefined"
                             [title]="item.title"
+                            [subtitle]="item.variant_label"
                             [type]="getDisplayType(item)"
                             [showPlaceholder]="true"
                             (cardClick)="selectItem(item)"
@@ -211,6 +213,7 @@
                         [allowPostersOnly]="false"
                         [posterUrl]="item.poster_url ?? undefined"
                         [title]="item.title"
+                        [subtitle]="item.variant_label"
                         [type]="item.type"
                         [showPlaceholder]="true"
                         (cardClick)="selectItem(item)"

@@ -32,6 +32,12 @@ export interface PortalCatalogItemProgress {
     watchState?: PortalWatchState;
 }
 
+export interface PortalCatalogNotice {
+    readonly key: string;
+    readonly params?: Record<string, string | number>;
+    readonly tone: 'info' | 'warning';
+}
+
 export interface PortalCatalogFacade<
     TCategory = unknown,
     TItem = unknown,
@@ -51,6 +57,8 @@ export interface PortalCatalogFacade<
      */
     readonly selectedCategoryTitle: Signal<string | null>;
     readonly categoryItemCount: Signal<number>;
+    /** Optional provider completeness/recovery notice for the current list. */
+    readonly catalogNotice?: Signal<PortalCatalogNotice | null>;
     readonly contentSortMode: Signal<PortalCatalogSortMode | null>;
     readonly playlist: Signal<PortalCatalogPlaylistMeta | null>;
     /**

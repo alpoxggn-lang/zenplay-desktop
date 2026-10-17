@@ -46,9 +46,7 @@ describe('ContentCardComponent', () => {
             'content-card--posters-only'
         );
         expect(info()).toBeNull();
-        expect(overlay().nativeElement.textContent.trim()).toBe(
-            'Blade Runner'
-        );
+        expect(overlay().nativeElement.textContent.trim()).toBe('Blade Runner');
     });
 
     it('keeps the info row when the host opts the card out (search results)', () => {
@@ -58,6 +56,23 @@ describe('ContentCardComponent', () => {
 
         expect(info().nativeElement.textContent).toContain('Blade Runner');
         expect(overlay()).toBeNull();
+    });
+
+    it('shows provider variant metadata and includes it in the accessible name', () => {
+        fixture.componentRef.setInput('allowPostersOnly', false);
+        fixture.componentRef.setInput('subtitle', 'ES · 4K · MKV');
+
+        fixture.detectChanges();
+
+        expect(
+            fixture.debugElement.query(By.css('.variant-info')).nativeElement
+                .textContent
+        ).toContain('ES · 4K · MKV');
+        expect(
+            fixture.debugElement
+                .query(By.css('.content-card__activation'))
+                .nativeElement.getAttribute('aria-label')
+        ).toBe('Blade Runner, ES · 4K · MKV');
     });
 
     it.each(['live', 'radio'])(

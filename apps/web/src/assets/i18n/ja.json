@@ -1847,6 +1847,8 @@
             "XTREAM_IMPORT_PREPARING": "ローカルライブラリを準備中...",
             "XTREAM_IMPORT_LOADING_CACHED": "このデバイスに保存されたカタログを読み込み中...",
             "XTREAM_IMPORT_LOADING": "ソースからプレイリストデータを取得中...",
+            "XTREAM_CATALOG_RECOVERED": "{{count}}件 · プロバイダーが省略した{{recovered}}件のバリエーションを復元しました",
+            "XTREAM_CATALOG_PARTIAL": "一部のカタログのみ利用可能：{{count}}件 · カテゴリ取得失敗{{failed}}件 · リモートIDなし{{omitted}}件",
             "XTREAM_IMPORT_SAVING": "プレイリストデータをローカルに保存中...",
             "XTREAM_IMPORT_RESTORING_FAVORITES": "ローカルライブラリからお気に入りを復元中...",
             "XTREAM_IMPORT_RESTORING_RECENT": "ローカルライブラリから最近視聴した項目を復元中...",

@@ -152,6 +152,30 @@ describe('XtreamApiService', () => {
         );
     });
 
+    it.each([
+        ['live', 'get_live_streams'],
+        ['series', 'get_series'],
+    ] as const)(
+        'passes category filters through the %s catalog endpoint',
+        async (type, action) => {
+            dataService.sendIpcEvent.mockResolvedValue({ payload: [] });
+
+            await service.getStreams(credentials, type, { categoryId: 7 });
+
+            expect(dataService.sendIpcEvent).toHaveBeenCalledWith(
+                XTREAM_REQUEST,
+                expect.objectContaining({
+                    params: {
+                        action,
+                        category_id: '7',
+                        password: 'secret',
+                        username: 'demo',
+                    },
+                })
+            );
+        }
+    );
+
     it('falls back to the legacy full-epg action and normalizes the response', async () => {
         dataService.sendIpcEvent.mockImplementation(
             async (_type: string, payload: unknown) => {

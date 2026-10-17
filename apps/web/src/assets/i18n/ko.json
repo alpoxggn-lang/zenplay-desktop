@@ -1847,6 +1847,8 @@
             "XTREAM_IMPORT_PREPARING": "로컬 라이브러리 준비 중...",
             "XTREAM_IMPORT_LOADING_CACHED": "이 기기에서 저장된 카탈로그를 불러오는 중...",
             "XTREAM_IMPORT_LOADING": "소스에서 재생목록 데이터를 가져오는 중...",
+            "XTREAM_CATALOG_RECOVERED": "{{count}}개 항목 · 제공자가 누락한 변형 {{recovered}}개 복구",
+            "XTREAM_CATALOG_PARTIAL": "일부 카탈로그만 사용 가능: {{count}}개 · 카테고리 요청 실패 {{failed}}개 · 원격 ID 없는 행 {{omitted}}개",
             "XTREAM_IMPORT_SAVING": "재생목록 데이터를 로컬에 저장하는 중...",
             "XTREAM_IMPORT_RESTORING_FAVORITES": "로컬 라이브러리에서 즐겨찾기 복원 중...",
             "XTREAM_IMPORT_RESTORING_RECENT": "로컬 라이브러리에서 최근 시청 항목 복원 중...",

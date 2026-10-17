@@ -35,6 +35,7 @@ export interface GlobalSearchBaseResult {
     type: GlobalSearchContentType;
     playlist_id: string;
     playlist_name: string;
+    variant_label?: string;
 }
 
 export interface XtreamGlobalSearchResult extends GlobalSearchBaseResult {
@@ -62,8 +63,7 @@ export interface M3uGlobalSearchResult extends GlobalSearchBaseResult {
 }
 
 export type GlobalSearchResult =
-    | XtreamGlobalSearchResult
-    | M3uGlobalSearchResult;
+    XtreamGlobalSearchResult | M3uGlobalSearchResult;
 
 export function isM3uGlobalSearchResult(
     result: GlobalSearchResult

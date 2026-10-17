@@ -1847,6 +1847,8 @@
             "XTREAM_IMPORT_PREPARING": "Lokale Bibliothek wird vorbereitet...",
             "XTREAM_IMPORT_LOADING_CACHED": "Gespeicherter Katalog wird von diesem Gerät geladen…",
             "XTREAM_IMPORT_LOADING": "Playlist-Daten werden von der Quelle geladen...",
+            "XTREAM_CATALOG_RECOVERED": "{{count}} Elemente · {{recovered}} vom Anbieter ausgelassene Varianten wiederhergestellt",
+            "XTREAM_CATALOG_PARTIAL": "Unvollständiger Katalog: {{count}} Elemente verfügbar · {{failed}} Kategorieabfragen fehlgeschlagen · {{omitted}} Zeilen ohne Remote-ID",
             "XTREAM_IMPORT_SAVING": "Playlist-Daten werden lokal gespeichert...",
             "XTREAM_IMPORT_RESTORING_FAVORITES": "Favoriten werden aus der lokalen Bibliothek wiederhergestellt...",
             "XTREAM_IMPORT_RESTORING_RECENT": "Kürzlich angesehene Elemente werden aus der lokalen Bibliothek wiederhergestellt...",

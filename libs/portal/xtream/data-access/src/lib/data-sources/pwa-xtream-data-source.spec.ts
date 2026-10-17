@@ -16,6 +16,7 @@ import { of } from 'rxjs';
 describe('PwaXtreamDataSource', () => {
     let dataSource: PwaXtreamDataSource;
     let apiService: {
+        getCategories: jest.Mock;
         getStreams: jest.Mock;
     };
     let playlistsService: {
@@ -38,6 +39,7 @@ describe('PwaXtreamDataSource', () => {
         localStorage.clear();
 
         apiService = {
+            getCategories: jest.fn().mockResolvedValue([]),
             getStreams: jest.fn(),
         };
         playlistsService = {
@@ -424,6 +426,162 @@ describe('PwaXtreamDataSource', () => {
         );
     });
 
+    it('keeps homonymous provider variants by remote id and exposes their metadata labels', async () => {
+        apiService.getCategories.mockResolvedValue([
+            {
+                category_id: '20',
+                category_name: 'Movies',
+                parent_id: 0,
+                count: 2,
+            },
+        ]);
+        apiService.getStreams.mockResolvedValue([
+            {
+                stream_id: 201,
+                name: 'The Example',
+                category_id: '20',
+                audio_language: 'es',
+                quality: '4K',
+                container_extension: 'mkv',
+            },
+            {
+                stream_id: 202,
+                name: 'The Example',
+                category_id: '20',
+                audio_language: 'en',
+                quality: 'HD',
+                container_extension: 'mp4',
+            },
+        ]);
+
+        const content = (await dataSource.getContent(
+            'playlist-1',
+            credentials,
+            'movie'
+        )) as XtreamContentItem[];
+
+        expect(content.map((item) => item.xtream_id)).toEqual([201, 202]);
+        expect(content.map((item) => item.title)).toEqual([
+            'The Example',
+            'The Example',
+        ]);
+        expect(content.map((item) => item.variant_label)).toEqual([
+            'ES · 4K · MKV',
+            'EN · HD · MP4',
+        ]);
+    });
+
+    it('recovers omitted and truncated catalog rows from category endpoints', async () => {
+        apiService.getCategories.mockResolvedValue([
+            {
+                category_id: '10',
+                category_name: 'One',
+                parent_id: 0,
+                count: 2,
+            },
+            {
+                category_id: '20',
+                category_name: 'Two',
+                parent_id: 0,
+                // Some panels expose stale zero counts even when the scoped
+                // endpoint still has content; absence from the global list
+                // must therefore trigger verification on its own.
+                count: 0,
+            },
+        ]);
+        apiService.getStreams.mockImplementation(
+            (_credentials, _type, options?: { categoryId?: string }) => {
+                if (options?.categoryId === '10') {
+                    return Promise.resolve([
+                        {
+                            stream_id: 101,
+                            name: 'Shared name',
+                            category_id: '10',
+                        },
+                        {
+                            stream_id: 102,
+                            name: 'Shared name',
+                            category_id: '10',
+                        },
+                    ]);
+                }
+                if (options?.categoryId === '20') {
+                    return Promise.resolve([
+                        {
+                            stream_id: 201,
+                            name: 'Shared name',
+                            category_id: '20',
+                        },
+                    ]);
+                }
+                return Promise.resolve([
+                    {
+                        stream_id: 101,
+                        name: 'Shared name',
+                        category_id: '10',
+                    },
+                ]);
+            }
+        );
+
+        const content = (await dataSource.getContent(
+            'playlist-1',
+            credentials,
+            'movie'
+        )) as XtreamContentItem[];
+
+        expect(content.map((item) => item.xtream_id)).toEqual([101, 102, 201]);
+        expect(dataSource.getCatalogDiagnostics('playlist-1', 'movie')).toEqual(
+            {
+                totalCount: 3,
+                globalCount: 1,
+                recoveredCount: 2,
+                invalidItemCount: 0,
+                failedCategoryCount: 0,
+                recoveredCategoryCount: 2,
+                status: 'recovered',
+            }
+        );
+    });
+
+    it('keeps the usable global catalog and reports failed category recovery', async () => {
+        apiService.getCategories.mockResolvedValue([
+            {
+                category_id: '10',
+                category_name: 'Movies',
+                parent_id: 0,
+                count: 2,
+            },
+        ]);
+        apiService.getStreams.mockImplementation(
+            (_credentials, _type, options?: { categoryId?: string }) =>
+                options?.categoryId
+                    ? Promise.reject(new Error('category unavailable'))
+                    : Promise.resolve([
+                          {
+                              stream_id: 101,
+                              name: 'Available movie',
+                              category_id: '10',
+                          },
+                      ])
+        );
+
+        const content = (await dataSource.getContent(
+            'playlist-1',
+            credentials,
+            'movie'
+        )) as XtreamContentItem[];
+
+        expect(content).toEqual([expect.objectContaining({ xtream_id: 101 })]);
+        expect(dataSource.getCatalogDiagnostics('playlist-1', 'movie')).toEqual(
+            expect.objectContaining({
+                failedCategoryCount: 1,
+                status: 'partial',
+                totalCount: 1,
+            })
+        );
+    });
+
     it('matches legacy string favorite and recent ids against numeric content identities', async () => {
         apiService.getStreams.mockResolvedValue([
             {
@@ -493,16 +651,14 @@ describe('PwaXtreamDataSource', () => {
             'movie'
         )) as XtreamContentItem[];
 
-        expect(content).toEqual([
+        expect(content).toEqual([]);
+        expect(dataSource.getCatalogDiagnostics('playlist-1', 'movie')).toEqual(
             expect.objectContaining({
-                id: -1,
-                xtream_id: -1,
-            }),
-            expect.objectContaining({
-                id: -1,
-                xtream_id: -1,
-            }),
-        ]);
+                invalidItemCount: 2,
+                status: 'partial',
+                totalCount: 0,
+            })
+        );
 
         await dataSource.addFavorite(-1, 'playlist-1');
         await dataSource.addRecentItem(-1, 'playlist-1');
@@ -744,6 +900,7 @@ describe('PwaXtreamDataSource', () => {
 
         TestBed.resetTestingModule();
         apiService = {
+            getCategories: jest.fn().mockResolvedValue([]),
             getStreams: jest.fn(),
         };
         TestBed.configureTestingModule({

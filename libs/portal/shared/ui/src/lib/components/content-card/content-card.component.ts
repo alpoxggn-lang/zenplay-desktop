@@ -42,6 +42,9 @@ export class ContentCardComponent {
     /** Content type (live, movie, series) */
     readonly type = input<string>();
 
+    /** Optional provider metadata that distinguishes homonymous variants. */
+    readonly subtitle = input<string>();
+
     /** Optional date to display (Date, string, or timestamp number) */
     readonly date = input<Date | string | number>();
 
@@ -83,6 +86,9 @@ export class ContentCardComponent {
             this.allowPostersOnly() &&
             this.coverTitles.postersOnly() &&
             !LABELLED_CONTENT_TYPES.has(this.type() ?? '')
+    );
+    protected readonly accessibleLabel = computed(() =>
+        [this.title(), this.subtitle()].filter(Boolean).join(', ')
     );
     readonly currentLocale = computed(() => {
         this.languageTick();

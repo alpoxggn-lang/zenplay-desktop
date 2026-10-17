@@ -1847,6 +1847,8 @@
             "XTREAM_IMPORT_PREPARING": "Подготовка локальной библиотеки...",
             "XTREAM_IMPORT_LOADING_CACHED": "Загрузка сохранённого каталога с этого устройства...",
             "XTREAM_IMPORT_LOADING": "Получение данных плейлиста из источника...",
+            "XTREAM_CATALOG_RECOVERED": "Элементов: {{count}} · восстановлено пропущенных вариантов: {{recovered}}",
+            "XTREAM_CATALOG_PARTIAL": "Неполный каталог: доступно {{count}} · ошибок категорий: {{failed}} · строк без удалённого ID: {{omitted}}",
             "XTREAM_IMPORT_SAVING": "Сохранение данных плейлиста локально...",
             "XTREAM_IMPORT_RESTORING_FAVORITES": "Восстановление избранного из локальной библиотеки...",
             "XTREAM_IMPORT_RESTORING_RECENT": "Восстановление недавно просмотренного из локальной библиотеки...",

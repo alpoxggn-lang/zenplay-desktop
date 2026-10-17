@@ -32,6 +32,7 @@ import {
     ProgressCallback,
     XtreamOperationOptions,
     XtreamCategoryFromDb,
+    XtreamCatalogDiagnostics,
     XtreamContentItem,
     XtreamPlaylistData,
 } from './xtream-data-source.interface';
@@ -59,15 +60,21 @@ interface XtreamCachedContentItem {
     readonly added?: string;
     readonly backdrop_url?: string | null;
     readonly category_id?: string | number;
+    readonly container_extension?: string;
     readonly cover?: string;
     readonly cover_big?: string;
     readonly id?: number | string;
+    readonly lang?: string;
+    readonly language?: string;
+    readonly audio_language?: string;
     readonly last_modified?: string;
     readonly movie_image?: string;
     readonly name?: string;
     readonly poster?: string;
     readonly poster_url?: string;
     readonly rating?: string | number;
+    readonly quality?: string;
+    readonly resolution?: string;
     readonly series_id?: number;
     readonly stream_display_name?: string;
     readonly stream_id?: number;
@@ -77,6 +84,22 @@ interface XtreamCachedContentItem {
     readonly viewed_at?: string;
     readonly xtream_id?: number | string;
 }
+
+interface CatalogLoadResult {
+    readonly content: XtreamContentItem[];
+    readonly diagnostics: XtreamCatalogDiagnostics;
+}
+
+interface CategoryRecoveryResult {
+    readonly categoryId: string;
+    readonly streams?: XtreamCachedContentItem[];
+    readonly error?: unknown;
+}
+
+const CATEGORY_RECOVERY_CONCURRENCY = 4;
+const COMMON_PROVIDER_CATALOG_LIMITS = new Set([
+    100, 250, 500, 1000, 2000, 5000, 10000,
+]);
 
 type StoredXtreamPlaylistData = Omit<XtreamPlaylistData, 'password'> & {
     readonly password?: string;
@@ -102,7 +125,8 @@ export class PwaXtreamDataSource implements IXtreamDataSource {
 
     // In-memory cache for the current session
     private categoryCache = new Map<string, XtreamCategory[]>();
-    private contentCache = new Map<string, XtreamCachedContentItem[]>();
+    private contentCache = new Map<string, XtreamContentItem[]>();
+    private catalogDiagnostics = new Map<string, XtreamCatalogDiagnostics>();
     private playlistPasswords = new Map<string, string>();
 
     // =========================================================================
@@ -531,11 +555,7 @@ export class PwaXtreamDataSource implements IXtreamDataSource {
         // Check in-memory cache first
         const cachedContent = this.contentCache.get(cacheKey);
         if (cachedContent) {
-            return this.withoutLockedContent(
-                playlistId,
-                type,
-                cachedContent
-            ) as XtreamLiveStream[] | XtreamVodStream[] | XtreamSerieItem[];
+            return this.withoutLockedContent(playlistId, type, cachedContent);
         }
 
         // Fetch from API
@@ -546,8 +566,9 @@ export class PwaXtreamDataSource implements IXtreamDataSource {
                   ? 'loading-movies'
                   : 'loading-series'
         );
-        const content = this.normalizeContentItems(
-            await this.apiService.getStreams(credentials, type),
+        const { content, diagnostics } = await this.loadCompleteCatalog(
+            playlistId,
+            credentials,
             type
         );
 
@@ -561,8 +582,18 @@ export class PwaXtreamDataSource implements IXtreamDataSource {
 
         // Cache in memory
         this.contentCache.set(cacheKey, content);
+        this.catalogDiagnostics.set(cacheKey, diagnostics);
 
         return this.withoutLockedContent(playlistId, type, content);
+    }
+
+    getCatalogDiagnostics(
+        playlistId: string,
+        type: StreamType
+    ): XtreamCatalogDiagnostics | null {
+        return (
+            this.catalogDiagnostics.get(`${playlistId}-${type}-content`) ?? null
+        );
     }
 
     async getCachedContent(
@@ -590,6 +621,15 @@ export class PwaXtreamDataSource implements IXtreamDataSource {
         const cacheKey = `${playlistId}-${type}-content`;
         const normalizedStreams = this.normalizeContentItems(streams, type);
         this.contentCache.set(cacheKey, normalizedStreams);
+        this.catalogDiagnostics.set(cacheKey, {
+            totalCount: normalizedStreams.length,
+            globalCount: normalizedStreams.length,
+            recoveredCount: 0,
+            invalidItemCount: 0,
+            failedCategoryCount: 0,
+            recoveredCategoryCount: 0,
+            status: 'complete',
+        });
 
         if (onProgress) {
             onProgress(normalizedStreams.length);
@@ -598,12 +638,198 @@ export class PwaXtreamDataSource implements IXtreamDataSource {
         return normalizedStreams.length;
     }
 
+    /**
+     * Xtream panels are inconsistent about the unfiltered catalog endpoint:
+     * some omit whole categories and others cap the response. The browser has
+     * no SQLite importer to repair that later, so it reconciles the global
+     * response with category-scoped requests and keeps identity strictly on
+     * the provider's remote id (never the display title).
+     */
+    private async loadCompleteCatalog(
+        playlistId: string,
+        credentials: XtreamCredentials,
+        type: StreamType
+    ): Promise<CatalogLoadResult> {
+        let globalError: unknown;
+        let globalStreams: XtreamCachedContentItem[] = [];
+
+        try {
+            globalStreams = (await this.apiService.getStreams(
+                credentials,
+                type
+            )) as unknown as XtreamCachedContentItem[];
+        } catch (error) {
+            globalError = error;
+        }
+
+        let categories: XtreamCategory[] = [];
+        let categoryDiscoveryFailed = false;
+        const categoryType: CategoryType = type === 'movie' ? 'vod' : type;
+        const categoryCacheKey = `${playlistId}-${categoryType}-categories`;
+        try {
+            categories =
+                this.categoryCache.get(categoryCacheKey) ??
+                (await this.apiService.getCategories(
+                    credentials,
+                    categoryType
+                ));
+            this.categoryCache.set(categoryCacheKey, categories);
+        } catch (error) {
+            categoryDiscoveryFailed = true;
+            this.logger.warn(
+                `Could not inspect ${type} categories for catalog recovery`,
+                error
+            );
+        }
+
+        if (globalError && categories.length === 0) {
+            throw globalError;
+        }
+
+        const normalizedGlobal = this.normalizeContentItems(
+            globalStreams,
+            type
+        );
+        const globalInvalidCount = normalizedGlobal.filter(
+            (item) => item.xtream_id <= 0
+        ).length;
+        const validGlobal = normalizedGlobal.filter(
+            (item) => item.xtream_id > 0
+        );
+        const globalCounts = countItemsByCategory(validGlobal);
+        const recoverCategoryIds = categories
+            .filter((category) =>
+                shouldRecoverCategory(
+                    category,
+                    globalCounts,
+                    validGlobal.length,
+                    globalError !== undefined
+                )
+            )
+            .map((category) => canonicalCategoryId(category.category_id))
+            .filter((categoryId) => categoryId.length > 0);
+
+        const categoryResults = await this.loadCategoryFallbacks(
+            credentials,
+            type,
+            recoverCategoryIds
+        );
+        const failedCategoryCount =
+            categoryResults.filter((result) => result.error).length +
+            (categoryDiscoveryFailed ? 1 : 0);
+        const recoveredCategoryCount =
+            categoryResults.length -
+            categoryResults.filter((result) => result.error).length;
+        const recoveredRaw: XtreamCachedContentItem[] = [];
+        for (const result of categoryResults) {
+            recoveredRaw.push(...(result.streams ?? []));
+        }
+        const normalizedRecovered = this.normalizeContentItems(
+            recoveredRaw,
+            type
+        );
+        const invalidItemCount =
+            globalInvalidCount +
+            normalizedRecovered.filter((item) => item.xtream_id <= 0).length;
+        const validRecovered = normalizedRecovered.filter(
+            (item) => item.xtream_id > 0
+        );
+
+        if (
+            globalError &&
+            validRecovered.length === 0 &&
+            failedCategoryCount > 0
+        ) {
+            throw globalError;
+        }
+
+        const byRemoteId = new Map<number, XtreamContentItem>();
+        for (const item of validGlobal) {
+            byRemoteId.set(item.xtream_id, item);
+        }
+        const globalIds = new Set(byRemoteId.keys());
+        for (const item of validRecovered) {
+            const existing = byRemoteId.get(item.xtream_id);
+            byRemoteId.set(
+                item.xtream_id,
+                existing ? mergeCatalogMetadata(existing, item) : item
+            );
+        }
+
+        const content = [...byRemoteId.values()];
+        const recoveredCount = [...byRemoteId.keys()].filter(
+            (id) => !globalIds.has(id)
+        ).length;
+        const hasRecovery =
+            globalError !== undefined ||
+            recoveredCount > 0 ||
+            recoverCategoryIds.length > 0;
+        const status: XtreamCatalogDiagnostics['status'] =
+            failedCategoryCount > 0 || invalidItemCount > 0
+                ? 'partial'
+                : hasRecovery
+                  ? 'recovered'
+                  : 'complete';
+
+        return {
+            content,
+            diagnostics: {
+                totalCount: content.length,
+                globalCount: globalIds.size,
+                recoveredCount,
+                invalidItemCount,
+                failedCategoryCount,
+                recoveredCategoryCount,
+                status,
+            },
+        };
+    }
+
+    private async loadCategoryFallbacks(
+        credentials: XtreamCredentials,
+        type: StreamType,
+        categoryIds: string[]
+    ): Promise<CategoryRecoveryResult[]> {
+        const results = new Array<CategoryRecoveryResult>(categoryIds.length);
+        let nextIndex = 0;
+        const workerCount = Math.min(
+            CATEGORY_RECOVERY_CONCURRENCY,
+            categoryIds.length
+        );
+
+        await Promise.all(
+            Array.from({ length: workerCount }, async () => {
+                for (;;) {
+                    const index = nextIndex++;
+                    if (index >= categoryIds.length) return;
+                    const categoryId = categoryIds[index];
+                    try {
+                        results[index] = {
+                            categoryId,
+                            streams: (await this.apiService.getStreams(
+                                credentials,
+                                type,
+                                { categoryId, suppressErrorLog: true }
+                            )) as unknown as XtreamCachedContentItem[],
+                        };
+                    } catch (error) {
+                        results[index] = { categoryId, error };
+                    }
+                }
+            })
+        );
+
+        return results;
+    }
+
     private normalizeContentItems(
-        streams:
-            | XtreamLiveStream[]
-            | XtreamVodStream[]
-            | XtreamSerieItem[]
-            | XtreamContentItem[],
+        streams: ReadonlyArray<
+            | XtreamCachedContentItem
+            | XtreamLiveStream
+            | XtreamVodStream
+            | XtreamSerieItem
+            | XtreamContentItem
+        >,
         type: 'live' | 'movie' | 'series'
     ): XtreamContentItem[] {
         return streams.map((item) =>
@@ -636,6 +862,7 @@ export class PwaXtreamDataSource implements IXtreamDataSource {
             rating: String(item.rating ?? ''),
             title,
             type,
+            variant_label: buildVariantLabel(item),
             xtream_id: xtreamId,
         } as XtreamContentItem;
     }
@@ -665,7 +892,7 @@ export class PwaXtreamDataSource implements IXtreamDataSource {
         excludeHidden?: boolean
     ): Promise<XtreamContentItem[]> {
         void excludeHidden;
-        const results: XtreamCachedContentItem[] = [];
+        const results: XtreamContentItem[] = [];
         const searchLower = foldSearchText(searchTerm);
 
         for (const type of types) {
@@ -679,15 +906,14 @@ export class PwaXtreamDataSource implements IXtreamDataSource {
             );
 
             const filtered = content.filter((item) => {
-                const title =
-                    item.name || item.title || item.stream_display_name || '';
+                const title = item.name || item.title || '';
                 return foldSearchText(title).includes(searchLower);
             });
 
             results.push(...filtered);
         }
 
-        return results as XtreamContentItem[];
+        return results;
     }
 
     // =========================================================================
@@ -1457,6 +1683,16 @@ export class PwaXtreamDataSource implements IXtreamDataSource {
             }
         });
         contentKeysToDelete.forEach((key) => this.contentCache.delete(key));
+
+        const diagnosticsKeysToDelete: string[] = [];
+        this.catalogDiagnostics.forEach((_, key) => {
+            if (key.startsWith(playlistId)) {
+                diagnosticsKeysToDelete.push(key);
+            }
+        });
+        diagnosticsKeysToDelete.forEach((key) =>
+            this.catalogDiagnostics.delete(key)
+        );
     }
 
     /**
@@ -1465,7 +1701,107 @@ export class PwaXtreamDataSource implements IXtreamDataSource {
     clearAllCaches(): void {
         this.categoryCache.clear();
         this.contentCache.clear();
+        this.catalogDiagnostics.clear();
     }
+}
+
+function countItemsByCategory(
+    items: readonly XtreamContentItem[]
+): ReadonlyMap<string, number> {
+    const counts = new Map<string, number>();
+    for (const item of items) {
+        const categoryId = canonicalCategoryId(item.category_id);
+        if (!categoryId) continue;
+        counts.set(categoryId, (counts.get(categoryId) ?? 0) + 1);
+    }
+    return counts;
+}
+
+function shouldRecoverCategory(
+    category: XtreamCategory,
+    globalCounts: ReadonlyMap<string, number>,
+    globalCount: number,
+    globalFailed: boolean
+): boolean {
+    if (globalFailed || COMMON_PROVIDER_CATALOG_LIMITS.has(globalCount)) {
+        return true;
+    }
+
+    const categoryId = canonicalCategoryId(category.category_id);
+    if (!categoryId) return false;
+    const observedCount = globalCounts.get(categoryId) ?? 0;
+    // A category advertised by the panel but absent from the global response
+    // is itself enough evidence to verify it. Several panels publish a stale
+    // or zero `count`, so trusting that value would keep omitted rows hidden.
+    if (observedCount === 0) return true;
+    const advertisedCount = Number(category.count);
+
+    // No count means the global response cannot prove completeness. A
+    // category-scoped request is the only portable verification Xtream offers.
+    if (!Number.isFinite(advertisedCount) || advertisedCount <= 0) return true;
+    return observedCount < Math.max(0, advertisedCount);
+}
+
+function mergeCatalogMetadata(
+    base: XtreamContentItem,
+    candidate: XtreamContentItem
+): XtreamContentItem {
+    const merged = { ...base } as Record<string, unknown>;
+    for (const [key, value] of Object.entries(candidate)) {
+        if (hasCatalogValue(value)) {
+            merged[key] = value;
+        }
+    }
+    return merged as unknown as XtreamContentItem;
+}
+
+function hasCatalogValue(value: unknown): boolean {
+    return (
+        value !== undefined &&
+        value !== null &&
+        (typeof value !== 'string' || value.trim().length > 0)
+    );
+}
+
+function buildVariantLabel(item: XtreamCachedContentItem): string | undefined {
+    const language = firstShortMetadata(item, [
+        'audio_language',
+        'language',
+        'lang',
+    ]);
+    const quality = firstShortMetadata(item, [
+        'quality',
+        'resolution',
+        'video_quality',
+    ]);
+    const signal = firstShortMetadata(item, [
+        'signal',
+        'source',
+        'channel_source',
+        'server_name',
+    ]);
+    const container = firstShortMetadata(item, ['container_extension']);
+    const values = [language, quality, signal, container]
+        .filter((value): value is string => Boolean(value))
+        .map((value) => value.toUpperCase());
+    const uniqueValues = values.filter(
+        (value, index) => values.indexOf(value) === index
+    );
+    return uniqueValues.length > 0 ? uniqueValues.join(' · ') : undefined;
+}
+
+function firstShortMetadata(
+    item: XtreamCachedContentItem,
+    keys: readonly string[]
+): string | undefined {
+    const metadata = item as unknown as Record<string, unknown>;
+    for (const key of keys) {
+        const value = metadata[key];
+        if (typeof value !== 'string' && typeof value !== 'number') continue;
+        const normalized = String(value).trim();
+        if (normalized && normalized.length <= 24) return normalized;
+    }
+    return undefined;
 }
 
 /**
