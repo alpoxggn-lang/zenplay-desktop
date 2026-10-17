@@ -8,12 +8,12 @@ type SearchablePlaylistMeta = Pick<
 export function isWorkspaceGlobalSearchablePlaylist(
     playlist: SearchablePlaylistMeta
 ): boolean {
-    if (playlist.serverUrl) {
-        return true;
-    }
-
     if (playlist.macAddress) {
         return false;
+    }
+
+    if (playlist.serverUrl) {
+        return true;
     }
 
     return Boolean(

@@ -13,7 +13,7 @@ describe('app routes', () => {
         path?: string;
         redirectTo?: unknown;
     }> = [];
-    let resolveElectronOnlyGlobalSearchRoute: AppRoutesModule['resolveElectronOnlyGlobalSearchRoute'];
+    let resolveGlobalSearchCapabilityRoute: AppRoutesModule['resolveGlobalSearchCapabilityRoute'];
     let resolveRecordingsCapabilityRoute: AppRoutesModule['resolveRecordingsCapabilityRoute'];
 
     beforeAll(async () => {
@@ -53,8 +53,8 @@ describe('app routes', () => {
         const { routes } = appRoutes;
         workspaceRoute = routes.find((route) => route.path === 'workspace');
         workspaceChildren = workspaceRoute?.children ?? [];
-        resolveElectronOnlyGlobalSearchRoute =
-            appRoutes.resolveElectronOnlyGlobalSearchRoute;
+        resolveGlobalSearchCapabilityRoute =
+            appRoutes.resolveGlobalSearchCapabilityRoute;
         resolveRecordingsCapabilityRoute =
             appRoutes.resolveRecordingsCapabilityRoute;
     });
@@ -216,12 +216,24 @@ describe('app routes', () => {
         expect(typeof globalSearchRoute?.loadComponent).toBe('function');
     });
 
-    it('redirects the Electron-only global search route in the web runtime', async () => {
+    it('allows the global search route in the PWA runtime', () => {
+        const parseUrl = jest.fn();
+
+        expect(
+            resolveGlobalSearchCapabilityRoute(
+                { supportsGlobalSearch: true },
+                { parseUrl }
+            )
+        ).toBe(true);
+        expect(parseUrl).not.toHaveBeenCalled();
+    });
+
+    it('redirects an incomplete Electron bridge without global search', () => {
         const redirectTree = { url: '/workspace/sources' };
         const parseUrl = jest.fn().mockReturnValue(redirectTree);
 
-        const result = resolveElectronOnlyGlobalSearchRoute(
-            { isElectron: false },
+        const result = resolveGlobalSearchCapabilityRoute(
+            { supportsGlobalSearch: false },
             { parseUrl }
         );
 

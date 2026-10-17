@@ -9,6 +9,7 @@ export type SettingsSearchRequirement =
     | 'remote-control'
     | 'startup-window-mode'
     | 'portal-connectivity-guard'
+    | 'browser-notifications'
     | 'managed-external-players'
     | 'external-player-paths'
     | 'vod-multi-source'

@@ -2,6 +2,7 @@ import { DestroyRef, Injectable, NgZone, inject } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { MatSnackBar } from '@angular/material/snack-bar';
 import { Store } from '@ngrx/store';
+import { TranslateService } from '@ngx-translate/core';
 import { selectAllPlaylistsMeta } from '@iptvnator/m3u-state';
 import {
     PortalStatusService,
@@ -10,21 +11,24 @@ import {
 import {
     buildZenPlayExpiryAlertDedupeKey,
     createZenPlayAccountFingerprint,
-    formatZenPlayAccountExpiryMessage,
     isXtreamAccountPlaylist,
     normalizeXtreamServerUrl,
     type PlaylistMeta,
     resolveZenPlayAccountExpiryAlert,
-    type ZenPlayAccountExpiryAlert,
+    type ZenPlayAccountExpiryNotificationRequest,
 } from '@iptvnator/shared/interfaces';
 import {
     ZENPLAY_PLAYLIST_ID,
     ZENPLAY_SERVER_URL,
 } from '../zenplay-auth/zenplay.constants';
+import { ZenPlayPwaNotificationService } from './zenplay-pwa-notification.service';
+import { loadLocalizedZenPlayExpiryCopy } from './zenplay-account-expiry-message';
 
 export const ZENPLAY_EXPIRY_ALERT_RECHECK_MS = 6 * 60 * 60 * 1000;
 export const ZENPLAY_EXPIRY_ALERT_STORAGE_KEY =
-    'zenplay:account-expiry-alerts:v1';
+    'zenplay:account-expiry-alerts:system:v2';
+export const ZENPLAY_EXPIRY_IN_APP_ALERT_STORAGE_KEY =
+    'zenplay:account-expiry-alerts:in-app:v1';
 const MAX_STORED_ALERT_KEYS = 128;
 
 interface ZenPlayAccountConnection {
@@ -37,7 +41,7 @@ interface ZenPlayAccountConnection {
 interface ZenPlayExpiryElectronBridge {
     onAppResume?: (callback: () => void) => () => void;
     showZenPlayAccountExpiryNotification?: (
-        request: ZenPlayAccountExpiryAlert
+        request: ZenPlayAccountExpiryNotificationRequest
     ) => Promise<boolean>;
 }
 
@@ -70,12 +74,20 @@ export class ZenPlayAccountExpiryAlertService {
     private readonly destroyRef = inject(DestroyRef);
     private readonly ngZone = inject(NgZone);
     private readonly portalStatus = inject(PortalStatusService);
+    private readonly pwaNotifications = inject(ZenPlayPwaNotificationService);
     private readonly runtime = inject(RuntimeCapabilitiesService);
     private readonly snackBar = inject(MatSnackBar);
     private readonly store = inject(Store);
+    private readonly translate = inject(TranslateService);
 
-    private readonly notifiedKeys = this.readNotifiedKeys();
-    private readonly shownInAppKeys = new Set<string>();
+    private readonly notifiedKeys = this.readNotifiedKeys(
+        ZENPLAY_EXPIRY_ALERT_STORAGE_KEY
+    );
+    private readonly shownInAppKeys = this.readNotifiedKeys(
+        ZENPLAY_EXPIRY_IN_APP_ALERT_STORAGE_KEY
+    );
+    private readonly accountEvaluations = new Map<string, Promise<void>>();
+    private readonly pendingSystemNotifications = new Set<string>();
     private accounts: readonly ZenPlayAccountConnection[] = [];
     private evaluating = false;
     private evaluateAgain = false;
@@ -94,7 +106,13 @@ export class ZenPlayAccountExpiryAlertService {
     start(): void {
         if (this.started) return;
         this.started = true;
-        if (!this.runtime.isWindows && !this.runtime.isMacOS) return;
+        if (
+            !this.runtime.isPwa &&
+            !this.runtime.isWindows &&
+            !this.runtime.isMacOS
+        ) {
+            return;
+        }
 
         this.store
             .select(selectAllPlaylistsMeta)
@@ -121,6 +139,18 @@ export class ZenPlayAccountExpiryAlertService {
                 () => this.requestEvaluation(),
                 ZENPLAY_EXPIRY_ALERT_RECHECK_MS
             );
+        });
+    }
+
+    async notifyBeforeExpiredSessionClear(
+        username: string,
+        password: string
+    ): Promise<void> {
+        await this.evaluateAccount({
+            id: ZENPLAY_PLAYLIST_ID,
+            password: password.trim(),
+            serverUrl: ZENPLAY_SERVER_URL,
+            username: username.trim(),
         });
     }
 
@@ -159,7 +189,27 @@ export class ZenPlayAccountExpiryAlertService {
         }
     }
 
-    private async evaluateAccount(
+    private evaluateAccount(account: ZenPlayAccountConnection): Promise<void> {
+        const accountKey = createZenPlayAccountFingerprint(
+            account.id,
+            account.serverUrl,
+            account.username
+        );
+        const pending = this.accountEvaluations.get(accountKey);
+        if (pending) return pending;
+
+        const evaluation = this.performAccountEvaluation(account).finally(
+            () => {
+                if (this.accountEvaluations.get(accountKey) === evaluation) {
+                    this.accountEvaluations.delete(accountKey);
+                }
+            }
+        );
+        this.accountEvaluations.set(accountKey, evaluation);
+        return evaluation;
+    }
+
+    private async performAccountEvaluation(
         account: ZenPlayAccountConnection
     ): Promise<void> {
         try {
@@ -187,33 +237,86 @@ export class ZenPlayAccountExpiryAlertService {
                 fingerprint,
                 alert
             );
-            if (this.notifiedKeys.has(dedupeKey)) return;
-
-            const message = formatZenPlayAccountExpiryMessage(alert);
-            if (!message) return;
+            const copy = await loadLocalizedZenPlayExpiryCopy(
+                alert,
+                this.translate
+            );
+            if (!copy) return;
             if (!this.shownInAppKeys.has(dedupeKey)) {
                 this.shownInAppKeys.add(dedupeKey);
+                this.persistNotifiedKeys(
+                    ZENPLAY_EXPIRY_IN_APP_ALERT_STORAGE_KEY,
+                    this.shownInAppKeys
+                );
                 this.ngZone.run(() => {
-                    this.snackBar.open(message, 'Cerrar', {
+                    this.snackBar.open(copy.body, copy.closeLabel, {
                         duration: 12_000,
                     });
                 });
             }
 
+            this.scheduleSystemNotification(alert, copy, dedupeKey);
+        } catch {
+            // Unknown/offline is not an expiry alert.
+        }
+    }
+
+    private scheduleSystemNotification(
+        alert: Parameters<
+            ZenPlayPwaNotificationService['showExpiryNotification']
+        >[0],
+        copy: { readonly body: string; readonly title: string },
+        dedupeKey: string
+    ): void {
+        if (
+            this.notifiedKeys.has(dedupeKey) ||
+            this.pendingSystemNotifications.has(dedupeKey)
+        ) {
+            return;
+        }
+
+        this.pendingSystemNotifications.add(dedupeKey);
+        void this.deliverSystemNotification(alert, copy, dedupeKey).finally(
+            () => this.pendingSystemNotifications.delete(dedupeKey)
+        );
+    }
+
+    private async deliverSystemNotification(
+        alert: Parameters<
+            ZenPlayPwaNotificationService['showExpiryNotification']
+        >[0],
+        copy: { readonly body: string; readonly title: string },
+        dedupeKey: string
+    ): Promise<void> {
+        try {
             const showSystemNotification =
-                this.getExpiryBridge().showZenPlayAccountExpiryNotification;
+                this.runtime.isWindows || this.runtime.isMacOS
+                    ? this.getExpiryBridge()
+                          .showZenPlayAccountExpiryNotification
+                    : undefined;
             if (typeof showSystemNotification === 'function') {
-                const shown = await showSystemNotification(alert).catch(
-                    () => false
-                );
-                if (shown) this.remember(dedupeKey);
-            } else {
-                // No system-notification bridge exists on this runtime, so
-                // the in-app alert is the complete delivery for this day.
-                this.remember(dedupeKey);
+                const shown = await showSystemNotification({
+                    ...alert,
+                    body: copy.body,
+                    title: copy.title,
+                }).catch(() => false);
+                if (shown) this.rememberSystemNotification(dedupeKey);
+                return;
+            }
+
+            if (this.runtime.isPwa) {
+                const result =
+                    await this.pwaNotifications.showExpiryNotification(
+                        alert,
+                        copy.body,
+                        dedupeKey
+                    );
+                if (result === 'shown') {
+                    this.rememberSystemNotification(dedupeKey);
+                }
             }
         } catch {
-            // Offline/error is unknown, never an expiry alert.
+            // Delivery can be retried on the next visibility/resume/interval pass.
         }
     }
 
@@ -222,11 +325,9 @@ export class ZenPlayAccountExpiryAlertService {
             {}) as unknown as ZenPlayExpiryElectronBridge;
     }
 
-    private readNotifiedKeys(): Set<string> {
+    private readNotifiedKeys(storageKey: string): Set<string> {
         try {
-            const value = JSON.parse(
-                localStorage.getItem(ZENPLAY_EXPIRY_ALERT_STORAGE_KEY) ?? '[]'
-            );
+            const value = JSON.parse(localStorage.getItem(storageKey) ?? '[]');
             if (!Array.isArray(value)) return new Set();
             return new Set(
                 value
@@ -241,18 +342,22 @@ export class ZenPlayAccountExpiryAlertService {
         }
     }
 
-    private remember(key: string): void {
+    private rememberSystemNotification(key: string): void {
         this.notifiedKeys.add(key);
-        while (this.notifiedKeys.size > MAX_STORED_ALERT_KEYS) {
-            const oldest = this.notifiedKeys.values().next().value;
+        this.persistNotifiedKeys(
+            ZENPLAY_EXPIRY_ALERT_STORAGE_KEY,
+            this.notifiedKeys
+        );
+    }
+
+    private persistNotifiedKeys(storageKey: string, keys: Set<string>): void {
+        while (keys.size > MAX_STORED_ALERT_KEYS) {
+            const oldest = keys.values().next().value;
             if (typeof oldest !== 'string') break;
-            this.notifiedKeys.delete(oldest);
+            keys.delete(oldest);
         }
         try {
-            localStorage.setItem(
-                ZENPLAY_EXPIRY_ALERT_STORAGE_KEY,
-                JSON.stringify([...this.notifiedKeys])
-            );
+            localStorage.setItem(storageKey, JSON.stringify([...keys]));
         } catch {
             // In-memory dedupe still protects this process when storage fails.
         }

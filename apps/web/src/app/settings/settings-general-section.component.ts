@@ -20,6 +20,7 @@ import {
     ThemeOption,
 } from './settings.models';
 import { markSectionForCheckOnFormEvents } from './settings-section-form-render';
+import { SettingsBrowserNotificationsSectionComponent } from './settings-browser-notifications-section.component';
 
 @Component({
     selector: 'app-settings-general-section',
@@ -30,6 +31,7 @@ import { markSectionForCheckOnFormEvents } from './settings-section-form-render'
         MatSelectModule,
         MatSlideToggleModule,
         ReactiveFormsModule,
+        SettingsBrowserNotificationsSectionComponent,
         TranslateModule,
     ],
     templateUrl: './settings-general-section.component.html',

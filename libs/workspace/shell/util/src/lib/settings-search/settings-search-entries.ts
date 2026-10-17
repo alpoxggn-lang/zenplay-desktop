@@ -83,6 +83,14 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
         keywords: ['network', 'offline', 'connection', 'internet', 'vpn'],
         requires: ['portal-connectivity-guard'],
     },
+    {
+        id: 'browser-notifications',
+        section: 'general',
+        labelKey: 'SETTINGS.BROWSER_NOTIFICATIONS',
+        descriptionKey: 'SETTINGS.BROWSER_NOTIFICATIONS_DESCRIPTION',
+        keywords: ['notification', 'alert', 'expiry', 'account', 'pwa'],
+        requires: ['browser-notifications'],
+    },
     ...PLAYBACK_SETTINGS_SEARCH_ENTRIES,
     {
         id: 'epg-view-mode',
@@ -143,13 +151,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     dashboardRail('live-favorites', 'LIVE_FAVORITES', ['favorites', 'live']),
     dashboardRail('recent-live', 'RECENT_LIVE', ['recent', 'live']),
     dashboardRail('favorite-vod', 'FAVORITE_VOD', ['favorites', 'movies']),
-    dashboardRail('sources', 'SOURCES', ['playlists', 'sources']),
     dashboardRail('xtream-added', 'XTREAM_ADDED', ['xtream', 'new']),
-    dashboardRail('tmdb-trending', 'TMDB_TRENDING', ['tmdb', 'trending']),
-    dashboardRail('tmdb-recommendations', 'TMDB_RECOMMENDATIONS', [
-        'tmdb',
-        'recommendations',
-    ]),
     {
         id: 'remote-control',
         section: 'remote-control',

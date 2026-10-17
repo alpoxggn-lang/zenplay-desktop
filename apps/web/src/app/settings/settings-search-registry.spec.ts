@@ -17,6 +17,9 @@ interface TemplateRow {
 
 // The web jest config runs as ESM, so there is no `__dirname` here.
 const SETTINGS_DIR = resolve(process.cwd(), 'apps/web/src/app/settings');
+const NESTED_SECTION_BY_FILE: Readonly<Record<string, string>> = {
+    'settings-browser-notifications-section.component.html': 'general',
+};
 const EN = JSON.parse(
     readFileSync(join(SETTINGS_DIR, '../../assets/i18n/en.json'), 'utf8')
 );
@@ -115,7 +118,10 @@ describe('settings search registry', () => {
             if (entry.descriptionKey !== (row.descriptionKey ?? undefined)) {
                 problems.push(`${row.id}: description ${row.descriptionKey}`);
             }
-            if (!row.file.includes(`settings-${entry.section}-section`)) {
+            const renderedSection =
+                NESTED_SECTION_BY_FILE[row.file] ??
+                row.file.match(/^settings-(.+)-section/)?.[1];
+            if (renderedSection !== entry.section) {
                 problems.push(`${row.id}: rendered in ${row.file}`);
             }
             return problems;

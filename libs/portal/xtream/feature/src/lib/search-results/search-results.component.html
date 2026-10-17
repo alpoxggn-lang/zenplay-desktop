@@ -2,6 +2,7 @@
     [searchTerm]="searchTerm()"
     [resultsCount]="xtreamStore.searchResults().length"
     [isLoading]="xtreamStore.isSearching()"
+    [hasError]="isGlobalSearch && globalSearchError()"
     [backAvailable]="backAvailable"
     [showResultsCount]="!isGlobalSearch || !groupByPlaylist()"
     [minSearchLength]="minSearchLength"
@@ -28,7 +29,9 @@
     </ng-container>
 
     <ng-container header-actions>
-        @if (!isGlobalSearch) {
+        @if (
+            !isGlobalSearch && globalSearchService.supportsHiddenCategoryFilter
+        ) {
             <mat-checkbox
                 [ngModel]="excludeHidden()"
                 (ngModelChange)="toggleExcludeHidden($event)"
@@ -80,15 +83,17 @@
                         </mat-button-toggle-group>
                     </div>
                     <div class="global-search-options">
-                        <mat-checkbox
-                            [ngModel]="excludeHidden()"
-                            (ngModelChange)="toggleExcludeHidden($event)"
-                        >
-                            {{
-                                'PORTALS.SEARCH_VIEW.VISIBLE_CATEGORIES_ONLY'
-                                    | translate
-                            }}
-                        </mat-checkbox>
+                        @if (globalSearchService.supportsHiddenCategoryFilter) {
+                            <mat-checkbox
+                                [ngModel]="excludeHidden()"
+                                (ngModelChange)="toggleExcludeHidden($event)"
+                            >
+                                {{
+                                    'PORTALS.SEARCH_VIEW.VISIBLE_CATEGORIES_ONLY'
+                                        | translate
+                                }}
+                            </mat-checkbox>
+                        }
                         <mat-checkbox
                             [ngModel]="groupByPlaylist()"
                             (ngModelChange)="toggleGroupByPlaylist($event)"
@@ -180,6 +185,23 @@
                         }}
                     </span>
                 </div>
+            } @else if (globalSearchAppendError()) {
+                <div class="global-search-page-error" role="alert">
+                    <span>
+                        {{
+                            'PORTALS.ERROR_VIEW.UNKNOWN_ERROR.DESCRIPTION'
+                                | translate
+                        }}
+                    </span>
+                    <button
+                        mat-stroked-button
+                        type="button"
+                        (click)="retryGlobalSearchPage()"
+                    >
+                        <mat-icon aria-hidden="true">refresh</mat-icon>
+                        {{ 'RETRY' | translate }}
+                    </button>
+                </div>
             }
         } @else {
             <!-- Playlist-level Search Results (windowed; grows via nearEnd) -->
@@ -194,6 +216,35 @@
                         (cardClick)="selectItem(item)"
                     />
                 }
+            </div>
+        }
+    </ng-container>
+
+    <ng-container error>
+        @if (isGlobalSearch && globalSearchError()) {
+            <div class="global-search-error" role="alert" aria-live="assertive">
+                <mat-icon aria-hidden="true">cloud_off</mat-icon>
+                <div class="global-search-error-content">
+                    <h3>
+                        {{
+                            'PORTALS.ERROR_VIEW.UNKNOWN_ERROR.TITLE' | translate
+                        }}
+                    </h3>
+                    <p>
+                        {{
+                            'PORTALS.ERROR_VIEW.UNKNOWN_ERROR.DESCRIPTION'
+                                | translate
+                        }}
+                    </p>
+                </div>
+                <button
+                    mat-flat-button
+                    type="button"
+                    (click)="retryGlobalSearch()"
+                >
+                    <mat-icon aria-hidden="true">refresh</mat-icon>
+                    {{ 'RETRY' | translate }}
+                </button>
             </div>
         }
     </ng-container>

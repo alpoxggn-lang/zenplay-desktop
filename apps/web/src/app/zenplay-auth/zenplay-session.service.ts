@@ -7,10 +7,8 @@ import {
 import { normalizeXtreamServerUrl } from '@iptvnator/shared/interfaces';
 import { firstValueFrom } from 'rxjs';
 import { getRuntimeBackendUrl } from '../services/runtime-config';
-import {
-    ZENPLAY_PLAYLIST_ID,
-    ZENPLAY_SERVER_URL,
-} from './zenplay.constants';
+import { ZenPlayAccountExpiryAlertService } from '../services/zenplay-account-expiry-alert.service';
+import { ZENPLAY_PLAYLIST_ID, ZENPLAY_SERVER_URL } from './zenplay.constants';
 import { ZenPlayProfileService } from './zenplay-profile.service';
 
 interface StoredZenPlayConnection {
@@ -27,6 +25,7 @@ interface CachedRestore {
 @Injectable({ providedIn: 'root' })
 export class ZenPlaySessionService {
     private readonly connectionTest = inject(XtreamConnectionTestService);
+    private readonly expiryAlerts = inject(ZenPlayAccountExpiryAlertService);
     private readonly http = inject(HttpClient);
     private readonly playlists = inject(PlaylistsService);
     private readonly profiles = inject(ZenPlayProfileService);
@@ -112,6 +111,15 @@ export class ZenPlaySessionService {
         if (status !== 'inactive' && status !== 'expired') {
             // A network or backend outage must never sign a remembered user out.
             return true;
+        }
+
+        if (status === 'expired') {
+            // Preserve the day-of-expiry warning before deleting the account
+            // that the alert service otherwise observes through NgRx.
+            await this.expiryAlerts.notifyBeforeExpiredSessionClear(
+                connection.username,
+                connection.password
+            );
         }
 
         this.cachedRestore = null;

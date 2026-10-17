@@ -177,6 +177,7 @@ describe('WorkspaceShellFacade', () => {
     let runtime: {
         isElectron: boolean;
         isMacOS: boolean;
+        supportsGlobalSearch: boolean;
         supportsDownloads: boolean;
     };
 
@@ -186,6 +187,7 @@ describe('WorkspaceShellFacade', () => {
         runtime = {
             isElectron: true,
             isMacOS: true,
+            supportsGlobalSearch: true,
             supportsDownloads: true,
         };
 
@@ -403,15 +405,18 @@ describe('WorkspaceShellFacade', () => {
         searchSync = TestBed.inject(WorkspaceShellSearchSyncService);
     });
 
-    it('derives desktop shell flags from runtime capabilities', () => {
+    it('exposes shell flags and global-search support from runtime capabilities', () => {
         expect(facade.isElectron).toBe(true);
         expect(facade.isMacOS).toBe(true);
+        expect(facade.supportsGlobalSearch).toBe(true);
 
         runtime.isElectron = false;
         runtime.isMacOS = false;
+        runtime.supportsGlobalSearch = false;
 
         expect(facade.isElectron).toBe(false);
         expect(facade.isMacOS).toBe(false);
+        expect(facade.supportsGlobalSearch).toBe(false);
     });
 
     it('exposes the global active download count and derives activity when supported', () => {
@@ -795,8 +800,20 @@ describe('WorkspaceShellFacade', () => {
         ]);
     });
 
-    it('hides the Electron-only global search rail link in the web runtime', () => {
+    it('shows the global search rail link in a supported web runtime', () => {
         runtime.isElectron = false;
+        showDashboardSignal.set(false);
+
+        expect(facade.workspaceLinks().map((link) => link.path)).toEqual([
+            ['/workspace/sources'],
+            ['/workspace/search'],
+            ['/workspace/global-favorites'],
+            ['/workspace/global-recent'],
+        ]);
+    });
+
+    it('hides the global search rail link when the runtime is unsupported', () => {
+        runtime.supportsGlobalSearch = false;
         showDashboardSignal.set(false);
 
         expect(facade.workspaceLinks().map((link) => link.path)).toEqual([
@@ -878,8 +895,27 @@ describe('WorkspaceShellFacade', () => {
         ).not.toContain('global-search');
     });
 
-    it('hides the global search command and header capability in the web runtime', () => {
+    it('enables the global search command and header capability in the PWA runtime', () => {
         runtime.isElectron = false;
+        playlistsSignal.set([
+            {
+                _id: 'pl-m3u',
+                title: 'Playlist M3U',
+                count: 10,
+            } as PlaylistSignalMeta,
+        ]);
+        facade.currentUrl.set('/workspace/search');
+
+        expect(facade.canUseSearch()).toBe(true);
+
+        facade.currentUrl.set('/workspace/dashboard');
+        expect(
+            facade.commandPaletteCommands().map((command) => command.id)
+        ).toContain('global-search');
+    });
+
+    it('hides global search controls when the runtime is unsupported', () => {
+        runtime.supportsGlobalSearch = false;
         playlistsSignal.set([
             {
                 _id: 'pl-m3u',

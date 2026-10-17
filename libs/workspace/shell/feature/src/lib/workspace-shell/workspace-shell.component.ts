@@ -142,7 +142,7 @@ export class WorkspaceShellComponent {
     onDocumentKeydown(event: KeyboardEvent): void {
         if (
             event.defaultPrevented ||
-            !this.facade.isElectron ||
+            !this.facade.supportsGlobalSearch ||
             !isFindShortcut(event) ||
             // The open drawer is modal: Ctrl/Cmd+F would navigate to global
             // search behind it (the search input it focuses is inside the

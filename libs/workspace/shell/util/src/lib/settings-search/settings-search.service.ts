@@ -55,6 +55,14 @@ export class SettingsSearchService {
             'startup-window-mode': runtime.supportsStartupWindowMode,
             'portal-connectivity-guard':
                 runtime.supportsPortalConnectivityGuard,
+            'browser-notifications':
+                runtime.isPwa &&
+                globalThis.isSecureContext !== false &&
+                typeof globalThis.Notification !== 'undefined' &&
+                typeof globalThis.Notification.requestPermission ===
+                    'function' &&
+                typeof globalThis.navigator !== 'undefined' &&
+                'serviceWorker' in globalThis.navigator,
             'managed-external-players': runtime.supportsManagedExternalPlayers,
             'external-player-paths': runtime.supportsExternalPlayerPathSettings,
             'vod-multi-source': this.vodSourceDiscovery.isAvailable,

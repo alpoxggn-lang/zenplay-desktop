@@ -9,16 +9,15 @@ import {
     XtreamConnectionTestService,
 } from '@iptvnator/services';
 import { of, throwError } from 'rxjs';
-import {
-    ZENPLAY_PLAYLIST_ID,
-    ZENPLAY_SERVER_URL,
-} from './zenplay.constants';
+import { ZENPLAY_PLAYLIST_ID, ZENPLAY_SERVER_URL } from './zenplay.constants';
 import { ZenPlayProfileService } from './zenplay-profile.service';
 import { ZenPlaySessionService } from './zenplay-session.service';
+import { ZenPlayAccountExpiryAlertService } from '../services/zenplay-account-expiry-alert.service';
 
 describe('ZenPlaySessionService', () => {
     let connectionTest: { test: jest.Mock };
     let http: HttpTestingController;
+    let expiryAlerts: { notifyBeforeExpiredSessionClear: jest.Mock };
     let playlists: {
         deletePlaylist: jest.Mock;
         getPlaylistById: jest.Mock;
@@ -36,6 +35,11 @@ describe('ZenPlaySessionService', () => {
         connectionTest = {
             test: jest.fn().mockResolvedValue({ status: 'active' }),
         };
+        expiryAlerts = {
+            notifyBeforeExpiredSessionClear: jest
+                .fn()
+                .mockResolvedValue(undefined),
+        };
         playlists = {
             deletePlaylist: jest.fn(() => of({ success: true })),
             getPlaylistById: jest.fn(() => of(storedConnection)),
@@ -52,6 +56,10 @@ describe('ZenPlaySessionService', () => {
                 },
                 { provide: PlaylistsService, useValue: playlists },
                 { provide: ZenPlayProfileService, useValue: profiles },
+                {
+                    provide: ZenPlayAccountExpiryAlertService,
+                    useValue: expiryAlerts,
+                },
             ],
         });
         http = TestBed.inject(HttpTestingController);
@@ -107,8 +115,48 @@ describe('ZenPlaySessionService', () => {
                 ZENPLAY_PLAYLIST_ID
             );
             expect(profiles.requireSelection).toHaveBeenCalledTimes(1);
+            if (status === 'expired') {
+                expect(
+                    expiryAlerts.notifyBeforeExpiredSessionClear
+                ).toHaveBeenCalledWith('cliente', 'clave');
+            } else {
+                expect(
+                    expiryAlerts.notifyBeforeExpiredSessionClear
+                ).not.toHaveBeenCalled();
+            }
         }
     );
+
+    it('awaits the expiry-day warning before deleting an expired session', async () => {
+        connectionTest.test.mockResolvedValue({ status: 'expired' });
+        let releaseAlert!: () => void;
+        expiryAlerts.notifyBeforeExpiredSessionClear.mockImplementation(
+            () =>
+                new Promise<void>((resolve) => {
+                    releaseAlert = resolve;
+                })
+        );
+
+        const pending = TestBed.inject(ZenPlaySessionService).restore();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+
+        expect(
+            expiryAlerts.notifyBeforeExpiredSessionClear
+        ).toHaveBeenCalledWith('cliente', 'clave');
+        expect(playlists.deletePlaylist).not.toHaveBeenCalled();
+        expect(profiles.requireSelection).not.toHaveBeenCalled();
+        http.expectNone('http://localhost:3000/media/session');
+
+        releaseAlert();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        const request = http.expectOne('http://localhost:3000/media/session');
+        request.flush({});
+
+        await expect(pending).resolves.toBe(false);
+        expect(playlists.deletePlaylist).toHaveBeenCalledWith(
+            ZENPLAY_PLAYLIST_ID
+        );
+    });
 
     it('does not sign out when persistent storage is temporarily unreadable', async () => {
         playlists.getPlaylistById.mockReturnValue(

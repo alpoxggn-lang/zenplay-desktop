@@ -41,6 +41,9 @@ export class SearchLayoutComponent {
     /** Whether search is in progress */
     readonly isLoading = input<boolean>(false);
 
+    /** Whether the current search failed and supplies the error slot. */
+    readonly hasError = input<boolean>(false);
+
     /**
      * Whether the page offers Back (a nested search reached via navigation).
      * It is the workspace header's Back, registered while the results show;
@@ -129,7 +132,8 @@ export class SearchLayoutComponent {
         return (
             this.searchTerm().length >= this.minSearchLength() &&
             this.resultsCount() === 0 &&
-            !this.isLoading()
+            !this.isLoading() &&
+            !this.hasError()
         );
     }
 
@@ -138,12 +142,13 @@ export class SearchLayoutComponent {
         return (
             this.searchTerm().length < this.minSearchLength() &&
             this.resultsCount() === 0 &&
-            !this.isLoading()
+            !this.isLoading() &&
+            !this.hasError()
         );
     }
 
     /** Check if we should show results */
     get showResults(): boolean {
-        return this.resultsCount() > 0 && !this.isLoading();
+        return this.resultsCount() > 0 && !this.isLoading() && !this.hasError();
     }
 }

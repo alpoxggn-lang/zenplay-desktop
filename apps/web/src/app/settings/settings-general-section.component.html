@@ -74,7 +74,9 @@
                                 (click)="selectTheme.emit(themeOption.value)"
                             >
                                 <mat-icon>{{ themeOption.icon }}</mat-icon>
-                                <span>{{ themeOption.labelKey | translate }}</span>
+                                <span>{{
+                                    themeOption.labelKey | translate
+                                }}</span>
                             </button>
                         }
                     </div>
@@ -93,7 +95,10 @@
                         [attr.aria-label]="'SETTINGS.COVER_SIZE' | translate"
                         data-test-id="select-cover-size"
                     >
-                        @for (option of coverSizeOptions(); track option.value) {
+                        @for (
+                            option of coverSizeOptions();
+                            track option.value
+                        ) {
                             <button
                                 type="button"
                                 class="theme-switcher__option"
@@ -149,7 +154,9 @@
                         {{ 'SETTINGS.STARTUP_BEHAVIOR' | translate }}
                     </h4>
                     <p>
-                        {{ 'SETTINGS.STARTUP_BEHAVIOR_DESCRIPTION' | translate }}
+                        {{
+                            'SETTINGS.STARTUP_BEHAVIOR_DESCRIPTION' | translate
+                        }}
                     </p>
                 </div>
                 <div class="setting-item__control">
@@ -276,7 +283,9 @@
                 >
                     <div class="setting-item__meta">
                         <h4 id="portal-connectivity-label">
-                            {{ 'SETTINGS.PORTAL_CONNECTIVITY_GUARD' | translate }}
+                            {{
+                                'SETTINGS.PORTAL_CONNECTIVITY_GUARD' | translate
+                            }}
                         </h4>
                         <p id="portal-connectivity-description">
                             {{
@@ -308,4 +317,6 @@
             </div>
         </section>
     }
+
+    <app-settings-browser-notifications-section />
 </section>

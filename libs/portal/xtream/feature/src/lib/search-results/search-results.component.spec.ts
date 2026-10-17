@@ -1,9 +1,14 @@
-import { signal } from '@angular/core';
+import {
+    createEnvironmentInjector,
+    EnvironmentInjector,
+    runInInjectionContext,
+    signal,
+} from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { ActivatedRoute, Router, convertToParamMap } from '@angular/router';
 import { BehaviorSubject, of } from 'rxjs';
-import { DatabaseService } from '@iptvnator/services';
 import { SearchResultsComponent } from './search-results.component';
+import { GlobalSearchService } from './global-search.service';
 import {
     SearchFilters,
     XtreamContentItem,
@@ -79,11 +84,13 @@ class MockXtreamStore {
 
 describe('SearchResultsComponent global search', () => {
     let routerNavigateMock: jest.Mock;
+    let parentalLockVersion: ReturnType<typeof signal<number>>;
 
     beforeEach(() => {
         localStorage.removeItem(GLOBAL_SEARCH_SCOPE_STORAGE_KEY);
         localStorage.removeItem('global-search-type-filters');
         routerNavigateMock = jest.fn();
+        parentalLockVersion = signal(0);
 
         TestBed.configureTestingModule({
             providers: [
@@ -110,9 +117,10 @@ describe('SearchResultsComponent global search', () => {
                     },
                 },
                 {
-                    provide: DatabaseService,
+                    provide: GlobalSearchService,
                     useValue: {
                         globalSearchContent: jest.fn().mockResolvedValue([]),
+                        parentalLockVersion,
                     },
                 },
             ],
@@ -144,12 +152,14 @@ describe('SearchResultsComponent global search', () => {
             () => new SearchResultsComponent()
         );
         const store = TestBed.inject(XtreamStore) as unknown as MockXtreamStore;
-        const databaseService = TestBed.inject(DatabaseService) as unknown as {
+        const globalSearchService = TestBed.inject(
+            GlobalSearchService
+        ) as unknown as {
             globalSearchContent: jest.Mock;
         };
         TestBed.flushEffects();
         store.setSearchTerm('matrix');
-        databaseService.globalSearchContent.mockClear();
+        globalSearchService.globalSearchContent.mockClear();
 
         component.setGlobalSearchScope('series');
 
@@ -159,11 +169,10 @@ describe('SearchResultsComponent global search', () => {
             series: true,
         });
         expect(component.globalSearchScope()).toBe('series');
-        expect(databaseService.globalSearchContent).toHaveBeenCalledWith(
+        expect(globalSearchService.globalSearchContent).toHaveBeenCalledWith(
             'matrix',
             ['series'],
             false,
-            undefined,
             { limit: 101, offset: 0 }
         );
         expect(localStorage.getItem(GLOBAL_SEARCH_SCOPE_STORAGE_KEY)).toBe(
@@ -249,10 +258,12 @@ describe('SearchResultsComponent global search', () => {
         const freshResults = [
             createSearchItem({ xtream_id: 777, title: 'Fresh result' }),
         ];
-        const databaseService = TestBed.inject(DatabaseService) as unknown as {
+        const globalSearchService = TestBed.inject(
+            GlobalSearchService
+        ) as unknown as {
             globalSearchContent: jest.Mock;
         };
-        databaseService.globalSearchContent
+        globalSearchService.globalSearchContent
             .mockReturnValueOnce(staleSearch.promise)
             .mockResolvedValueOnce(freshResults);
 
@@ -275,6 +286,40 @@ describe('SearchResultsComponent global search', () => {
         expect(store.searchResults()).toEqual(freshResults);
     });
 
+    it('shows a global-search error and recovers on the next search', async () => {
+        const recoveredResults = [
+            createSearchItem({ xtream_id: 778, title: 'Recovered result' }),
+        ];
+        const globalSearchService = TestBed.inject(
+            GlobalSearchService
+        ) as unknown as {
+            globalSearchContent: jest.Mock;
+        };
+        globalSearchService.globalSearchContent
+            .mockRejectedValueOnce(new Error('offline'))
+            .mockResolvedValueOnce(recoveredResults);
+
+        const component = TestBed.runInInjectionContext(
+            () => new SearchResultsComponent()
+        );
+        const store = TestBed.inject(XtreamStore) as unknown as MockXtreamStore;
+        store.setSearchTerm('matrix');
+
+        await component.searchGlobal('matrix', ['movie'], false);
+
+        expect(component.globalSearchError()).toBe(true);
+        expect(store.searchTerm()).toBe('matrix');
+        expect(store.resetSearchResults).not.toHaveBeenCalled();
+        expect(store.searchResults()).toEqual([]);
+
+        const recovery = component.searchGlobal('matrix', ['movie'], false);
+        expect(component.globalSearchError()).toBe(false);
+        await recovery;
+
+        expect(component.globalSearchError()).toBe(false);
+        expect(store.searchResults()).toEqual(recoveredResults);
+    });
+
     it('loads additional global search pages and appends them to existing results', async () => {
         const firstPage = Array.from({ length: 101 }, (_, index) =>
             createSearchItem({
@@ -290,10 +335,12 @@ describe('SearchResultsComponent global search', () => {
                 xtream_id: 102,
             }),
         ];
-        const databaseService = TestBed.inject(DatabaseService) as unknown as {
+        const globalSearchService = TestBed.inject(
+            GlobalSearchService
+        ) as unknown as {
             globalSearchContent: jest.Mock;
         };
-        databaseService.globalSearchContent
+        globalSearchService.globalSearchContent
             .mockResolvedValueOnce(firstPage)
             .mockResolvedValueOnce(secondPage);
 
@@ -304,11 +351,10 @@ describe('SearchResultsComponent global search', () => {
 
         await component.searchGlobal('matrix', ['movie'], false);
 
-        expect(databaseService.globalSearchContent).toHaveBeenCalledWith(
+        expect(globalSearchService.globalSearchContent).toHaveBeenCalledWith(
             'matrix',
             ['movie'],
             false,
-            undefined,
             {
                 limit: 101,
                 offset: 0,
@@ -319,28 +365,149 @@ describe('SearchResultsComponent global search', () => {
 
         await component.loadMoreGlobalResults();
 
-        expect(databaseService.globalSearchContent).toHaveBeenLastCalledWith(
-            'matrix',
-            ['movie'],
-            false,
-            undefined,
-            {
-                limit: 101,
-                offset: 100,
-            }
-        );
+        expect(
+            globalSearchService.globalSearchContent
+        ).toHaveBeenLastCalledWith('matrix', ['movie'], false, {
+            limit: 101,
+            offset: 100,
+        });
         expect(store.searchResults()).toHaveLength(101);
         expect(store.searchResults()[100].title).toBe('Result 102');
         expect(component.hasMoreGlobalResults()).toBe(false);
     });
 
+    it('preserves a failed append page and lets the user retry it', async () => {
+        const firstPage = Array.from({ length: 101 }, (_, index) =>
+            createSearchItem({
+                id: index + 1,
+                title: `Result ${index + 1}`,
+                xtream_id: index + 1,
+            })
+        );
+        const recoveredPage = [
+            createSearchItem({
+                id: 102,
+                title: 'Recovered result',
+                xtream_id: 102,
+            }),
+        ];
+        const globalSearchService = TestBed.inject(
+            GlobalSearchService
+        ) as unknown as {
+            globalSearchContent: jest.Mock;
+        };
+        globalSearchService.globalSearchContent
+            .mockResolvedValueOnce(firstPage)
+            .mockRejectedValueOnce(new Error('page unavailable'))
+            .mockResolvedValueOnce(recoveredPage);
+
+        const component = TestBed.runInInjectionContext(
+            () => new SearchResultsComponent()
+        );
+        const store = TestBed.inject(XtreamStore) as unknown as MockXtreamStore;
+        store.setSearchTerm('matrix');
+        await component.searchGlobal('matrix', ['movie'], false);
+
+        await component.loadMoreGlobalResults();
+
+        expect(store.searchResults()).toHaveLength(100);
+        expect(component.hasMoreGlobalResults()).toBe(true);
+        expect(component.globalSearchAppendError()).toBe(true);
+        expect(component.hasMoreSearchResults()).toBe(false);
+
+        await component.retryGlobalSearchPage();
+
+        expect(component.globalSearchAppendError()).toBe(false);
+        expect(store.searchResults()[100].title).toBe('Recovered result');
+        expect(
+            globalSearchService.globalSearchContent.mock.calls.slice(-2)
+        ).toEqual([
+            ['matrix', ['movie'], false, { limit: 101, offset: 100 }],
+            ['matrix', ['movie'], false, { limit: 101, offset: 100 }],
+        ]);
+    });
+
+    it('clears and reruns the visible global search when parental rules change', async () => {
+        const refreshedSearch = createDeferred<XtreamContentItem[]>();
+        const globalSearchService = TestBed.inject(
+            GlobalSearchService
+        ) as unknown as {
+            globalSearchContent: jest.Mock;
+        };
+        globalSearchService.globalSearchContent
+            .mockResolvedValueOnce([
+                createSearchItem({ title: 'Previously visible' }),
+            ])
+            .mockReturnValueOnce(refreshedSearch.promise);
+        const store = TestBed.inject(XtreamStore) as unknown as MockXtreamStore;
+        const component = TestBed.runInInjectionContext(
+            () => new SearchResultsComponent()
+        );
+        TestBed.flushEffects();
+
+        store.setSearchTerm('matrix');
+        TestBed.flushEffects();
+        await waitUntil(() => store.searchResults().length === 1);
+
+        parentalLockVersion.set(1);
+        TestBed.flushEffects();
+
+        expect(store.searchResults()).toEqual([]);
+        expect(globalSearchService.globalSearchContent).toHaveBeenCalledTimes(
+            2
+        );
+
+        refreshedSearch.resolve([
+            createSearchItem({ id: 2, title: 'Still allowed', xtream_id: 2 }),
+        ]);
+        await waitUntil(() => store.searchResults().length === 1);
+
+        expect(store.searchResults()[0].title).toBe('Still allowed');
+        expect(component.globalSearchError()).toBe(false);
+    });
+
+    it('invalidates an in-flight request when the component is destroyed', async () => {
+        const pendingSearch = createDeferred<XtreamContentItem[]>();
+        const globalSearchService = TestBed.inject(
+            GlobalSearchService
+        ) as unknown as {
+            globalSearchContent: jest.Mock;
+        };
+        globalSearchService.globalSearchContent.mockReturnValueOnce(
+            pendingSearch.promise
+        );
+        const store = TestBed.inject(XtreamStore) as unknown as MockXtreamStore;
+        const childInjector = createEnvironmentInjector(
+            [],
+            TestBed.inject(EnvironmentInjector)
+        );
+        const component = runInInjectionContext(
+            childInjector,
+            () => new SearchResultsComponent()
+        );
+
+        const search = component.searchGlobal('matrix', ['movie'], false);
+        expect(store.isSearching()).toBe(true);
+
+        childInjector.destroy();
+        pendingSearch.resolve([
+            createSearchItem({ title: 'Too late to publish' }),
+        ]);
+        await search;
+
+        expect(store.isSearching()).toBe(false);
+        expect(store.setGlobalSearchResults).not.toHaveBeenCalled();
+    });
+
     it('clears the load-more indicator when a new global search supersedes pagination', async () => {
         const appendSearch = createDeferred<XtreamContentItem[]>();
         const freshSearch = createDeferred<XtreamContentItem[]>();
-        const databaseService = TestBed.inject(DatabaseService) as unknown as {
+        const globalSearchService = TestBed.inject(
+            GlobalSearchService
+        ) as unknown as {
             globalSearchContent: jest.Mock;
         };
-        databaseService.globalSearchContent
+        globalSearchService.globalSearchContent
             .mockReturnValueOnce(appendSearch.promise)
             .mockReturnValueOnce(freshSearch.promise);
 
@@ -380,10 +547,12 @@ describe('SearchResultsComponent global search', () => {
                 xtream_id: 2,
             }),
         ];
-        const databaseService = TestBed.inject(DatabaseService) as unknown as {
+        const globalSearchService = TestBed.inject(
+            GlobalSearchService
+        ) as unknown as {
             globalSearchContent: jest.Mock;
         };
-        databaseService.globalSearchContent.mockResolvedValueOnce(nextPage);
+        globalSearchService.globalSearchContent.mockResolvedValueOnce(nextPage);
 
         const component = TestBed.runInInjectionContext(
             () => new SearchResultsComponent()
@@ -405,11 +574,10 @@ describe('SearchResultsComponent global search', () => {
 
         await component.searchGlobal('matrix', ['movie'], false, true);
 
-        expect(databaseService.globalSearchContent).toHaveBeenCalledWith(
+        expect(globalSearchService.globalSearchContent).toHaveBeenCalledWith(
             'matrix',
             ['movie'],
             false,
-            undefined,
             {
                 limit: 101,
                 offset: 1,
@@ -430,10 +598,14 @@ describe('SearchResultsComponent global search', () => {
                 xtream_id: index + 1,
             })
         );
-        const databaseService = TestBed.inject(DatabaseService) as unknown as {
+        const globalSearchService = TestBed.inject(
+            GlobalSearchService
+        ) as unknown as {
             globalSearchContent: jest.Mock;
         };
-        databaseService.globalSearchContent.mockResolvedValueOnce(firstPage);
+        globalSearchService.globalSearchContent.mockResolvedValueOnce(
+            firstPage
+        );
 
         const component = TestBed.runInInjectionContext(
             () => new SearchResultsComponent()
@@ -442,14 +614,14 @@ describe('SearchResultsComponent global search', () => {
 
         await component.searchGlobal('matrix', ['movie'], false);
         expect(component.hasMoreGlobalResults()).toBe(true);
-        databaseService.globalSearchContent.mockClear();
+        globalSearchService.globalSearchContent.mockClear();
 
         // The user edits the query; the fresh offset-zero search has not run
         // yet (effects not flushed), so appending must be refused entirely.
         store.searchTerm.set('matrix reloaded');
         await component.loadMoreGlobalResults();
 
-        expect(databaseService.globalSearchContent).not.toHaveBeenCalled();
+        expect(globalSearchService.globalSearchContent).not.toHaveBeenCalled();
         expect(component.isLoadingMoreGlobalResults()).toBe(false);
     });
 });
@@ -477,9 +649,10 @@ describe('SearchResultsComponent in-portal result window', () => {
                     },
                 },
                 {
-                    provide: DatabaseService,
+                    provide: GlobalSearchService,
                     useValue: {
                         globalSearchContent: jest.fn().mockResolvedValue([]),
+                        parentalLockVersion: signal(0),
                     },
                 },
             ],
@@ -574,8 +747,11 @@ describe('SearchResultsComponent search trigger', () => {
                     },
                 },
                 {
-                    provide: DatabaseService,
-                    useValue: { globalSearchContent },
+                    provide: GlobalSearchService,
+                    useValue: {
+                        globalSearchContent,
+                        parentalLockVersion: signal(0),
+                    },
                 },
             ],
         });
@@ -684,9 +860,10 @@ describe('SearchResultsComponent in-portal search and catalog loading', () => {
                     },
                 },
                 {
-                    provide: DatabaseService,
+                    provide: GlobalSearchService,
                     useValue: {
                         globalSearchContent: jest.fn().mockResolvedValue([]),
+                        parentalLockVersion: signal(0),
                     },
                 },
             ],
@@ -736,3 +913,11 @@ describe('SearchResultsComponent in-portal search and catalog loading', () => {
         expect(searchedTerms(store)).toEqual(['matrix']);
     });
 });
+
+async function waitUntil(predicate: () => boolean): Promise<void> {
+    for (let attempt = 0; attempt < 20; attempt++) {
+        if (predicate()) return;
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    }
+    throw new Error('Condition was not met');
+}

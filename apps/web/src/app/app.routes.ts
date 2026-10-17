@@ -39,15 +39,17 @@ const dashboardAccessGuard = async () => {
         : router.parseUrl(redirectPath);
 };
 
-export function resolveElectronOnlyGlobalSearchRoute(
-    runtime: Pick<RuntimeCapabilitiesService, 'isElectron'>,
+export function resolveGlobalSearchCapabilityRoute(
+    runtime: Pick<RuntimeCapabilitiesService, 'supportsGlobalSearch'>,
     router: Pick<Router, 'parseUrl'>
 ) {
-    return runtime.isElectron ? true : router.parseUrl('/workspace/sources');
+    return runtime.supportsGlobalSearch
+        ? true
+        : router.parseUrl('/workspace/sources');
 }
 
-const electronOnlyGlobalSearchGuard = () => {
-    return resolveElectronOnlyGlobalSearchRoute(
+const globalSearchCapabilityGuard = () => {
+    return resolveGlobalSearchCapabilityRoute(
         inject(RuntimeCapabilitiesService),
         inject(Router)
     );
@@ -160,7 +162,7 @@ export const routes: Routes = [
             },
             {
                 path: 'search',
-                canActivate: [electronOnlyGlobalSearchGuard],
+                canActivate: [globalSearchCapabilityGuard],
                 data: {
                     isGlobalSearch: true,
                 },

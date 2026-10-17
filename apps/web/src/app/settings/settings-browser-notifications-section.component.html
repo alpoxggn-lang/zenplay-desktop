@@ -1,0 +1,77 @@
+@if (notifications.supported) {
+    <section
+        class="settings-section"
+        data-test-id="browser-notifications-setting"
+    >
+        <div class="settings-section__header">
+            <h3>{{ 'SETTINGS.CARD_NOTIFICATIONS' | translate }}</h3>
+        </div>
+        <div class="settings-card">
+            <div class="setting-item" data-setting-id="browser-notifications">
+                <div class="setting-item__meta">
+                    <h4 id="browser-notifications-label">
+                        {{ 'SETTINGS.BROWSER_NOTIFICATIONS' | translate }}
+                    </h4>
+                    <p id="browser-notifications-description">
+                        {{
+                            'SETTINGS.BROWSER_NOTIFICATIONS_DESCRIPTION'
+                                | translate
+                        }}
+                    </p>
+                    <p id="browser-notifications-limitation">
+                        {{
+                            'SETTINGS.BROWSER_NOTIFICATIONS_LIMITATION'
+                                | translate
+                        }}
+                    </p>
+                </div>
+                <div class="setting-item__control">
+                    @switch (notifications.permission()) {
+                        @case ('granted') {
+                            <span
+                                class="settings-chip settings-chip--success"
+                                role="status"
+                                data-test-id="browser-notifications-granted"
+                            >
+                                {{
+                                    'SETTINGS.BROWSER_NOTIFICATIONS_GRANTED'
+                                        | translate
+                                }}
+                            </span>
+                        }
+                        @case ('denied') {
+                            <span
+                                class="settings-chip settings-chip--warn"
+                                role="status"
+                                data-test-id="browser-notifications-denied"
+                            >
+                                {{
+                                    'SETTINGS.BROWSER_NOTIFICATIONS_DENIED'
+                                        | translate
+                                }}
+                            </span>
+                        }
+                        @default {
+                            <button
+                                mat-stroked-button
+                                type="button"
+                                [disabled]="
+                                    notifications.requestingPermission()
+                                "
+                                aria-describedby="browser-notifications-description browser-notifications-limitation"
+                                (click)="requestPermission()"
+                                data-test-id="enable-browser-notifications"
+                            >
+                                <mat-icon>notifications</mat-icon>
+                                <span>{{
+                                    'SETTINGS.BROWSER_NOTIFICATIONS_ENABLE'
+                                        | translate
+                                }}</span>
+                            </button>
+                        }
+                    }
+                </div>
+            </div>
+        </div>
+    </section>
+}

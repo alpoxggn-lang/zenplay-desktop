@@ -75,7 +75,7 @@ export class WorkspaceShellRouteStateService {
             path: ['/workspace/sources'],
         });
 
-        if (this.runtime.isElectron) {
+        if (this.runtime.supportsGlobalSearch) {
             links.push({
                 icon: 'search',
                 tooltip: this.translateText(
@@ -195,8 +195,7 @@ export class WorkspaceShellRouteStateService {
             case 'settings':
                 return {
                     aria: 'WORKSPACE.SHELL.CONTEXT_DRAWER_SETTINGS_TOGGLE',
-                    tooltip:
-                        'WORKSPACE.SHELL.CONTEXT_DRAWER_SETTINGS_TOOLTIP',
+                    tooltip: 'WORKSPACE.SHELL.CONTEXT_DRAWER_SETTINGS_TOOLTIP',
                 };
             case 'sources':
             case 'collection':

@@ -7,6 +7,12 @@ export interface ZenPlayAccountExpiryAlert {
     readonly kind: ZenPlayAccountExpiryAlertKind;
 }
 
+/** Optional localized copy is additive so older renderer requests still work. */
+export interface ZenPlayAccountExpiryNotificationRequest extends ZenPlayAccountExpiryAlert {
+    readonly body?: string;
+    readonly title?: string;
+}
+
 function localDayOrdinal(date: Date): number {
     return Math.floor(
         Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()) /

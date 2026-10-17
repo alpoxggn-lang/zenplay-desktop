@@ -3,6 +3,7 @@ import {
     ChangeDetectionStrategy,
     Component,
     computed,
+    DestroyRef,
     effect,
     inject,
     linkedSignal,
@@ -10,13 +11,13 @@ import {
     untracked,
 } from '@angular/core';
 import { FormsModule } from '@angular/forms';
+import { MatButtonModule } from '@angular/material/button';
 import { MatButtonToggleModule } from '@angular/material/button-toggle';
 import { MatCheckboxModule } from '@angular/material/checkbox';
 import { MatIcon } from '@angular/material/icon';
 import { MatProgressSpinner } from '@angular/material/progress-spinner';
 import { ActivatedRoute, Router } from '@angular/router';
 import { TranslatePipe } from '@ngx-translate/core';
-import { DatabaseService } from '@iptvnator/services';
 import { ContentCardComponent } from '@iptvnator/portal/shared/ui';
 import { SearchLayoutComponent } from '@iptvnator/portal/shared/ui';
 import { WorkspaceBackNavigationService } from '@iptvnator/portal/shared/data-access';
@@ -44,6 +45,7 @@ import {
     isGlobalSearchScope,
     readStoredGlobalSearchScope,
 } from './global-search-scope';
+import { GlobalSearchService } from './global-search.service';
 
 interface GlobalSearchResultGroup {
     playlistId: string;
@@ -86,6 +88,7 @@ function groupResultsByPlaylistId(
     imports: [
         ContentCardComponent,
         FormsModule,
+        MatButtonModule,
         MatButtonToggleModule,
         MatCheckboxModule,
         MatIcon,
@@ -101,7 +104,8 @@ export class SearchResultsComponent implements AfterViewInit {
     readonly xtreamStore = inject(XtreamStore);
     readonly router = inject(Router);
     readonly activatedRoute = inject(ActivatedRoute);
-    readonly databaseService = inject(DatabaseService);
+    readonly globalSearchService = inject(GlobalSearchService);
+    private readonly destroyRef = inject(DestroyRef);
     private readonly backNavigation = inject(WorkspaceBackNavigationService);
     private readonly logger = createLogger('XtreamSearchResults');
     readonly routeSearchTerm = queryParamSignal(
@@ -121,6 +125,8 @@ export class SearchResultsComponent implements AfterViewInit {
     private lastGlobalSearchExcludeHidden?: boolean;
     readonly hasMoreGlobalResults = signal(false);
     readonly isLoadingMoreGlobalResults = signal(false);
+    readonly globalSearchAppendError = signal(false);
+    readonly globalSearchError = signal(false);
 
     private static readonly GROUP_BY_STORAGE_KEY =
         'global-search-group-by-playlist';
@@ -151,9 +157,10 @@ export class SearchResultsComponent implements AfterViewInit {
 
     /** Whether to exclude content from hidden categories */
     readonly excludeHidden = signal(
-        localStorage.getItem(
-            SearchResultsComponent.EXCLUDE_HIDDEN_STORAGE_KEY
-        ) === 'true'
+        this.globalSearchService.supportsHiddenCategoryFilter === true &&
+            localStorage.getItem(
+                SearchResultsComponent.EXCLUDE_HIDDEN_STORAGE_KEY
+            ) === 'true'
     );
 
     readonly filterConfig = [
@@ -200,7 +207,7 @@ export class SearchResultsComponent implements AfterViewInit {
      */
     readonly hasMoreSearchResults = computed(() =>
         this.isGlobalSearch
-            ? this.hasMoreGlobalResults()
+            ? this.hasMoreGlobalResults() && !this.globalSearchAppendError()
             : this.xtreamStore.searchResults().length >
               this.inPortalVisibleCount()
     );
@@ -251,6 +258,12 @@ export class SearchResultsComponent implements AfterViewInit {
     }
 
     constructor() {
+        this.destroyRef.onDestroy(() => {
+            this.globalSearchRequestVersion++;
+            this.xtreamStore.setIsSearching(false);
+            this.isLoadingMoreGlobalResults.set(false);
+        });
+
         if (this.isGlobalSearch) {
             this.xtreamStore.setSearchFilters(
                 filtersForGlobalSearchScope(
@@ -269,6 +282,26 @@ export class SearchResultsComponent implements AfterViewInit {
             }
 
             this.xtreamStore.setSearchTerm(queryTerm);
+        });
+
+        let previousParentalLockVersion =
+            this.globalSearchService.parentalLockVersion();
+        effect(() => {
+            const lockVersion = this.globalSearchService.parentalLockVersion();
+            if (
+                !this.isGlobalSearch ||
+                lockVersion === previousParentalLockVersion
+            ) {
+                return;
+            }
+            previousParentalLockVersion = lockVersion;
+            untracked(() => {
+                const term = this.searchTerm();
+                this.clearResultsOnly();
+                if (term.length >= this.minSearchLength) {
+                    this.executeSearch();
+                }
+            });
         });
 
         // One effect for both triggers, so a term and the end of catalog
@@ -357,6 +390,8 @@ export class SearchResultsComponent implements AfterViewInit {
         this.xtreamStore.setIsSearching(false);
         this.hasMoreGlobalResults.set(false);
         this.isLoadingMoreGlobalResults.set(false);
+        this.globalSearchAppendError.set(false);
+        this.globalSearchError.set(false);
         this.lastGlobalSearchTerm = '';
         this.lastGlobalSearchTypes = [];
         this.lastGlobalSearchExcludeHidden = undefined;
@@ -406,8 +441,11 @@ export class SearchResultsComponent implements AfterViewInit {
         const offset = append ? this.getCurrentGlobalSearchResults().length : 0;
 
         if (append) {
+            this.globalSearchAppendError.set(false);
             this.isLoadingMoreGlobalResults.set(true);
         } else {
+            this.globalSearchAppendError.set(false);
+            this.globalSearchError.set(false);
             this.lastGlobalSearchTerm = trimmedTerm;
             this.lastGlobalSearchTypes = [...effectiveTypes];
             this.lastGlobalSearchExcludeHidden = effectiveExcludeHidden;
@@ -417,11 +455,10 @@ export class SearchResultsComponent implements AfterViewInit {
         }
 
         try {
-            const results = await this.databaseService.globalSearchContent(
+            const results = await this.globalSearchService.globalSearchContent(
                 trimmedTerm,
                 effectiveTypes,
                 effectiveExcludeHidden,
-                undefined,
                 {
                     limit: GLOBAL_SEARCH_PAGE_SIZE + 1,
                     offset,
@@ -433,6 +470,7 @@ export class SearchResultsComponent implements AfterViewInit {
             }
 
             if (results && Array.isArray(results)) {
+                this.globalSearchError.set(false);
                 const visibleResults = results.slice(
                     0,
                     GLOBAL_SEARCH_PAGE_SIZE
@@ -459,9 +497,13 @@ export class SearchResultsComponent implements AfterViewInit {
 
             this.logger.error('Error in global search', error);
             if (append) {
-                this.hasMoreGlobalResults.set(false);
+                this.globalSearchAppendError.set(true);
             } else {
-                this.xtreamStore.resetSearchResults();
+                // Keep the term and filters intact so the error is not
+                // misrepresented as an empty/initial search and Retry can
+                // repeat the exact request.
+                this.xtreamStore.setGlobalSearchResults([]);
+                this.globalSearchError.set(true);
             }
         } finally {
             if (requestVersion === this.globalSearchRequestVersion) {
@@ -489,6 +531,25 @@ export class SearchResultsComponent implements AfterViewInit {
             this.excludeHidden(),
             true
         );
+    }
+
+    retryGlobalSearch(): void {
+        if (!this.isGlobalSearch || this.xtreamStore.isSearching()) {
+            return;
+        }
+        this.executeSearch();
+    }
+
+    async retryGlobalSearchPage(): Promise<void> {
+        if (
+            !this.isGlobalSearch ||
+            !this.globalSearchAppendError() ||
+            this.isLoadingMoreGlobalResults() ||
+            this.xtreamStore.isSearching()
+        ) {
+            return;
+        }
+        await this.loadMoreGlobalResults();
     }
 
     selectItem(item: XtreamSearchResultItem) {

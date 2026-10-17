@@ -77,7 +77,7 @@ import type {
     StreamProbeHeaders,
     VodSourcePin,
     XtreamCategory,
-    ZenPlayAccountExpiryAlert,
+    ZenPlayAccountExpiryNotificationRequest,
 } from '@iptvnator/shared/interfaces';
 import {
     DEBUG_TRACE_EVENT_CHANNEL,
@@ -108,7 +108,7 @@ const PARENTAL_LOCK_SET_STATE = 'PARENTAL_LOCK:SET_STATE';
 type ZenPlayAccountExpiryBridge = {
     onAppResume: (callback: () => void) => () => void;
     showZenPlayAccountExpiryNotification: (
-        request: ZenPlayAccountExpiryAlert
+        request: ZenPlayAccountExpiryNotificationRequest
     ) => Promise<boolean>;
 };
 
@@ -1120,7 +1120,12 @@ const electronApi: ElectronBridgeApi & ZenPlayAccountExpiryBridge = {
     dbReplaceAllPlaybackPositions: (
         playlistId: string,
         items: ElectronBridgePlaybackPositionInput[]
-    ) => ipcRenderer.invoke('DB_REPLACE_ALL_PLAYBACK_POSITIONS', playlistId, items),
+    ) =>
+        ipcRenderer.invoke(
+            'DB_REPLACE_ALL_PLAYBACK_POSITIONS',
+            playlistId,
+            items
+        ),
     dbClearAllPlaybackPositions: (playlistId: string) =>
         ipcRenderer.invoke('DB_CLEAR_ALL_PLAYBACK_POSITIONS', playlistId),
     dbClearPlaybackPosition: (
@@ -1225,11 +1230,14 @@ const electronApi: ElectronBridgeApi & ZenPlayAccountExpiryBridge = {
 // the next resize. Applied at DOMContentLoaded, never earlier — see
 // preload-zoom-level.ts for the Linux/Windows ready-to-show trap.
 applyPersistedZoomLevel({
-    requestPersistedZoomLevel: () => ipcRenderer.sendSync(WINDOW_GET_ZOOM_LEVEL),
+    requestPersistedZoomLevel: () =>
+        ipcRenderer.sendSync(WINDOW_GET_ZOOM_LEVEL),
     ...frameZoomPorts,
     whenDocumentParsed: (apply) => {
         if (document.readyState === 'loading') {
-            document.addEventListener('DOMContentLoaded', apply, { once: true });
+            document.addEventListener('DOMContentLoaded', apply, {
+                once: true,
+            });
         } else {
             apply();
         }

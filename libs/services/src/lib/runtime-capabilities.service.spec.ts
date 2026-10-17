@@ -56,6 +56,7 @@ describe('RuntimeCapabilitiesService', () => {
         expect(service.supportsDesktopFileSave).toBe(false);
         expect(service.supportsRemoteControl).toBe(false);
         expect(service.supportsXtreamSectionNavigation).toBe(true);
+        expect(service.supportsGlobalSearch).toBe(true);
         expect(service.supportsEpgImport).toBe(false);
         expect(service.supportsEpgFilePicker).toBe(false);
         expect(service.supportsEpgProgress).toBe(false);
@@ -161,6 +162,7 @@ describe('RuntimeCapabilitiesService', () => {
             getEpgProgramsForChannels: jest.fn(),
             getEpgProgramCoverage: jest.fn(),
             searchEpgPrograms: jest.fn(),
+            dbGlobalSearch: jest.fn(),
         };
 
         const service = new RuntimeCapabilitiesService();
@@ -186,6 +188,7 @@ describe('RuntimeCapabilitiesService', () => {
         expect(service.supportsDesktopFileSave).toBe(true);
         expect(service.supportsRemoteControl).toBe(true);
         expect(service.supportsXtreamSectionNavigation).toBe(true);
+        expect(service.supportsGlobalSearch).toBe(true);
         expect(service.supportsEpgImport).toBe(true);
         expect(service.supportsEpgFilePicker).toBe(true);
         expect(service.supportsEpgProgress).toBe(true);
@@ -224,6 +227,7 @@ describe('RuntimeCapabilitiesService', () => {
         expect(service.supportsDesktopFileSave).toBe(false);
         expect(service.supportsRemoteControl).toBe(false);
         expect(service.supportsXtreamSectionNavigation).toBe(false);
+        expect(service.supportsGlobalSearch).toBe(false);
         expect(service.supportsEpgImport).toBe(false);
         expect(service.supportsEpgProgress).toBe(false);
         expect(service.supportsEpgProgramLookup).toBe(false);

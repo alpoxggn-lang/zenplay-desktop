@@ -213,7 +213,8 @@ class MockWorkspaceShellFacade {
     readonly canCancelXtreamImport = signal(false);
     readonly isCancellingXtreamImport = signal(false);
     readonly isMacOS = true;
-    readonly isElectron = true;
+    isElectron = true;
+    supportsGlobalSearch = true;
     readonly supportsDownloads = true;
 
     onSearchInput = jest.fn();
@@ -483,9 +484,10 @@ describe('WorkspaceShellComponent', () => {
         expect(shortcutsService.openShortcutsDialog).toHaveBeenCalledTimes(1);
     });
 
-    it('opens the routed global search and focuses header search on Ctrl/Cmd+F', async () => {
+    it('uses Ctrl/Cmd+F for PWA global search and leaves unsupported runtimes alone', async () => {
         jest.useFakeTimers();
         const facade = new MockWorkspaceShellFacade();
+        facade.isElectron = false;
 
         await TestBed.configureTestingModule({
             imports: [WorkspaceShellComponent],
@@ -581,6 +583,25 @@ describe('WorkspaceShellComponent', () => {
         expect(settingsEvent.defaultPrevented).toBe(true);
         expect(facade.openGlobalSearch).not.toHaveBeenCalled();
         expect(header.focusSearchInput).toHaveBeenCalledWith({ select: true });
+
+        // A browser runtime without the global-search capability keeps the
+        // browser's native find command and does not focus app search.
+        facade.isSettingsRoute.set(false);
+        facade.supportsGlobalSearch = false;
+        header.focusSearchInput.mockClear();
+        const unsupportedEvent = new KeyboardEvent('keydown', {
+            key: 'f',
+            ctrlKey: true,
+            bubbles: true,
+            cancelable: true,
+        });
+
+        document.dispatchEvent(unsupportedEvent);
+        jest.runOnlyPendingTimers();
+
+        expect(unsupportedEvent.defaultPrevented).toBe(false);
+        expect(facade.openGlobalSearch).not.toHaveBeenCalled();
+        expect(header.focusSearchInput).not.toHaveBeenCalled();
         jest.useRealTimers();
     });
 

@@ -47,6 +47,9 @@
                     <div class="loading-state">
                         <mat-spinner diameter="48" />
                     </div>
+                } @else if (hasError()) {
+                    <!-- Consumer-owned, contextual error state. -->
+                    <ng-content select="[error]" />
                 } @else if (showResults) {
                     <!-- Results slot -->
                     <ng-content select="[results]" />

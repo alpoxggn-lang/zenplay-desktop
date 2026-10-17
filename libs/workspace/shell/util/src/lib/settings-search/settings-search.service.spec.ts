@@ -21,6 +21,7 @@ const TRANSLATIONS: Record<string, string> = {
 
 interface RuntimeStub {
     isElectron: boolean;
+    isPwa: boolean;
     supportsEpgImport: boolean;
     supportsEpgDataManagement: boolean;
     supportsRemoteControl: boolean;
@@ -39,6 +40,7 @@ function setup(runtime: Partial<RuntimeStub> = {}) {
                 provide: RuntimeCapabilitiesService,
                 useValue: {
                     isElectron: false,
+                    isPwa: false,
                     supportsEpgImport: false,
                     supportsEpgDataManagement: false,
                     supportsRemoteControl: false,
@@ -115,6 +117,7 @@ describe('SettingsSearchService', () => {
         expect(entries).not.toContain('epg-view-mode');
         expect(entries).not.toContain('recording-folder');
         expect(entries).not.toContain('mpv-player-path');
+        expect(entries).not.toContain('browser-notifications');
         expect(entries).toContain('theme');
         expect(service.search('guide')).toEqual([]);
     });
@@ -131,7 +134,53 @@ describe('SettingsSearchService', () => {
         // Embedded MPV rows wait for the support probe.
         expect(entries).not.toContain('embedded-mpv-extra-options');
         expect(entries).not.toContain('embedded-mpv-frame-copy');
-        expect(entries.length).toBe(SETTINGS_SEARCH_ENTRIES.length - 4);
+        expect(entries.length).toBe(SETTINGS_SEARCH_ENTRIES.length - 5);
+    });
+
+    it('offers browser notification settings only in a compatible PWA', () => {
+        const notificationDescriptor = Object.getOwnPropertyDescriptor(
+            globalThis,
+            'Notification'
+        );
+        const serviceWorkerDescriptor = Object.getOwnPropertyDescriptor(
+            navigator,
+            'serviceWorker'
+        );
+        const secureContextDescriptor = Object.getOwnPropertyDescriptor(
+            globalThis,
+            'isSecureContext'
+        );
+        try {
+            Object.defineProperty(globalThis, 'isSecureContext', {
+                configurable: true,
+                value: true,
+            });
+            Object.defineProperty(globalThis, 'Notification', {
+                configurable: true,
+                value: { requestPermission: jest.fn() },
+            });
+            Object.defineProperty(navigator, 'serviceWorker', {
+                configurable: true,
+                value: {},
+            });
+
+            const { service } = setup({ isPwa: true });
+            expect(service.visibleEntries().map(({ id }) => id)).toContain(
+                'browser-notifications'
+            );
+        } finally {
+            restoreProperty(globalThis, 'Notification', notificationDescriptor);
+            restoreProperty(
+                navigator,
+                'serviceWorker',
+                serviceWorkerDescriptor
+            );
+            restoreProperty(
+                globalThis,
+                'isSecureContext',
+                secureContextDescriptor
+            );
+        }
     });
 
     describe('embedded MPV probe', () => {
@@ -432,3 +481,15 @@ describe('SettingsSearchService', () => {
         expect(service.pendingReveal()).toBeNull();
     });
 });
+
+function restoreProperty(
+    target: object,
+    key: PropertyKey,
+    descriptor: PropertyDescriptor | undefined
+): void {
+    if (descriptor) {
+        Object.defineProperty(target, key, descriptor);
+    } else {
+        Reflect.deleteProperty(target, key);
+    }
+}

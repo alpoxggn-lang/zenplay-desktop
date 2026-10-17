@@ -217,7 +217,9 @@ freshness checks, clear/force-fetch management, channel browsing, and program
 search. `supportsPlaylistRefresh` requires the native playlist
 refresh/cancel/progress bridge, `supportsXtreamSectionNavigation` is available
 in PWA and in Electron when either the SQLite Xtream data source or the Xtream
-API transport is available, `supportsDesktopFileSave` requires both
+API transport is available, and `supportsGlobalSearch` is available in PWA
+through browser Xtream/M3U data sources or in Electron when the
+`dbGlobalSearch` preload method exists. `supportsDesktopFileSave` requires both
 `saveFileDialog` and `writeFile`, `supportsManagedExternalPlayers` requires the
 MPV and VLC preload launch methods (`openInMpv` and `openInVlc`), and
 `supportsExternalPlayerPathSettings` requires the path-setting methods
@@ -237,6 +239,10 @@ these limitations explicit in UI, troubleshooting, and release notes:
   `PlaylistStorageBackend` selects when no SQLite bridge exists; Xtream
   favorites, recently viewed items, playback positions, and cached collection
   snapshots use `PwaXtreamDataSource` browser storage.
+- PWA global search loads the requested Live TV, Movies, or Series catalog from
+  each Xtream source into the existing session cache and searches M3U channels
+  from IndexedDB. Stalker is not included in this route; the shared result and
+  navigation contract currently covers Xtream and M3U only.
 - Browser playlist deletion must go through `PlaylistsService`, not
   `DatabaseService`. `PlaylistsService.deletePlaylist()` runs registered
   cleanup hooks such as the PWA Xtream cleanup so localStorage sidecar data does
@@ -245,6 +251,11 @@ these limitations explicit in UI, troubleshooting, and release notes:
   manager flows, or Electron remote-control features. If inline browser
   playback fails, the supported browser fallback is copying the stream URL and
   opening it manually in an external player.
+- Browser account-expiry alerts are evaluated when ZenPlay opens, returns to
+  the foreground, or remains in use. A compatible browser can enable system
+  notifications from Settings; selecting one returns to Settings. There is no
+  Web Push subscription or push backend, so a completely closed PWA cannot
+  receive an expiry alert.
 
 Provider URLs are registered before proxy calls so the proxy endpoints do not
 accept raw target URLs in query strings. Registration validates the target URL

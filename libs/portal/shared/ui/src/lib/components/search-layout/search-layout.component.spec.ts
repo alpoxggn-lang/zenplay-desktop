@@ -155,8 +155,9 @@ describe('SearchLayoutComponent', () => {
         });
         const scrollTo = jest.fn(
             (options: { top: number }) =>
-                ((resultsContainer as unknown as { scrollTop: number }).scrollTop =
-                    options.top)
+                ((
+                    resultsContainer as unknown as { scrollTop: number }
+                ).scrollTop = options.top)
         );
         Object.defineProperty(resultsContainer, 'scrollTo', {
             configurable: true,
@@ -182,6 +183,18 @@ describe('SearchLayoutComponent', () => {
         resultsContainer.dispatchEvent(new Event('scroll'));
 
         expect(nearEndSpy).not.toHaveBeenCalled();
+    });
+
+    it('does not misrepresent a failed search as zero matches', () => {
+        fixture.componentRef.setInput('searchTerm', 'matrix');
+        fixture.componentRef.setInput('resultsCount', 0);
+        fixture.componentRef.setInput('hasError', true);
+        fixture.detectChanges();
+
+        expect(fixture.componentInstance.showNoResults).toBe(false);
+        expect(fixture.componentInstance.showInitialState).toBe(false);
+        expect(fixture.componentInstance.showResults).toBe(false);
+        expect(fixture.debugElement.query(By.css('.no-items'))).toBeNull();
     });
 
     it('re-measures when the rendered window grows while the total stays constant', () => {

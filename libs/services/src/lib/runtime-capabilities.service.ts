@@ -350,6 +350,15 @@ export class RuntimeCapabilitiesService {
         );
     }
 
+    /**
+     * Browser search is backed by the PWA Xtream data source and IndexedDB
+     * playlists. Desktop keeps the worker-backed global-search contract and
+     * must expose that exact preload method.
+     */
+    get supportsGlobalSearch(): boolean {
+        return this.isPwa || this.hasElectronMethod('dbGlobalSearch');
+    }
+
     private hasElectronMethod(methodName: string): boolean {
         const bridge = this.electronBridge as
             Record<string, unknown> | undefined;

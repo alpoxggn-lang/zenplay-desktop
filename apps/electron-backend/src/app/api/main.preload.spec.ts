@@ -282,8 +282,10 @@ describe('main preload DB IPC contract', () => {
     it('exposes the narrow ZenPlay expiry notification and OS-resume bridge', async () => {
         const api = getExposedApi();
         const request = {
+            body: 'Your ZenPlay account expires tomorrow (October 15, 2026).',
             kind: 'tomorrow',
             expiresOn: '2026-10-15',
+            title: 'ZenPlay · Expiry notice',
         };
         const callback = jest.fn();
 

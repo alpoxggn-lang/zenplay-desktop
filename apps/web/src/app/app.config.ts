@@ -44,6 +44,7 @@ import { PwaService } from './services/pwa.service';
 import { shouldEnableServiceWorker } from './services/runtime-config';
 import { LazyStalkerPlaylistConnectionEditor } from './services/lazy-stalker-playlist-connection-editor';
 import { provideWorkspaceShellActions } from './services/workspace-shell-actions.service';
+import { PWA_SERVICE_WORKER_REGISTRATION_STRATEGY } from './services/pwa-service-worker.constants';
 
 // AoT requires an exported function for factories
 export function HttpLoaderFactory(http: HttpClient): TranslateHttpLoader {
@@ -124,7 +125,7 @@ export const appConfig: ApplicationConfig = {
         ...storeDevtoolsProviders,
         provideServiceWorker('ngsw-worker.js', {
             enabled: shouldEnableServiceWorker(),
-            registrationStrategy: 'registerWhenStable:30000',
+            registrationStrategy: PWA_SERVICE_WORKER_REGISTRATION_STRATEGY,
         }),
         importProvidersFrom(
             NgxIndexedDBModule.forRoot(dbConfig),
