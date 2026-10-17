@@ -1680,6 +1680,9 @@ jobs:
                   );
 
                   fs.writeFileSync(`artifacts/${channelFile}`, merged);
+                  for (const filePath of candidates) {
+                    fs.unlinkSync(filePath);
+                  }
                   console.log(`Merged ${candidates.length} macOS update metadata files into ${channelFile}.`);
                   NODE
 

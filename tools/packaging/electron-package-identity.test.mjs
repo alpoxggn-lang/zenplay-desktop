@@ -388,6 +388,10 @@ test('ZenPlay release metadata targets only its dedicated GitHub repository', ()
     assert.match(buildAndMakeWorkflow, /dist\/executables\/\*\*\/\*\.blockmap/);
     assert.match(buildAndMakeWorkflow, /Merge macOS updater metadata/);
     assert.match(buildAndMakeWorkflow, /artifacts\/latest-mac\.yml/);
+    assert.match(
+        buildAndMakeWorkflow,
+        /fs\.writeFileSync\(`artifacts\/\$\{channelFile\}`, merged\);[\s\S]*?for \(const filePath of candidates\) \{[\s\S]*?fs\.unlinkSync\(filePath\);[\s\S]*?\}/
+    );
     assert.doesNotMatch(
         releaseFiles,
         /artifacts\/macos-(?:x64|arm64)-artifacts\/latest-mac\.yml/
