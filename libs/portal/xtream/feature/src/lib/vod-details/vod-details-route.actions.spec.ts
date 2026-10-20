@@ -74,6 +74,7 @@ describe('VodDetailsRouteComponent fallback actions', () => {
     let fixture: ComponentFixture<VodDetailsRouteComponent>;
     const selectedItem = signal<XtreamVodDetails | null>(null);
     const downloadsAvailable = signal(false);
+    const downloadFileRevealAvailable = signal(true);
     const isFavorite = signal(false);
     const downloads = signal<DownloadItem[]>([]);
     const activeSession = signal<unknown>(null);
@@ -140,6 +141,7 @@ describe('VodDetailsRouteComponent fallback actions', () => {
         selectedItem.set(null);
         downloads.set([]);
         downloadsAvailable.set(false);
+        downloadFileRevealAvailable.set(true);
         activeSession.set(null);
         isFavorite.set(false);
         currentPlaylist.set({
@@ -259,6 +261,7 @@ describe('VodDetailsRouteComponent fallback actions', () => {
                     provide: DownloadsService,
                     useValue: {
                         isAvailable: downloadsAvailable,
+                        canRevealFiles: downloadFileRevealAvailable,
                         downloads,
                         isDownloaded,
                         isDownloading: jest.fn().mockReturnValue(false),
@@ -756,6 +759,36 @@ describe('VodDetailsRouteComponent fallback actions', () => {
         expect(revealFile).toHaveBeenCalledWith('/downloads/catalog-movie.mp4');
         expect(playDownload).not.toHaveBeenCalled();
         expect(constructVodStreamUrl).not.toHaveBeenCalled();
+    });
+
+    it('keeps browser download playback while hiding native Reveal', async () => {
+        selectedItem.set(sparseItem());
+        downloadsAvailable.set(true);
+        downloadFileRevealAvailable.set(false);
+        isDownloaded.mockReturnValue(true);
+        getDownloadedFilePath.mockReturnValue(
+            'opfs://zenplay-private-media/downloads/catalog-movie.mp4'
+        );
+
+        fixture.detectChanges();
+
+        const host = fixture.nativeElement as HTMLElement;
+        expect(
+            host.querySelector('[data-testid="vod-download-done"]')
+        ).toBeNull();
+        expect(
+            host.querySelector('[data-testid="vod-play-provider"]')
+        ).not.toBeNull();
+
+        host.querySelector<HTMLButtonElement>('button.play-btn')?.click();
+        await fixture.whenStable();
+
+        expect(playDownload).toHaveBeenCalledWith(
+            'opfs://zenplay-private-media/downloads/catalog-movie.mp4'
+        );
+
+        await fixture.componentInstance.revealDownloadedFile();
+        expect(revealFile).not.toHaveBeenCalled();
     });
 
     it('hides Restart and provider playback while a downloaded movie is opening externally', async () => {

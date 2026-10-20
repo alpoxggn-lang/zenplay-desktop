@@ -129,7 +129,8 @@ export class VodDetailsRouteComponent implements OnInit, OnDestroy {
     readonly routePlaybackPosition = this.playback.routePlaybackPosition;
 
     readonly theme = this.settingsStore.theme;
-    readonly isElectron = this.downloadsService.isAvailable;
+    readonly downloadsAvailable = this.downloadsService.isAvailable;
+    readonly canRevealDownloadedFile = this.downloadsService.canRevealFiles;
 
     readonly isFavorite = this.xtreamStore.isFavorite;
     readonly isWatched = this.watched.isWatched;

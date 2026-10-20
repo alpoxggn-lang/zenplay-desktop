@@ -212,9 +212,12 @@ behavior stays auditable
 from one shared boundary. `supportsSqlite` requires the complete playlist
 storage preload API surface used by `PlaylistsService`. In Electron,
 `supportsDownloads` requires the complete downloads preload API surface; in a
-PWA it requires IndexedDB plus OPFS. `supportsRecordings` similarly selects the
-native recording bridge in Electron and requires OPFS, MediaRecorder, and media
-element stream capture in the PWA. EPG renderer code should use
+PWA it requires IndexedDB plus OPFS. `supportsDownloadFileReveal` is a separate
+native-shell capability: private browser downloads remain playable while their
+OPFS identifiers never surface a file-manager action. `supportsRecordings`
+similarly selects the native recording bridge in Electron and requires OPFS,
+MediaRecorder, and media element stream capture in the PWA. EPG renderer code
+should use
 `EpgRuntimeBridgeService` from
 `@iptvnator/epg/data-access` instead of calling `window.electron` directly.
 Playback-position renderer code should use `PlaybackPositionRuntimeBridgeService`

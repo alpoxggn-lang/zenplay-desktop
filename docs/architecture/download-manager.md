@@ -63,7 +63,9 @@ storage, but quota and eviction remain browser policy.
   player. This hides ordinary filesystem and reusable provider links, but is
   not DRM: browser developer tools, an extension, or same-origin script with
   equivalent access remain inside the user's security boundary. Playback still
-  depends on codecs supported by that browser.
+  depends on codecs supported by that browser. The native Reveal action is
+  capability-gated and stays hidden for OPFS downloads; browser users still
+  get local playback plus the ordinary remove and provider-playback actions.
 - Browser live recording is exposed only when OPFS, `MediaRecorder`, and
   `HTMLMediaElement.captureStream()` (or the Firefox equivalent) all exist.
   Each `MediaRecorder` chunk is appended through a fresh OPFS writer and

@@ -44,6 +44,7 @@ describe('RuntimeCapabilitiesService', () => {
         expect(service.supportsSqlite).toBe(false);
         expect(service.supportsXtreamSqliteDataSource).toBe(false);
         expect(service.supportsDownloads).toBe(false);
+        expect(service.supportsDownloadFileReveal).toBe(false);
         expect(service.supportsPortalActivityStorage).toBe(false);
         expect(service.supportsPlaybackPositionStorage).toBe(false);
         expect(service.supportsPlaybackPositionUpdates).toBe(false);
@@ -176,6 +177,7 @@ describe('RuntimeCapabilitiesService', () => {
         expect(service.supportsSqlite).toBe(true);
         expect(service.supportsXtreamSqliteDataSource).toBe(true);
         expect(service.supportsDownloads).toBe(true);
+        expect(service.supportsDownloadFileReveal).toBe(true);
         expect(service.supportsPortalActivityStorage).toBe(true);
         expect(service.supportsPlaybackPositionStorage).toBe(true);
         expect(service.supportsPlaybackPositionUpdates).toBe(true);
@@ -215,6 +217,7 @@ describe('RuntimeCapabilitiesService', () => {
         expect(service.supportsSqlite).toBe(false);
         expect(service.supportsXtreamSqliteDataSource).toBe(false);
         expect(service.supportsDownloads).toBe(false);
+        expect(service.supportsDownloadFileReveal).toBe(false);
         expect(service.supportsPortalActivityStorage).toBe(false);
         expect(service.supportsPlaybackPositionStorage).toBe(false);
         expect(service.supportsPlaybackPositionUpdates).toBe(false);
@@ -455,6 +458,7 @@ describe('RuntimeCapabilitiesService', () => {
         };
 
         expect(service.supportsDownloads).toBe(true);
+        expect(service.supportsDownloadFileReveal).toBe(true);
     });
 
     it('gates recordings separately from the downloads allowlist', () => {

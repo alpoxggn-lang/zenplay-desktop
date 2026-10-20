@@ -152,7 +152,10 @@ describe('DownloadsService', () => {
                 DownloadsService,
                 {
                     provide: RuntimeCapabilitiesService,
-                    useValue: { supportsDownloads: false },
+                    useValue: {
+                        supportsDownloads: false,
+                        supportsDownloadFileReveal: false,
+                    },
                 },
             ],
             Injector.NULL as unknown as EnvironmentInjector
@@ -165,6 +168,7 @@ describe('DownloadsService', () => {
             );
 
             expect(service.isAvailable()).toBe(false);
+            expect(service.canRevealFiles()).toBe(false);
         } finally {
             injector.destroy();
         }

@@ -60,6 +60,7 @@ export function createVodDetailsRouteStubs() {
         vodStreamsPlaylistId: signal<string | null>(null),
         vodCategoriesPlaylistId: signal<string | null>(null),
         downloadsAvailable: signal(false),
+        downloadFileRevealAvailable: signal(true),
         downloads: signal([]),
         isDownloaded: jest.fn().mockReturnValue(false),
         isDownloading: jest.fn().mockReturnValue(false),
@@ -97,6 +98,7 @@ export function resetVodDetailsRouteStubs(stubs: VodDetailsRouteStubs): void {
     stubs.vodStreams.set([]);
     stubs.vodCategories.set([]);
     stubs.downloadsAvailable.set(false);
+    stubs.downloadFileRevealAvailable.set(true);
     stubs.activeSession.set(null);
     stubs.selectedPlayer.set(VideoPlayer.Html5Player);
     stubs.updateSettings.mockClear().mockResolvedValue(undefined);
@@ -215,6 +217,7 @@ export async function configureVodDetailsRouteTestBed(
                 provide: DownloadsService,
                 useValue: {
                     isAvailable: stubs.downloadsAvailable,
+                    canRevealFiles: stubs.downloadFileRevealAvailable,
                     downloads: stubs.downloads,
                     isDownloaded: stubs.isDownloaded,
                     isDownloading: stubs.isDownloading,

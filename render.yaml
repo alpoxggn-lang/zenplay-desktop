@@ -3,7 +3,7 @@ services:
     name: zenplay-web-online
     runtime: docker
     plan: free
-    branch: feat/zenplay-web-vnext
+    branch: master
     autoDeployTrigger: commit
     dockerContext: .
     dockerfilePath: ./docker/Dockerfile.render

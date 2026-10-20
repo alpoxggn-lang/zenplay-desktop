@@ -46,6 +46,11 @@ export class DownloadsService extends DownloadsQueryBase implements OnDestroy {
     /** Whether downloads are available through Electron or private browser storage. */
     readonly isAvailable = computed(() => this.runtime.supportsDownloads);
 
+    /** Whether a completed file can be revealed in a native file manager. */
+    readonly canRevealFiles = computed(
+        () => this.runtime.supportsDownloadFileReveal
+    );
+
     /** Whether there are any downloads */
     readonly hasDownloads = computed(() => this.downloads().length > 0);
 

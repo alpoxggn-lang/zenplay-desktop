@@ -263,6 +263,14 @@ export class RuntimeCapabilitiesService {
         ].every((methodName) => this.hasElectronMethod(methodName));
     }
 
+    /** Native shell integration for revealing a managed download on disk. */
+    get supportsDownloadFileReveal(): boolean {
+        return (
+            this.supportsDownloads &&
+            this.hasElectronMethod('downloadsRevealFile')
+        );
+    }
+
     // Deliberately separate from supportsDownloads: that allowlist is
     // all-or-nothing, and folding the recordings bridge into it would make
     // older Electron builds lose the entire download manager.

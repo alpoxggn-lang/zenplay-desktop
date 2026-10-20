@@ -168,6 +168,7 @@ describe('VodDetailsRouteComponent', () => {
                     provide: DownloadsService,
                     useValue: {
                         isAvailable: signal(false),
+                        canRevealFiles: signal(false),
                         downloads,
                         isDownloaded: jest.fn().mockReturnValue(false),
                         isDownloading: jest.fn().mockReturnValue(false),

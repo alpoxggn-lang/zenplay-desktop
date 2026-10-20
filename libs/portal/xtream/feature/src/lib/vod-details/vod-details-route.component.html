@@ -51,15 +51,17 @@
                 testId="vod-watched-toggle"
                 (pressed)="toggleWatched(playableItem)"
             />
-            @if (isElectron() && !providerOnly()) {
+            @if (downloadsAvailable() && !providerOnly()) {
                 @if (isDownloaded()) {
-                    <app-detail-icon-button
-                        [label]="'DOWNLOADS.DOWNLOADED_REVEAL' | translate"
-                        icon="check_circle"
-                        tone="done"
-                        testId="vod-download-done"
-                        (pressed)="revealDownloadedFile()"
-                    />
+                    @if (canRevealDownloadedFile()) {
+                        <app-detail-icon-button
+                            [label]="'DOWNLOADS.DOWNLOADED_REVEAL' | translate"
+                            icon="check_circle"
+                            tone="done"
+                            testId="vod-download-done"
+                            (pressed)="revealDownloadedFile()"
+                        />
+                    }
                     <!-- The primary button plays the local file once a movie
                          is downloaded, and the sources panel only exists
                          when another playlist also carries the film. Without

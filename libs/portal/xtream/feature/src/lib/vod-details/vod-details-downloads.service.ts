@@ -172,6 +172,10 @@ export class VodDetailsDownloadsService {
 
     /** Open the finished file's location in the system file manager. */
     async revealDownloaded(): Promise<void> {
+        if (!this.downloadsService.canRevealFiles()) {
+            return;
+        }
+
         const playlistId = this.xtreamStore.currentPlaylist()?.id;
         if (!playlistId) {
             return;
