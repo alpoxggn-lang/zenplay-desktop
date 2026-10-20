@@ -8,6 +8,7 @@ import {
     signal,
 } from '@angular/core';
 import type { ElectronBridgeErrorResult } from '@iptvnator/shared/interfaces';
+import { browserMediaLibrary } from './browser-media-library';
 import { DownloadListLoadState } from './download-list-load-state';
 import { RecordingsService } from './recordings.service';
 import type { RecordingItem } from './recordings.service';
@@ -76,13 +77,16 @@ describe('RecordingsService', () => {
     }
 
     /** Constructor-driven instance: init() runs against the given capability. */
-    function createInjectedService(supportsRecordings: boolean) {
+    function createInjectedService(
+        supportsRecordings: boolean,
+        isPwa = false
+    ) {
         const injector = createEnvironmentInjector(
             [
                 RecordingsService,
                 {
                     provide: RuntimeCapabilitiesService,
-                    useValue: { supportsRecordings },
+                    useValue: { supportsRecordings, isPwa },
                 },
             ],
             Injector.NULL as unknown as EnvironmentInjector
@@ -180,6 +184,44 @@ describe('RecordingsService', () => {
             expect(unsubscribe).toHaveBeenCalledTimes(1);
         } finally {
             injector.destroy();
+        }
+    });
+
+    it('polls an already-open PWA tab so an expired recording lease self-heals', async () => {
+        jest.useFakeTimers();
+        const active = createRecording(1, 'recording', {
+            browserOwnedByThisTab: false,
+        });
+        const recovered = createRecording(1, 'interrupted', {
+            endedAt: '2026-08-15T12:01:00Z',
+        });
+        const unsubscribe = jest.fn();
+        jest.spyOn(browserMediaLibrary, 'initialize').mockResolvedValue();
+        jest.spyOn(browserMediaLibrary, 'subscribe').mockReturnValue(
+            unsubscribe
+        );
+        const list = jest
+            .spyOn(browserMediaLibrary, 'listRecordings')
+            .mockResolvedValueOnce([active])
+            .mockResolvedValueOnce([recovered]);
+        const { injector, service } = createInjectedService(true, true);
+
+        try {
+            await jest.advanceTimersByTimeAsync(0);
+            expect(service.recordings()).toEqual([active]);
+
+            await jest.advanceTimersByTimeAsync(15_000);
+
+            expect(list).toHaveBeenCalledTimes(2);
+            expect(service.recordings()).toEqual([recovered]);
+
+            service.ngOnDestroy();
+            await jest.advanceTimersByTimeAsync(15_000);
+            expect(list).toHaveBeenCalledTimes(2);
+            expect(unsubscribe).toHaveBeenCalledTimes(1);
+        } finally {
+            injector.destroy();
+            jest.useRealTimers();
         }
     });
 

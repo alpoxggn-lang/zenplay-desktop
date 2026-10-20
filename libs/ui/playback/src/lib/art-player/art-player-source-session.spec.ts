@@ -92,6 +92,62 @@ describe('ArtPlayerSourceSession', () => {
         expect(attach).not.toHaveBeenCalled();
     });
 
+    it('destroys the local engine during Cast and restores the ArtPlayer URL', () => {
+        const { session, player, video, adapter } = createSession({
+            sharedControls: true,
+        });
+        Object.defineProperties(video, {
+            pause: { configurable: true, value: jest.fn() },
+            play: {
+                configurable: true,
+                value: jest.fn().mockResolvedValue(undefined),
+            },
+            load: { configurable: true, value: jest.fn() },
+        });
+        session.attach(player);
+        session.customType['m3u8']?.call(
+            player,
+            video,
+            'https://example.test/live.m3u8',
+            player
+        );
+        video.src = 'https://example.test/local-buffer.m3u8';
+        const localHls = hlsInstances[0];
+        const remote = document.createElement('video');
+        Object.defineProperties(remote, {
+            paused: { configurable: true, value: true, writable: true },
+            pause: { configurable: true, value: jest.fn() },
+            play: {
+                configurable: true,
+                value: jest.fn().mockResolvedValue(undefined),
+            },
+        });
+
+        adapter.beginRemotePlayback(remote, {
+            muted: false,
+            playbackRate: 1,
+            playing: false,
+            positionSeconds: 4,
+            volume: 1,
+        });
+
+        expect(localHls.destroy).toHaveBeenCalledTimes(1);
+        expect(video.getAttribute('src')).toBeNull();
+
+        adapter.finishRemotePlayback(
+            {
+                muted: false,
+                playbackRate: 1,
+                playing: false,
+                volume: 1,
+            },
+            true
+        );
+
+        expect(player.url).toBe('https://example.test/live.m3u8');
+        session.destroy();
+    });
+
     it('extends preparation only for ZenPlay adaptive HLS sources', () => {
         const { session, player, video } = createSession({
             sharedControls: true,

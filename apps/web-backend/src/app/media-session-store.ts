@@ -1,4 +1,17 @@
-import { randomBytes } from 'node:crypto';
+import { createHmac, randomBytes } from 'node:crypto';
+import {
+    DEFAULT_REMOTE_PLAYBACK_TICKET_TTL_MS,
+    RemotePlaybackTicketStore,
+    type RemotePlaybackMediaDescriptor,
+    type RemotePlaybackTicket,
+    type ResolvedRemotePlaybackResource,
+} from './remote-playback-ticket-store';
+
+export {
+    DEFAULT_REMOTE_PLAYBACK_TICKET_TTL_MS,
+    type RemotePlaybackMediaDescriptor,
+    type RemotePlaybackTicket,
+} from './remote-playback-ticket-store';
 
 export const MEDIA_SESSION_COOKIE = 'zenplay_media';
 /**
@@ -11,10 +24,12 @@ const LEGACY_MEDIA_SESSION_COOKIE_PATH = '/api/media';
 export const DEFAULT_MEDIA_SESSION_TTL_MS = 8 * 60 * 60 * 1000;
 export const DEFAULT_MEDIA_RESOURCE_TTL_MS = 12 * 60 * 60 * 1000;
 const MAX_RESOURCES_PER_SESSION = 4_096;
+const MAX_MEDIA_SESSIONS = 1_024;
 
 export interface MediaSession {
     readonly id: string;
     readonly password: string;
+    readonly sourceId: string;
     readonly targetBaseUrl: string;
     readonly username: string;
     readonly expiresAt: number;
@@ -31,6 +46,8 @@ export interface MediaSessionStoreOptions {
     readonly now?: () => number;
     readonly resourceTtlMs?: number;
     readonly sessionTtlMs?: number;
+    readonly remotePlaybackTicketTtlMs?: number;
+    readonly sourceIdentitySecret?: string;
 }
 
 /** Ephemeral credentials and HLS locations; nothing is persisted or exposed. */
@@ -46,9 +63,11 @@ export class MediaSessionStore {
     private readonly replacementSessionIds = new Map<string, string>();
     private readonly resources = new Map<string, MediaResource>();
     private readonly resourceTokensByUrl = new Map<string, string>();
+    private readonly remotePlayback: RemotePlaybackTicketStore;
     private readonly now: () => number;
     private readonly resourceTtlMs: number;
     private readonly sessionTtlMs: number;
+    private readonly sourceIdentitySecret: string | Buffer;
     private readonly cleanupTimer: NodeJS.Timeout;
 
     constructor(options: MediaSessionStoreOptions = {}) {
@@ -57,9 +76,23 @@ export class MediaSessionStore {
             options.resourceTtlMs ?? DEFAULT_MEDIA_RESOURCE_TTL_MS;
         this.sessionTtlMs =
             options.sessionTtlMs ?? DEFAULT_MEDIA_SESSION_TTL_MS;
+        this.sourceIdentitySecret =
+            options.sourceIdentitySecret ?? randomBytes(32);
+        const remotePlaybackTicketTtlMs =
+            options.remotePlaybackTicketTtlMs ??
+            DEFAULT_REMOTE_PLAYBACK_TICKET_TTL_MS;
+        this.remotePlayback = new RemotePlaybackTicketStore(
+            this.now,
+            remotePlaybackTicketTtlMs
+        );
         const cleanupEvery = Math.max(
             1_000,
-            Math.min(this.sessionTtlMs, this.resourceTtlMs, 60_000)
+            Math.min(
+                this.sessionTtlMs,
+                this.resourceTtlMs,
+                remotePlaybackTicketTtlMs,
+                60_000
+            )
         );
         this.cleanupTimer = setInterval(
             () => this.purgeExpired(),
@@ -85,9 +118,14 @@ export class MediaSessionStore {
             current.password === options.password;
         if (current && !sameIdentity) this.removeSession(current.id);
         const id = sameIdentity && current ? current.id : opaqueToken(32);
+        if (!sameIdentity) this.enforceGlobalSessionLimit();
         const session: MediaSession = {
             id,
             password: options.password,
+            sourceId: this.createSourceId(
+                options.targetBaseUrl,
+                options.username
+            ),
             targetBaseUrl: options.targetBaseUrl,
             username: options.username,
             expiresAt: this.now() + this.sessionTtlMs,
@@ -117,6 +155,7 @@ export class MediaSessionStore {
             ...session,
             expiresAt: this.now() + this.sessionTtlMs,
         };
+        this.sessions.delete(resolvedSessionId);
         this.sessions.set(resolvedSessionId, refreshed);
         return refreshed;
     }
@@ -168,6 +207,40 @@ export class MediaSessionStore {
         return new URL(resource.url);
     }
 
+    /**
+     * Issues a short-lived bearer URL for a remote renderer. The token is
+     * deliberately scoped to one media item and never contains provider
+     * credentials. An unclaimed URL expires quickly; the first receiver read
+     * activates it until the hard lifetime so later Range reads stay valid.
+     */
+    createRemotePlaybackTicket(
+        session: MediaSession,
+        descriptor: RemotePlaybackMediaDescriptor
+    ): string {
+        return this.remotePlayback.create(session, descriptor);
+    }
+
+    getRemotePlaybackTicket(
+        token: string,
+        activate = true
+    ): RemotePlaybackTicket | null {
+        return this.remotePlayback.get(token, activate);
+    }
+
+    revokeRemotePlaybackTicket(sessionId: string, token: string): boolean {
+        return this.remotePlayback.revokeTicket(token, sessionId);
+    }
+
+    createRemotePlaybackResource(ticketToken: string, url: URL): string | null {
+        return this.remotePlayback.createResource(ticketToken, url);
+    }
+
+    getRemotePlaybackResource(
+        token: string
+    ): ResolvedRemotePlaybackResource | null {
+        return this.remotePlayback.getResource(token);
+    }
+
     cookieHeader(session: MediaSession, secure = true): string {
         const maxAge = Math.max(
             0,
@@ -214,9 +287,9 @@ export class MediaSessionStore {
 
     revoke(sessionId: string | undefined): void {
         if (!sessionId) return;
-        this.removeSession(
-            this.replacementSessionIds.get(sessionId) ?? sessionId
-        );
+        const resolvedSessionId =
+            this.replacementSessionIds.get(sessionId) ?? sessionId;
+        this.removeSession(resolvedSessionId);
     }
 
     purgeExpired(): void {
@@ -228,6 +301,7 @@ export class MediaSessionStore {
             if (resource.expiresAt <= timestamp)
                 this.removeResource(token, resource);
         }
+        this.remotePlayback.purgeExpired(timestamp);
     }
 
     close(): void {
@@ -236,10 +310,12 @@ export class MediaSessionStore {
         this.replacementSessionIds.clear();
         this.resources.clear();
         this.resourceTokensByUrl.clear();
+        this.remotePlayback.clear();
     }
 
     private removeSession(sessionId: string): void {
         this.sessions.delete(sessionId);
+        this.remotePlayback.revokeSession(sessionId);
         for (const [staleSessionId, replacementSessionId] of this
             .replacementSessionIds) {
             if (
@@ -255,6 +331,20 @@ export class MediaSessionStore {
         }
     }
 
+    private createSourceId(targetBaseUrl: string, username: string): string {
+        const target = new URL(targetBaseUrl);
+        target.hash = '';
+        target.password = '';
+        target.searchParams.sort();
+        target.username = '';
+        target.pathname = `${target.pathname.replace(/\/+$/, '')}/`;
+        return createHmac('sha256', this.sourceIdentitySecret)
+            .update(target.href)
+            .update('\0')
+            .update(username)
+            .digest('base64url');
+    }
+
     private enforceSessionResourceLimit(sessionId: string): void {
         const sessionResources = [...this.resources.entries()]
             .filter(([, resource]) => resource.sessionId === sessionId)
@@ -262,6 +352,15 @@ export class MediaSessionStore {
         while (sessionResources.length >= MAX_RESOURCES_PER_SESSION) {
             const oldest = sessionResources.shift();
             if (oldest) this.removeResource(oldest[0], oldest[1]);
+        }
+    }
+
+    private enforceGlobalSessionLimit(): void {
+        while (this.sessions.size >= MAX_MEDIA_SESSIONS) {
+            const oldestSessionId = this.sessions.keys().next().value as
+                string | undefined;
+            if (!oldestSessionId) return;
+            this.removeSession(oldestSessionId);
         }
     }
 

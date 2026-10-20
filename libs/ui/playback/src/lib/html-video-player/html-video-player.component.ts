@@ -17,7 +17,11 @@ import {
 } from '@angular/core';
 import Hls, { type ErrorData, type ManifestParsedData } from 'hls.js';
 import mpegts from 'mpegts.js';
-import { type Channel, createDevLogger } from '@iptvnator/shared/interfaces';
+import {
+    type Channel,
+    createDevLogger,
+    type RecordingStartMetadata,
+} from '@iptvnator/shared/interfaces';
 import { releaseVideoPictureInPicture } from '../player-controls/web-video-picture-in-picture-lifecycle';
 import {
     InlinePlaybackPlayer,
@@ -60,6 +64,8 @@ import {
     type HtmlVideoControlsSource,
 } from './html-video-player-controls.bridge';
 import type { PlayerTimeUpdate } from '../playback-history/player-time-update';
+import type { WebVideoRemotePlaybackResumeState } from '../player-controls/web-video-remote-playback-host';
+import { restoreWebVideoAfterRemotePlayback } from '../web-video-support/web-video-remote-resume';
 
 const debugHtmlPlayer = createDevLogger('HtmlVideoPlayer');
 
@@ -88,6 +94,7 @@ export class HtmlVideoPlayerComponent implements OnInit, OnChanges, OnDestroy {
     readonly interactionEnabled = input(true);
     readonly showCaptions = input(false);
     readonly mediaTitle = input<PlayerMediaTitle | null>(null);
+    readonly recordingMetadata = input<RecordingStartMetadata | null>(null);
     readonly upNext = input<PlayerUpNextItem | null>(null);
     /** Catch-up programmes drawn as track segments; null draws one. */
     readonly timelineSegments = input<readonly PlayerTimelineSegment[] | null>(
@@ -129,6 +136,8 @@ export class HtmlVideoPlayerComponent implements OnInit, OnChanges, OnDestroy {
     private captionTracks: WebVideoSourceTracks | null = null;
     private videoSession: HtmlVideoElementSession | null = null;
     private legacyShortcuts: LegacyPlayerShortcuts | null = null;
+    private remoteRestoreCleanup: (() => void) | null = null;
+    private suppressLocalAutoplay = false;
 
     ngOnInit() {
         if (this.sharedControls) {
@@ -141,6 +150,11 @@ export class HtmlVideoPlayerComponent implements OnInit, OnChanges, OnDestroy {
                 adapter: this.controlsAdapter,
                 isLive: () => this.isLive(),
                 showCaptions: () => this.showCaptions(),
+                getRecordingMetadata: () => this.recordingMetadata(),
+                suspendForRemotePlayback: () =>
+                    this.suspendForRemotePlayback(),
+                restoreAfterRemotePlayback: (state) =>
+                    this.restoreAfterRemotePlayback(state),
             });
             this.controlsBridge.attach();
         } else {
@@ -351,6 +365,7 @@ export class HtmlVideoPlayerComponent implements OnInit, OnChanges, OnDestroy {
      * Handles promise based play operation
      */
     handlePlayOperation(): void {
+        if (this.suppressLocalAutoplay) return;
         this.getVideoSession().play();
     }
 
@@ -381,6 +396,8 @@ export class HtmlVideoPlayerComponent implements OnInit, OnChanges, OnDestroy {
         }
         this.legacyShortcuts?.detach();
         this.legacyShortcuts = null;
+        this.remoteRestoreCleanup?.();
+        this.remoteRestoreCleanup = null;
         this.controlsBridge?.destroy();
         this.controlsBridge = null;
         this.captionTracks?.destroy();
@@ -392,6 +409,34 @@ export class HtmlVideoPlayerComponent implements OnInit, OnChanges, OnDestroy {
         this.destroyHls();
         this.shakaSession?.destroy();
         this.shakaSession = null;
+    }
+
+    private suspendForRemotePlayback(): void {
+        this.remoteRestoreCleanup?.();
+        this.remoteRestoreCleanup = null;
+        const video = this.videoPlayer.nativeElement;
+        video.pause();
+        this.clearControlsSource();
+        this.destroyMpegtsPlayer();
+        this.destroyHls();
+        this.shakaSession?.stop();
+        clearNativeVideoSources(video);
+        video.load();
+    }
+
+    private restoreAfterRemotePlayback(
+        state: WebVideoRemotePlaybackResumeState
+    ): void {
+        this.suppressLocalAutoplay = true;
+        try {
+            this.playChannel(this.channel);
+        } finally {
+            this.suppressLocalAutoplay = false;
+        }
+        this.remoteRestoreCleanup = restoreWebVideoAfterRemotePlayback(
+            this.videoPlayer.nativeElement,
+            state
+        );
     }
 
     private getVideoSession(): HtmlVideoElementSession {

@@ -144,7 +144,7 @@
             [canSeek]="state().canSeek"
             [isLive]="state().isLive"
             [remaining]="remainingTimeText()"
-            [recordingStatus]="recordingStatusText()"
+            [recordingStatus]="recordingStatusText() ?? '' | translate"
             [recording]="isRecording()"
             (scrubInput)="onTimelineInput($event)"
             (scrubCommit)="onTimelineCommit($event)"
@@ -266,10 +266,16 @@
                         [disabled]="isLoading() || !state().canPreviousEpisode"
                         (click)="requestPreviousEpisode()"
                         [attr.aria-label]="
-                            'EMBEDDED_MPV.PLAYER.PREVIOUS_EPISODE' | translate
+                            (state().adjacentNavigationKind === 'channel'
+                                ? 'EMBEDDED_MPV.PLAYER.PREVIOUS_CHANNEL'
+                                : 'EMBEDDED_MPV.PLAYER.PREVIOUS_EPISODE'
+                            ) | translate
                         "
                         [matTooltip]="
-                            'EMBEDDED_MPV.PLAYER.PREVIOUS_EPISODE' | translate
+                            (state().adjacentNavigationKind === 'channel'
+                                ? 'EMBEDDED_MPV.PLAYER.PREVIOUS_CHANNEL'
+                                : 'EMBEDDED_MPV.PLAYER.PREVIOUS_EPISODE'
+                            ) | translate
                         "
                         matTooltipPosition="above"
                     >
@@ -349,10 +355,16 @@
                         [disabled]="isLoading() || !state().canNextEpisode"
                         (click)="requestNextEpisode()"
                         [attr.aria-label]="
-                            'EMBEDDED_MPV.PLAYER.NEXT_EPISODE' | translate
+                            (state().adjacentNavigationKind === 'channel'
+                                ? 'EMBEDDED_MPV.PLAYER.NEXT_CHANNEL'
+                                : 'EMBEDDED_MPV.PLAYER.NEXT_EPISODE'
+                            ) | translate
                         "
                         [matTooltip]="
-                            'EMBEDDED_MPV.PLAYER.NEXT_EPISODE' | translate
+                            (state().adjacentNavigationKind === 'channel'
+                                ? 'EMBEDDED_MPV.PLAYER.NEXT_CHANNEL'
+                                : 'EMBEDDED_MPV.PLAYER.NEXT_EPISODE'
+                            ) | translate
                         "
                         matTooltipPosition="above"
                     >
@@ -514,6 +526,44 @@
                         }}</mat-icon>
                     </button>
                 }
+
+                <button
+                    mat-icon-button
+                    type="button"
+                    class="player-controls__button"
+                    appWebVideoRemotePlayback
+                    #remotePlayback="webVideoRemotePlayback"
+                    data-test-id="player-controls-cast"
+                    [remotePlaybackSurface]="playerSurface()"
+                    [remotePlaybackSource]="remotePlaybackSource()"
+                    [remotePlaybackHost]="controller()"
+                    [hidden]="
+                        !remotePlayback.state().supported ||
+                        (settings.isOpen() && layout.roomy())
+                    "
+                    [disabled]="!remotePlayback.state().canPrompt"
+                    (click)="remotePlayback.prompt()"
+                    [attr.aria-pressed]="remotePlayback.state().active"
+                    [attr.aria-label]="
+                        (remotePlayback.state().active
+                            ? 'EMBEDDED_MPV.PLAYER.CASTING_TO_TV'
+                            : 'EMBEDDED_MPV.PLAYER.CAST_TO_TV'
+                        ) | translate
+                    "
+                    [matTooltip]="
+                        (remotePlayback.state().active
+                            ? 'EMBEDDED_MPV.PLAYER.CASTING_TO_TV'
+                            : 'EMBEDDED_MPV.PLAYER.CAST_TO_TV'
+                        ) | translate
+                    "
+                    matTooltipPosition="above"
+                >
+                    <mat-icon>{{
+                        remotePlayback.state().active
+                            ? 'cast_connected'
+                            : 'cast'
+                    }}</mat-icon>
+                </button>
 
                 @if (
                     capabilities().pictureInPicture &&

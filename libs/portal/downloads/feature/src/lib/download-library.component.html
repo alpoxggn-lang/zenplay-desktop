@@ -126,24 +126,29 @@
                                         {{ 'DOWNLOADS.PLAY' | translate }}
                                     </span>
                                 </button>
-                                <button
-                                    mat-menu-item
-                                    type="button"
-                                    [disabled]="isPending(entity.item)"
-                                    [attr.aria-label]="
-                                        ('DOWNLOADS.REVEAL' | translate) +
-                                        ': ' +
-                                        entity.item.title
-                                    "
-                                    (click)="emitAction('reveal', entity.item)"
-                                >
-                                    <mat-icon aria-hidden="true">
-                                        folder_open
-                                    </mat-icon>
-                                    <span>
-                                        {{ 'DOWNLOADS.REVEAL' | translate }}
-                                    </span>
-                                </button>
+                                @if (nativeFileActions()) {
+                                    <button
+                                        mat-menu-item
+                                        type="button"
+                                        data-test-action="reveal"
+                                        [disabled]="isPending(entity.item)"
+                                        [attr.aria-label]="
+                                            ('DOWNLOADS.REVEAL' | translate) +
+                                            ': ' +
+                                            entity.item.title
+                                        "
+                                        (click)="
+                                            emitAction('reveal', entity.item)
+                                        "
+                                    >
+                                        <mat-icon aria-hidden="true">
+                                            folder_open
+                                        </mat-icon>
+                                        <span>
+                                            {{ 'DOWNLOADS.REVEAL' | translate }}
+                                        </span>
+                                    </button>
+                                }
                                 <button
                                     mat-menu-item
                                     type="button"

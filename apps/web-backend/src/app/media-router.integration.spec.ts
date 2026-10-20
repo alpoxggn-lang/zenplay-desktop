@@ -2,6 +2,12 @@ import { createServer, IncomingMessage, ServerResponse } from 'node:http';
 import { AddressInfo } from 'node:net';
 import { createWebBackendApp } from './web-backend-app';
 import {
+    EXPECTED_MEDIA_SOURCE_HEADER,
+    MEDIA_SOURCE_HEADER,
+} from './media-router';
+import { MediaSessionStore } from './media-session-store';
+import { RemotePlaybackCapacityError } from './remote-playback-ticket-store';
+import {
     registerProviderTarget,
     withServer,
 } from './web-backend-app.spec-helpers';
@@ -142,6 +148,473 @@ describe('ZenPlay secure media gateway', () => {
                     { headers: { Cookie: `zenplay_media=${'x'.repeat(43)}` } }
                 );
                 expect(wrongSession.status).toBe(401);
+            });
+        });
+    });
+
+    it('rejects a stale expected source before contacting the provider', async () => {
+        let mediaRequests = 0;
+        await withProvider(
+            async (providerUrl) => {
+                const app = createWebBackendApp({
+                    allowPrivateNetworkTargets: true,
+                    mediaSourceSecret: 'integration-source-secret',
+                    zenPlayXtreamUrl: providerUrl,
+                });
+                await withServer(app, async (backendUrl) => {
+                    const targetId = await registerProviderTarget(
+                        backendUrl,
+                        providerUrl
+                    );
+                    const login = await loginRequest(backendUrl, targetId);
+                    const mediaUrl = `${backendUrl}/media/live/7.ts`;
+                    const valid = await fetch(mediaUrl, {
+                        headers: { Cookie: cookiePair(login) },
+                    });
+                    const sourceId = valid.headers.get(MEDIA_SOURCE_HEADER);
+
+                    expect(valid.status).toBe(200);
+                    expect(sourceId).toMatch(/^[A-Za-z0-9_-]{43}$/);
+                    expect(mediaRequests).toBe(1);
+                    const mismatch = await fetch(mediaUrl, {
+                        headers: {
+                            Cookie: cookiePair(login),
+                            [EXPECTED_MEDIA_SOURCE_HEADER]: 'x'.repeat(43),
+                        },
+                    });
+
+                    expect(mismatch.status).toBe(409);
+                    expect(mismatch.headers.get(MEDIA_SOURCE_HEADER)).toBe(
+                        sourceId
+                    );
+                    expect(mediaRequests).toBe(1);
+                });
+            },
+            undefined,
+            (url) => {
+                if (url.pathname.endsWith('/7.ts')) mediaRequests += 1;
+            }
+        );
+    });
+
+    it('casts through a short-lived opaque URL without sharing the browser cookie', async () => {
+        await withProvider(async (providerUrl) => {
+            const app = createWebBackendApp({
+                allowPrivateNetworkTargets: true,
+                runtimeBackendUrl: '/api',
+                zenPlayXtreamUrl: providerUrl,
+            });
+            await withServer(app, async (backendUrl) => {
+                const targetId = await registerProviderTarget(
+                    backendUrl,
+                    providerUrl
+                );
+                const login = await loginRequest(backendUrl, targetId);
+                const ticketResponse = await fetch(`${backendUrl}/media/cast`, {
+                    body: JSON.stringify({
+                        adaptive: false,
+                        extension: 'm3u8',
+                        kind: 'live',
+                        streamId: '8',
+                    }),
+                    headers: {
+                        Cookie: cookiePair(login),
+                        'content-type': 'application/json',
+                    },
+                    method: 'POST',
+                });
+                const ticket = (await ticketResponse.json()) as {
+                    expiresInSeconds: number;
+                    url: string;
+                };
+
+                expect(ticketResponse.status).toBe(201);
+                expect(ticket.expiresInSeconds).toBe(900);
+                expect(ticket.url).toMatch(
+                    /^\/api\/media\/cast\/[A-Za-z0-9_-]+\/stream\.m3u8$/
+                );
+                expect(ticket.url).not.toContain('viewer');
+                expect(ticket.url).not.toContain('secret-password');
+
+                const manifest = await fetch(
+                    `${backendUrl}${ticket.url.replace(/^\/api/, '')}`
+                );
+                const body = await manifest.text();
+                expect(manifest.status).toBe(200);
+                expect(
+                    manifest.headers.get('access-control-allow-origin')
+                ).toBe('*');
+                expect(body).not.toContain('viewer');
+                expect(body).not.toContain('secret-password');
+                const resources = Array.from(
+                    body.matchAll(
+                        /\/api\/media\/cast-resource\/[A-Za-z0-9_-]+/g
+                    ),
+                    (match) => match[0]
+                );
+                expect(resources).toHaveLength(5);
+
+                const resource = await fetch(
+                    `${backendUrl}${resources[0].replace(/^\/api/, '')}`
+                );
+                expect(resource.status).toBe(200);
+                expect(
+                    resource.headers.get('access-control-allow-origin')
+                ).toBe('*');
+                expect(await resource.text()).not.toContain('secret-password');
+            });
+        });
+    });
+
+    it('returns a retryable response when cast resource capacity is protected', async () => {
+        const resourceSpy = jest
+            .spyOn(MediaSessionStore.prototype, 'createRemotePlaybackResource')
+            .mockImplementation(() => {
+                throw new RemotePlaybackCapacityError();
+            });
+        try {
+            await withProvider(async (providerUrl) => {
+                const app = createWebBackendApp({
+                    allowPrivateNetworkTargets: true,
+                    runtimeBackendUrl: '/api',
+                    zenPlayXtreamUrl: providerUrl,
+                });
+                await withServer(app, async (backendUrl) => {
+                    const targetId = await registerProviderTarget(
+                        backendUrl,
+                        providerUrl
+                    );
+                    const login = await loginRequest(backendUrl, targetId);
+                    const ticketResponse = await fetch(
+                        `${backendUrl}/media/cast`,
+                        {
+                            body: JSON.stringify({
+                                adaptive: false,
+                                extension: 'm3u8',
+                                kind: 'live',
+                                streamId: '8',
+                            }),
+                            headers: {
+                                Cookie: cookiePair(login),
+                                'content-type': 'application/json',
+                            },
+                            method: 'POST',
+                        }
+                    );
+                    const ticket = (await ticketResponse.json()) as {
+                        url: string;
+                    };
+
+                    const manifest = await fetch(
+                        `${backendUrl}${ticket.url.replace(/^\/api/, '')}`
+                    );
+                    expect(manifest.status).toBe(429);
+                    expect(manifest.headers.get('retry-after')).toBe('60');
+                    await expect(manifest.json()).resolves.toMatchObject({
+                        status: 429,
+                    });
+                });
+            });
+        } finally {
+            resourceSpy.mockRestore();
+        }
+    });
+
+    it('keeps an activated cast URL valid for later Range requests', async () => {
+        await withProvider(async (providerUrl) => {
+            let timestamp = new Date('2026-01-01T00:00:00Z');
+            const app = createWebBackendApp({
+                allowPrivateNetworkTargets: true,
+                now: () => timestamp,
+                remotePlaybackTicketTtlMs: 500,
+                runtimeBackendUrl: '/api',
+                zenPlayXtreamUrl: providerUrl,
+            });
+            await withServer(app, async (backendUrl) => {
+                const targetId = await registerProviderTarget(
+                    backendUrl,
+                    providerUrl
+                );
+                const login = await loginRequest(backendUrl, targetId);
+                const ticketResponse = await fetch(`${backendUrl}/media/cast`, {
+                    body: JSON.stringify({
+                        adaptive: false,
+                        extension: 'ts',
+                        kind: 'live',
+                        streamId: '7',
+                    }),
+                    headers: {
+                        Cookie: cookiePair(login),
+                        'content-type': 'application/json',
+                    },
+                    method: 'POST',
+                });
+                const ticket = (await ticketResponse.json()) as {
+                    url: string;
+                };
+                const castUrl = `${backendUrl}${ticket.url.replace(
+                    /^\/api/,
+                    ''
+                )}`;
+                const first = await fetch(castUrl, {
+                    headers: { Range: 'bytes=1-3' },
+                });
+                expect(first.status).toBe(206);
+                await first.arrayBuffer();
+
+                timestamp = new Date(timestamp.getTime() + 901);
+                const later = await fetch(castUrl, {
+                    headers: { Range: 'bytes=1-3' },
+                });
+                expect(later.status).toBe(206);
+                await expect(later.text()).resolves.toBe('234');
+            });
+        });
+    });
+
+    it('revokes an existing cast when account A is replaced by account B', async () => {
+        const mediaPaths: string[] = [];
+        await withProvider(
+            async (providerUrl) => {
+                const app = createWebBackendApp({
+                    allowPrivateNetworkTargets: true,
+                    runtimeBackendUrl: '/api',
+                    zenPlayXtreamUrl: providerUrl,
+                });
+                await withServer(app, async (backendUrl) => {
+                    const targetId = await registerProviderTarget(
+                        backendUrl,
+                        providerUrl
+                    );
+                    const firstLogin = await loginRequest(backendUrl, targetId);
+                    const ticketResponse = await fetch(
+                        `${backendUrl}/media/cast`,
+                        {
+                            body: JSON.stringify({
+                                adaptive: false,
+                                extension: 'ts',
+                                kind: 'live',
+                                streamId: '7',
+                            }),
+                            headers: {
+                                Cookie: cookiePair(firstLogin),
+                                'content-type': 'application/json',
+                            },
+                            method: 'POST',
+                        }
+                    );
+                    const ticket = (await ticketResponse.json()) as {
+                        url: string;
+                    };
+                    const secondLogin = await loginRequest(
+                        backendUrl,
+                        targetId,
+                        'second-password',
+                        cookiePair(firstLogin)
+                    );
+                    expect(secondLogin.status).toBe(200);
+
+                    const oldCast = await fetch(
+                        `${backendUrl}${ticket.url.replace(/^\/api/, '')}`,
+                        { headers: { Range: 'bytes=1-3' } }
+                    );
+                    expect(oldCast.status).toBe(410);
+                    expect(mediaPaths).toHaveLength(0);
+                });
+            },
+            undefined,
+            (url) => {
+                if (url.pathname.endsWith('/7.ts')) {
+                    mediaPaths.push(url.pathname);
+                }
+            }
+        );
+    });
+
+    it('revokes one cast ticket through an authenticated same-origin DELETE', async () => {
+        await withProvider(async (providerUrl) => {
+            const app = createWebBackendApp({
+                allowPrivateNetworkTargets: true,
+                runtimeBackendUrl: '/api',
+                zenPlayXtreamUrl: providerUrl,
+            });
+            await withServer(app, async (backendUrl) => {
+                const targetId = await registerProviderTarget(
+                    backendUrl,
+                    providerUrl
+                );
+                const ownerLogin = await loginRequest(backendUrl, targetId);
+                const otherLogin = await loginRequest(backendUrl, targetId);
+                const ticketResponse = await fetch(`${backendUrl}/media/cast`, {
+                    body: JSON.stringify({
+                        adaptive: false,
+                        extension: 'ts',
+                        kind: 'live',
+                        streamId: '7',
+                    }),
+                    headers: {
+                        Cookie: cookiePair(ownerLogin),
+                        'content-type': 'application/json',
+                    },
+                    method: 'POST',
+                });
+                const ticket = (await ticketResponse.json()) as { url: string };
+                const revokeUrl = `${backendUrl}${ticket.url
+                    .replace(/^\/api/, '')
+                    .replace(/\/stream\.[^/]+$/, '')}`;
+                const castUrl = `${backendUrl}${ticket.url.replace(
+                    /^\/api/,
+                    ''
+                )}`;
+
+                const unauthorized = await fetch(revokeUrl, {
+                    method: 'DELETE',
+                });
+                expect(unauthorized.status).toBe(401);
+                const wrongSession = await fetch(revokeUrl, {
+                    headers: { Cookie: cookiePair(otherLogin) },
+                    method: 'DELETE',
+                });
+                expect(wrongSession.status).toBe(204);
+                expect((await fetch(castUrl)).status).toBe(200);
+
+                const revoked = await fetch(revokeUrl, {
+                    headers: { Cookie: cookiePair(ownerLogin) },
+                    method: 'DELETE',
+                });
+                expect(revoked.status).toBe(204);
+                expect((await fetch(castUrl)).status).toBe(410);
+            });
+        });
+    });
+
+    it('does not activate a cast ticket until its media path is valid', async () => {
+        await withProvider(async (providerUrl) => {
+            let timestamp = new Date('2026-01-01T00:00:00Z');
+            const app = createWebBackendApp({
+                allowPrivateNetworkTargets: true,
+                now: () => timestamp,
+                remotePlaybackTicketTtlMs: 500,
+                runtimeBackendUrl: '/api',
+                zenPlayXtreamUrl: providerUrl,
+            });
+            await withServer(app, async (backendUrl) => {
+                const targetId = await registerProviderTarget(
+                    backendUrl,
+                    providerUrl
+                );
+                const login = await loginRequest(backendUrl, targetId);
+                const ticketResponse = await fetch(`${backendUrl}/media/cast`, {
+                    body: JSON.stringify({
+                        adaptive: false,
+                        extension: 'mp4',
+                        kind: 'movie',
+                        streamId: '7',
+                    }),
+                    headers: {
+                        Cookie: cookiePair(login),
+                        'content-type': 'application/json',
+                    },
+                    method: 'POST',
+                });
+                const ticket = (await ticketResponse.json()) as { url: string };
+                const validUrl = `${backendUrl}${ticket.url.replace(
+                    /^\/api/,
+                    ''
+                )}`;
+
+                expect(
+                    (await fetch(validUrl.replace(/\.mp4$/, '.mkv'))).status
+                ).toBe(404);
+                timestamp = new Date(timestamp.getTime() + 501);
+                expect((await fetch(validUrl)).status).toBe(410);
+            });
+        });
+    });
+
+    it('revokes cast tickets when the browser media session logs out', async () => {
+        await withProvider(async (providerUrl) => {
+            const app = createWebBackendApp({
+                allowPrivateNetworkTargets: true,
+                runtimeBackendUrl: '/api',
+                zenPlayXtreamUrl: providerUrl,
+            });
+            await withServer(app, async (backendUrl) => {
+                const targetId = await registerProviderTarget(
+                    backendUrl,
+                    providerUrl
+                );
+                const login = await loginRequest(backendUrl, targetId);
+                const cookie = cookiePair(login);
+                const ticketResponse = await fetch(`${backendUrl}/media/cast`, {
+                    body: JSON.stringify({
+                        adaptive: false,
+                        extension: 'ts',
+                        kind: 'live',
+                        streamId: '7',
+                    }),
+                    headers: {
+                        Cookie: cookie,
+                        'content-type': 'application/json',
+                    },
+                    method: 'POST',
+                });
+                const ticket = (await ticketResponse.json()) as { url: string };
+                const castUrl = `${backendUrl}${ticket.url.replace(
+                    /^\/api/,
+                    ''
+                )}`;
+
+                expect(
+                    (
+                        await fetch(`${backendUrl}/media/session`, {
+                            headers: { Cookie: cookie },
+                            method: 'DELETE',
+                        })
+                    ).status
+                ).toBe(204);
+                expect((await fetch(castUrl)).status).toBe(410);
+            });
+        });
+    });
+
+    it('requires a media session and a strictly validated item to issue a cast URL', async () => {
+        await withProvider(async (providerUrl) => {
+            const app = createWebBackendApp({
+                allowPrivateNetworkTargets: true,
+                runtimeBackendUrl: '/api',
+                zenPlayXtreamUrl: providerUrl,
+            });
+            await withServer(app, async (backendUrl) => {
+                const withoutSession = await fetch(`${backendUrl}/media/cast`, {
+                    body: JSON.stringify({
+                        extension: 'mp4',
+                        kind: 'movie',
+                        streamId: '1',
+                    }),
+                    headers: { 'content-type': 'application/json' },
+                    method: 'POST',
+                });
+                expect(withoutSession.status).toBe(401);
+
+                const targetId = await registerProviderTarget(
+                    backendUrl,
+                    providerUrl
+                );
+                const login = await loginRequest(backendUrl, targetId);
+                const invalid = await fetch(`${backendUrl}/media/cast`, {
+                    body: JSON.stringify({
+                        extension: '../../player_api.php',
+                        kind: 'movie',
+                        streamId: '1',
+                    }),
+                    headers: {
+                        Cookie: cookiePair(login),
+                        'content-type': 'application/json',
+                    },
+                    method: 'POST',
+                });
+                expect(invalid.status).toBe(400);
             });
         });
     });
@@ -322,11 +795,12 @@ function cookiePair(response: Response): string {
 
 async function withProvider(
     callback: (providerUrl: string) => Promise<void>,
-    onSlowClose?: () => void
+    onSlowClose?: () => void,
+    onRequest?: (url: URL) => void
 ): Promise<void> {
     let providerUrl = '';
     const server = createServer((req, res) =>
-        providerResponse(req, res, providerUrl, onSlowClose)
+        providerResponse(req, res, providerUrl, onSlowClose, onRequest)
     );
     await new Promise<void>((resolve) =>
         server.listen(0, '127.0.0.1', resolve)
@@ -347,19 +821,22 @@ function providerResponse(
     req: IncomingMessage,
     res: ServerResponse,
     providerUrl: string,
-    onSlowClose?: () => void
+    onSlowClose?: () => void,
+    onRequest?: (url: URL) => void
 ): void {
     const url = new URL(req.url ?? '/', providerUrl);
+    onRequest?.(url);
     if (url.pathname.endsWith('/player_api.php')) {
         const password = url.searchParams.get('password');
+        const authorized =
+            password === 'secret-password' || password === 'second-password';
         res.setHeader('content-type', 'application/json');
         res.end(
             JSON.stringify({
                 user_info: {
-                    auth: password === 'secret-password' ? 1 : 0,
+                    auth: authorized ? 1 : 0,
                     password,
-                    status:
-                        password === 'secret-password' ? 'Active' : 'Disabled',
+                    status: authorized ? 'Active' : 'Disabled',
                     username: url.searchParams.get('username'),
                 },
             })

@@ -165,12 +165,10 @@
                             [disabled]="isLoading() || !canPreviousEpisode()"
                             (click)="requestPreviousEpisode()"
                             [attr.aria-label]="
-                                'EMBEDDED_MPV.PLAYER.PREVIOUS_EPISODE'
-                                    | translate
+                                previousNavigationLabelKey() | translate
                             "
                             [matTooltip]="
-                                'EMBEDDED_MPV.PLAYER.PREVIOUS_EPISODE'
-                                    | translate
+                                previousNavigationLabelKey() | translate
                             "
                             matTooltipPosition="above"
                         >
@@ -185,10 +183,10 @@
                             [disabled]="isLoading() || !canNextEpisode()"
                             (click)="requestNextEpisode()"
                             [attr.aria-label]="
-                                'EMBEDDED_MPV.PLAYER.NEXT_EPISODE' | translate
+                                nextNavigationLabelKey() | translate
                             "
                             [matTooltip]="
-                                'EMBEDDED_MPV.PLAYER.NEXT_EPISODE' | translate
+                                nextNavigationLabelKey() | translate
                             "
                             matTooltipPosition="above"
                         >

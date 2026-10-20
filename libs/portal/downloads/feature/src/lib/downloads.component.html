@@ -35,12 +35,13 @@
                     class="downloads__folder"
                     data-test-id="downloads-folder"
                     [matTooltip]="
-                        downloadFolder() || ('DOWNLOADS.NO_FOLDER' | translate)
+                        displayedDownloadFolder() ||
+                        ('DOWNLOADS.NO_FOLDER' | translate)
                     "
-                    [attr.title]="downloadFolder() || null"
+                    [attr.title]="displayedDownloadFolder() || null"
                 >
                     <mat-icon aria-hidden="true">folder_open</mat-icon>
-                    @if (downloadFolder(); as folder) {
+                    @if (displayedDownloadFolder(); as folder) {
                         <span
                             class="downloads__folder-path"
                             [attr.aria-label]="folder"
@@ -64,13 +65,16 @@
                         <span>{{ 'DOWNLOADS.NO_FOLDER' | translate }}</span>
                     }
                 </div>
-                <button
-                    mat-stroked-button
-                    type="button"
-                    (click)="changeFolder()"
-                >
-                    {{ 'DOWNLOADS.CHANGE_FOLDER' | translate }}
-                </button>
+                @if (nativeFileActionsAvailable()) {
+                    <button
+                        mat-stroked-button
+                        type="button"
+                        data-test-id="downloads-change-folder"
+                        (click)="changeFolder()"
+                    >
+                        {{ 'DOWNLOADS.CHANGE_FOLDER' | translate }}
+                    </button>
+                }
                 @if (model().hasClearable) {
                     <button
                         mat-stroked-button
@@ -231,6 +235,7 @@
                 [activeItems]="recordingModel().active"
                 [attentionItems]="recordingModel().attention"
                 [pendingIds]="recordingPendingIds()"
+                [nativeFileActions]="nativeFileActionsAvailable()"
                 (itemAction)="runRecordingAction($event)"
                 (openRequested)="openRecordingDetail($event)"
             />
@@ -244,6 +249,7 @@
             <app-download-library
                 [entities]="model().library"
                 [pendingIds]="pendingIds()"
+                [nativeFileActions]="nativeFileActionsAvailable()"
                 (itemAction)="runAction($event)"
                 (openRequested)="openOfflineDetail($event)"
                 (episodesOpened)="openDownloadedSeries($event)"
@@ -251,6 +257,7 @@
             <app-recording-library
                 [items]="recordingModel().library"
                 [pendingIds]="recordingPendingIds()"
+                [nativeFileActions]="nativeFileActionsAvailable()"
                 (itemAction)="runRecordingAction($event)"
                 (openRequested)="openRecordingDetail($event)"
             />

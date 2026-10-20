@@ -31,9 +31,7 @@ export interface BuildRecordingManagerViewModelInput {
     readonly searchTerm?: string;
 }
 
-export function recordingDurationSeconds(
-    item: RecordingItem
-): number | null {
+export function recordingDurationSeconds(item: RecordingItem): number | null {
     if (!item.endedAt) {
         return null;
     }
@@ -54,9 +52,7 @@ export function recordingDurationSeconds(
  * on the TOTAL before splitting into hours, so a 59:45 recording reads
  * "1 h", never "60 min" (or "1 h 60 min" an hour later).
  */
-export function recordingDurationLabel(
-    totalSeconds: number | null
-): string {
+export function recordingDurationLabel(totalSeconds: number | null): string {
     if (totalSeconds === null || totalSeconds <= 0) {
         return '';
     }
@@ -69,13 +65,26 @@ export function recordingDurationLabel(
     return `${Math.max(1, minutes)} min`;
 }
 
+export function recordingFormatLabel(item: RecordingItem): string {
+    const mime = item.browserMimeType?.split(';', 1)[0].trim().toLowerCase();
+    if (mime === 'video/webm') return 'WebM';
+    if (mime === 'video/mp4') return 'MP4';
+    if (mime === 'video/mp2t') return 'MPEG-TS';
+
+    const extension = item.filePath
+        .match(/\.([a-z0-9]+)$/iu)?.[1]
+        ?.toLowerCase();
+    if (extension === 'webm') return 'WebM';
+    if (extension === 'mp4') return 'MP4';
+    if (extension === 'ts' || extension === 'm2ts') return 'MPEG-TS';
+    return extension?.toUpperCase() ?? 'MPEG-TS';
+}
+
 function isPlayableStatus(item: RecordingItem): boolean {
     return item.status === 'completed' || item.status === 'interrupted';
 }
 
-function attentionReason(
-    item: RecordingItem
-): RecordingAttentionReason | null {
+function attentionReason(item: RecordingItem): RecordingAttentionReason | null {
     if (item.status === 'failed') {
         return 'failed';
     }
@@ -96,7 +105,10 @@ function toRow(item: RecordingItem): RecordingRowViewModel {
     };
 }
 
-function matchesSearch(row: RecordingRowViewModel, searchTerm: string): boolean {
+function matchesSearch(
+    row: RecordingRowViewModel,
+    searchTerm: string
+): boolean {
     const query = foldSearchText(searchTerm.trim());
     return (
         query.length === 0 ||

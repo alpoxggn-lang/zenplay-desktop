@@ -7,6 +7,58 @@ import {
 } from './web-backend-app.spec-helpers';
 
 describe('web backend Xtream POST transport', () => {
+    it('disables credential-bearing GET only for managed deployments while keeping POST available', async () => {
+        const httpClient = new StubHttpClient();
+        httpClient.queueResponse({ user_info: { username: 'demo' } });
+        const managedUrl = 'https://xtream.example/panel';
+
+        await withServer(
+            createWebBackendApp({
+                disableXtreamGet: true,
+                httpClient,
+                resolveHostname: resolvePublicHost,
+                zenPlayXtreamUrl: managedUrl,
+            }),
+            async (baseUrl) => {
+                const targetId = await registerProviderTarget(
+                    baseUrl,
+                    managedUrl
+                );
+                const getResponse = await fetch(
+                    `${baseUrl}/xtream?targetId=${targetId}&username=demo&password=secret`
+                );
+
+                expect(getResponse.status).toBe(405);
+                expect(getResponse.headers.get('allow')).toBe('POST, OPTIONS');
+                await expect(getResponse.json()).resolves.toEqual({
+                    message: 'Xtream GET is disabled; use POST',
+                    status: 405,
+                });
+                expect(httpClient.requests).toEqual([]);
+
+                const postResponse = await fetch(`${baseUrl}/xtream`, {
+                    body: JSON.stringify({
+                        targetId,
+                        params: {
+                            action: 'get_account_info',
+                            password: 'secret',
+                            username: 'demo',
+                        },
+                    }),
+                    headers: { 'content-type': 'application/json' },
+                    method: 'POST',
+                });
+
+                expect(postResponse.status).toBe(200);
+                await expect(postResponse.json()).resolves.toEqual({
+                    action: 'get_account_info',
+                    payload: { user_info: { username: 'demo' } },
+                });
+                expect(httpClient.requests).toHaveLength(1);
+            }
+        );
+    });
+
     it('keeps Xtream credentials out of the backend request URL', async () => {
         const httpClient = new StubHttpClient();
         httpClient.queueResponse({ user_info: { username: 'demo' } });

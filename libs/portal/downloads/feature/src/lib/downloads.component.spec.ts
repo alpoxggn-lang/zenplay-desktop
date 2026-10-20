@@ -18,6 +18,7 @@ import {
     PlaylistsService,
     type RecordingItem,
     RecordingsService,
+    RuntimeCapabilitiesService,
 } from '@iptvnator/services';
 import {
     PORTAL_SHELL_ACTIONS,
@@ -180,12 +181,14 @@ describe('DownloadsComponent', () => {
         playFile: jest.Mock;
         revealFile: jest.Mock;
     };
+    let runtimeCapabilities: { isPwa: boolean };
 
     const success = async () => ({ success: true });
 
     beforeEach(async () => {
         downloads = signal<DownloadItem[]>([]);
         recordings = signal<RecordingItem[]>([]);
+        runtimeCapabilities = { isPwa: false };
         recordingsService = {
             recordings,
             isAvailable: signal(false),
@@ -299,6 +302,10 @@ describe('DownloadsComponent', () => {
                 {
                     provide: RecordingsService,
                     useValue: recordingsService,
+                },
+                {
+                    provide: RuntimeCapabilitiesService,
+                    useValue: runtimeCapabilities,
                 },
                 {
                     provide: PlaylistsService,
@@ -437,6 +444,19 @@ describe('DownloadsComponent', () => {
                 .querySelector('[data-test-id="downloads-folder"]')
                 ?.getAttribute('title')
         ).toBe(folder);
+    });
+
+    it('hides native folder actions in the browser runtime', () => {
+        fixture.destroy();
+        runtimeCapabilities.isPwa = true;
+        fixture = TestBed.createComponent(DownloadsComponent);
+        fixture.detectChanges();
+
+        expect(
+            fixture.nativeElement.querySelector(
+                '[data-test-id="downloads-change-folder"]'
+            )
+        ).toBeNull();
     });
 
     it('shapes the loading state as both queue rows and poster cards', () => {

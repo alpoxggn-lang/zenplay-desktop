@@ -65,7 +65,8 @@ export class DownloadManagerActionsService {
 
     showActionError(error?: string): void {
         const base = this.translate.instant('DOWNLOADS.ACTION_FAILED');
-        this.snackBar.open(error ? `${base}: ${error}` : base, undefined, {
+        const detail = error ? this.translate.instant(error) : '';
+        this.snackBar.open(detail ? `${base}: ${detail}` : base, undefined, {
             duration: 4000,
             horizontalPosition: 'start',
         });

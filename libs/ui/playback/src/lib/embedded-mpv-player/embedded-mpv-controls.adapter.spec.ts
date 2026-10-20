@@ -277,6 +277,24 @@ describe('EmbeddedMpvControlsAdapter', () => {
         expect(adapter.state().canNextEpisode).toBe(false);
     });
 
+    it('keeps adjacent-channel controls available during live playback', () => {
+        playback.set(LIVE_PLAYBACK);
+        seriesNavigation.set({
+            canPrevious: true,
+            canNext: true,
+            autoplayEnabled: false,
+            kind: 'channel',
+        });
+        configure();
+
+        expect(adapter.capabilities().seriesNavigation).toBe(true);
+        expect(adapter.state()).toMatchObject({
+            canPreviousEpisode: true,
+            canNextEpisode: true,
+            adjacentNavigationKind: 'channel',
+        });
+    });
+
     it('maps session state, presets, seekability, stalled state, and reactive series navigation', () => {
         configure();
         controller.stalled.set(true);

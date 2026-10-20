@@ -116,6 +116,10 @@ export class EmbeddedMpvControlsAdapter implements PlayerController {
         }
 
         const isLive = this.isLivePlayback(context.playback());
+        const adjacentNavigation = context.seriesNavigation();
+        const hasAdjacentNavigation =
+            adjacentNavigation !== null &&
+            (!isLive || adjacentNavigation.kind === 'channel');
         const optionalCapabilities = this.controller.support()?.capabilities;
 
         return {
@@ -132,7 +136,7 @@ export class EmbeddedMpvControlsAdapter implements PlayerController {
             recording: optionalCapabilities?.recording ?? false,
             pictureInPicture: false,
             fullscreen: true,
-            seriesNavigation: !isLive && context.seriesNavigation() !== null,
+            seriesNavigation: hasAdjacentNavigation,
             streamStats: this.hasStreamStats(),
         };
     });
@@ -152,7 +156,9 @@ export class EmbeddedMpvControlsAdapter implements PlayerController {
             ? null
             : (session?.durationSeconds ?? null);
         const seriesNavigation = context.seriesNavigation();
-        const hasSeriesNavigation = !isLive && seriesNavigation !== null;
+        const hasSeriesNavigation =
+            seriesNavigation !== null &&
+            (!isLive || seriesNavigation.kind === 'channel');
         const mappedStatus = this.mapStatus(support, session);
         const recording = session?.recording;
 
@@ -219,6 +225,7 @@ export class EmbeddedMpvControlsAdapter implements PlayerController {
                 hasSeriesNavigation && seriesNavigation?.canPrevious === true,
             canNextEpisode:
                 hasSeriesNavigation && seriesNavigation?.canNext === true,
+            adjacentNavigationKind: seriesNavigation?.kind ?? 'episode',
         };
     });
 

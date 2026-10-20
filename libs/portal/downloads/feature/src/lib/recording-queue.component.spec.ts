@@ -11,6 +11,10 @@ const TEST_TRANSLATIONS = {
     DOWNLOADS: {
         RECORDING_NOW: 'Recording now',
         RECORDING_CHIP: 'REC',
+        BROWSER: {
+            RECORDING_ACTIVE_OTHER_TAB:
+                'The recording is still active in another tab.',
+        },
         NEEDS_ATTENTION: 'Needs attention',
         STOP_RECORDING: 'Stop recording',
         REMOVE_FROM_MANAGER: 'Remove from manager',
@@ -121,9 +125,7 @@ describe('RecordingQueueComponent', () => {
     });
 
     it('renders an active recording with REC elapsed chip and stop as the only primary action', () => {
-        jest.useFakeTimers().setSystemTime(
-            new Date('2026-08-15T12:01:30Z')
-        );
+        jest.useFakeTimers().setSystemTime(new Date('2026-08-15T12:01:30Z'));
         const item = createItem(1, 'recording', {
             programTitle: 'Evening news',
             fileSizeBytes: 1.5 * 1024 ** 2,
@@ -159,9 +161,7 @@ describe('RecordingQueueComponent', () => {
         expect(recChip?.textContent?.replace(/\s+/g, ' ').trim()).toBe(
             'REC 01:30'
         );
-        expect(
-            host.querySelector('.recording-queue__progress')
-        ).not.toBeNull();
+        expect(host.querySelector('.recording-queue__progress')).not.toBeNull();
         expect(
             host.querySelector('.recording-queue__bytes')?.textContent
         ).toContain('1.5 MB');
@@ -239,6 +239,45 @@ describe('RecordingQueueComponent', () => {
             { type: 'remove', item },
             { type: 'remove', item },
         ]);
+    });
+
+    it('hides reveal-in-folder for browser-private recordings', async () => {
+        const item = createItem(6, 'completed');
+        fixture.componentRef.setInput('nativeFileActions', false);
+        render([], [createRow(item)]);
+
+        const host = row(6);
+        actionButton(host, 'more').click();
+        fixture.detectChanges();
+        await fixture.whenStable();
+
+        expect(
+            overlayContainer
+                .getContainerElement()
+                .querySelector('[data-test-action="reveal-recording"]')
+        ).toBeNull();
+    });
+
+    it('does not offer stop for a recording owned by another browser tab', () => {
+        const item = createItem(7, 'recording', {
+            browserOwnedByThisTab: false,
+        });
+        fixture.componentRef.setInput('nativeFileActions', false);
+        render([createRow(item)], []);
+
+        const host = row(7);
+        expect(
+            host.querySelector('[data-test-action="stop-recording"]')
+        ).toBeNull();
+        expect(
+            host.querySelector('[data-test-action="remove-recording"]')
+        ).toBeNull();
+        expect(host.querySelector('[data-test-action="more"]')).toBeNull();
+        expect(
+            host
+                .querySelector('[data-testid="recording-active-other-tab"]')
+                ?.textContent?.trim()
+        ).toBe('The recording is still active in another tab.');
     });
 
     it('shows the failed status chip for failed recordings', () => {

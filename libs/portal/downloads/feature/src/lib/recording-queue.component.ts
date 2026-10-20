@@ -56,6 +56,7 @@ export class RecordingQueueComponent {
     readonly attentionItems =
         input.required<readonly RecordingRowViewModel[]>();
     readonly pendingIds = input<ReadonlySet<number>>(new Set());
+    readonly nativeFileActions = input(true);
     readonly itemAction = output<RecordingItemAction>();
     readonly openRequested = output<RecordingItem>();
 
@@ -107,6 +108,10 @@ export class RecordingQueueComponent {
 
     isPending(id: number): boolean {
         return this.pendingIds().has(id);
+    }
+
+    canStop(item: RecordingItem): boolean {
+        return item.browserOwnedByThisTab !== false;
     }
 
     /** Elapsed REC time from started_at against wall clock — no accumulator. */

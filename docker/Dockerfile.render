@@ -52,6 +52,8 @@ COPY --from=build /usr/src/app/dist/apps/web ./web
 COPY --from=build /usr/src/app/dist/apps/web-backend ./web-backend
 COPY --from=native /opt/native/node_modules ./web-backend/node_modules
 
+USER node
+
 EXPOSE 10000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \

@@ -115,7 +115,11 @@ describe('player watch-progress colour', () => {
                 !file.startsWith(CONTROLS_DIR + sep) &&
                 read(file).includes('var(--pc-progress')
         );
-        expect(readers.map((file) => relative(LIB_DIR, file)).sort()).toEqual([
+        expect(
+            readers
+                .map((file) => relative(LIB_DIR, file).replaceAll(sep, '/'))
+                .sort()
+        ).toEqual([
             'fullscreen-episode-panel/fullscreen-episode-panel.component.scss',
             'portal-inline-player/up-next-rail.component.scss',
         ]);

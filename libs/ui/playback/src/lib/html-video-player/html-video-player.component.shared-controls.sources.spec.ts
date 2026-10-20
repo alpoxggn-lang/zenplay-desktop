@@ -341,6 +341,51 @@ describe('HtmlVideoPlayerComponent shared controls sources', () => {
         expect(adapter.state().subtitleTracks).toEqual([]);
     });
 
+    it('unloads the local HLS engine during Cast and rebuilds it on return', () => {
+        const { adapter } = renderSharedControls(
+            HtmlVideoPlayerComponent,
+            fixtures,
+            { channel: TEST_CHANNEL, isLive: false }
+        );
+        const localHls = hlsInstances[0];
+        const remote = document.createElement('video');
+        Object.defineProperties(remote, {
+            paused: { configurable: true, value: false, writable: true },
+            pause: { configurable: true, value: jest.fn() },
+            play: {
+                configurable: true,
+                value: jest.fn().mockResolvedValue(undefined),
+            },
+        });
+
+        adapter.beginRemotePlayback(remote, {
+            muted: false,
+            playbackRate: 1,
+            playing: true,
+            positionSeconds: 12,
+            volume: 1,
+        });
+
+        expect(localHls.destroy).toHaveBeenCalledTimes(1);
+        expect(hlsInstances).toHaveLength(1);
+
+        adapter.finishRemotePlayback(
+            {
+                muted: false,
+                playbackRate: 1,
+                playing: false,
+                positionSeconds: 30,
+                volume: 1,
+            },
+            true
+        );
+
+        expect(hlsInstances).toHaveLength(2);
+        expect(hlsInstances[1].loadSource).toHaveBeenCalledWith(
+            TEST_CHANNEL.url
+        );
+    });
+
     it('destroys the bridge before HLS and detaches the adapter once', () => {
         const { component, adapter } = renderSharedControls(
             HtmlVideoPlayerComponent,

@@ -278,6 +278,10 @@ export class DownloadOfflineDetailComponent {
         return this.pendingIds().has(item.id);
     }
 
+    canRevealFile(item: OfflineDetailItem): boolean {
+        return !!item.filePath && !item.filePath.startsWith('opfs://');
+    }
+
     formatItemBytes(item: OfflineDetailItem): string | undefined {
         const bytes = offlineFileByteCount(item);
         return bytes === undefined

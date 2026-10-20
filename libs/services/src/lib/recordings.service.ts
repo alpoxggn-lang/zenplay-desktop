@@ -1,4 +1,5 @@
 import { computed, inject, Injectable, OnDestroy, signal } from '@angular/core';
+import { TranslateService } from '@ngx-translate/core';
 import type {
     ElectronBridgeErrorResult,
     RecordingProgramSnapshot,
@@ -6,8 +7,12 @@ import type {
 import { DownloadListLoadState } from './download-list-load-state';
 import type { RecordingItem } from './recordings.models';
 import { RuntimeCapabilitiesService } from './runtime-capabilities.service';
+import { browserMediaLibrary } from './browser-media-library';
+import { BROWSER_MEDIA_MESSAGES } from './browser-media-library/browser-media-messages';
 
 export type { RecordingItem } from './recordings.models';
+
+const BROWSER_RECORDING_POLL_MS = 15_000;
 
 /**
  * Global store for live-TV recordings, mirroring DownloadsService: one
@@ -17,7 +22,10 @@ export type { RecordingItem } from './recordings.models';
 @Injectable({ providedIn: 'root' })
 export class RecordingsService implements OnDestroy {
     private readonly runtime = inject(RuntimeCapabilitiesService);
+    private readonly translate = inject(TranslateService, { optional: true });
     private unsubscribe?: () => void;
+    private browserPollId?: number;
+    private destroyed = false;
     private readonly listLoadState = new DownloadListLoadState();
 
     readonly recordings = signal<RecordingItem[]>([]);
@@ -26,7 +34,7 @@ export class RecordingsService implements OnDestroy {
     readonly hasAuthoritativeRecordingList =
         this.listLoadState.hasAuthoritativeList;
 
-    /** Whether the recordings feature is available (Electron only). */
+    /** Whether recordings are available through Electron or the browser recorder. */
     readonly isAvailable = computed(() => this.runtime.supportsRecordings);
 
     readonly hasRecordings = computed(() => this.recordings().length > 0);
@@ -45,12 +53,25 @@ export class RecordingsService implements OnDestroy {
             return;
         }
 
+        if (this.usesBrowserMediaLibrary) {
+            this.unsubscribe = browserMediaLibrary.subscribe((kind) => {
+                if (kind === 'recordings') void this.loadRecordings();
+            });
+            await browserMediaLibrary.initialize();
+            await this.loadRecordings();
+            if (!this.destroyed) {
+                this.browserPollId = window.setInterval(
+                    () => void this.loadRecordings(),
+                    BROWSER_RECORDING_POLL_MS
+                );
+            }
+            return;
+        }
+
         // Subscribe BEFORE the initial load: a recording transition during
         // that request pings while the response still reflects the older
         // database state, and the load-state coalescing can only queue the
-        // trailing refresh if the listener already exists. Recording pings
-        // are rare, so a missed one would not self-heal until the 15 s poll
-        // (armed only once an active row is already visible).
+        // trailing refresh if the listener already exists.
         this.unsubscribe = window.electron.onRecordingsUpdate?.(() => {
             this.loadRecordings();
         });
@@ -58,6 +79,10 @@ export class RecordingsService implements OnDestroy {
     }
 
     ngOnDestroy() {
+        this.destroyed = true;
+        if (this.browserPollId !== undefined) {
+            window.clearInterval(this.browserPollId);
+        }
         this.unsubscribe?.();
     }
 
@@ -66,7 +91,9 @@ export class RecordingsService implements OnDestroy {
 
         return this.listLoadState.run(async () => {
             try {
-                const list = await window.electron.recordingsGetList?.();
+                const list = this.usesBrowserMediaLibrary
+                    ? await browserMediaLibrary.listRecordings()
+                    : await window.electron.recordingsGetList?.();
                 this.recordings.set(list ?? []);
                 this.listLoadState.markSucceeded();
             } catch (error) {
@@ -81,6 +108,9 @@ export class RecordingsService implements OnDestroy {
 
     async getRecording(recordingId: number): Promise<RecordingItem | null> {
         if (!this.isAvailable()) return null;
+        if (this.usesBrowserMediaLibrary) {
+            return browserMediaLibrary.getRecording(recordingId);
+        }
         try {
             return (await window.electron.recordingsGet?.(recordingId)) ?? null;
         } catch (error) {
@@ -95,6 +125,9 @@ export class RecordingsService implements OnDestroy {
     async stopRecording(
         recordingId: number
     ): Promise<ElectronBridgeErrorResult> {
+        if (this.usesBrowserMediaLibrary) {
+            return browserMediaLibrary.stopRecording(recordingId);
+        }
         return this.runAction('stop', () =>
             window.electron.recordingsStop?.(recordingId)
         );
@@ -103,6 +136,9 @@ export class RecordingsService implements OnDestroy {
     async removeRecording(
         recordingId: number
     ): Promise<ElectronBridgeErrorResult> {
+        if (this.usesBrowserMediaLibrary) {
+            return browserMediaLibrary.removeRecording(recordingId);
+        }
         return this.runAction(
             'remove',
             () => window.electron.recordingsRemove?.(recordingId),
@@ -116,18 +152,40 @@ export class RecordingsService implements OnDestroy {
         targetPath: string,
         programs: RecordingProgramSnapshot[]
     ): Promise<ElectronBridgeErrorResult> {
+        if (this.usesBrowserMediaLibrary) {
+            return browserMediaLibrary.updateRecordingPrograms(
+                targetPath,
+                programs
+            );
+        }
         return this.runAction('update programs', () =>
             window.electron.recordingsUpdatePrograms?.(targetPath, programs)
         );
     }
 
     async revealFile(filePath: string): Promise<ElectronBridgeErrorResult> {
+        if (this.usesBrowserMediaLibrary) {
+            return {
+                success: false,
+                error: BROWSER_MEDIA_MESSAGES.privateStorageOnly,
+            };
+        }
         return this.runAction('reveal', () =>
             window.electron.recordingsRevealFile?.(filePath)
         );
     }
 
     async playFile(filePath: string): Promise<ElectronBridgeErrorResult> {
+        if (this.usesBrowserMediaLibrary) {
+            const item = this.recordings().find(
+                ({ filePath: path }) => path === filePath
+            );
+            return browserMediaLibrary.playPrivateFile(
+                filePath,
+                item?.channelName ?? 'ZenPlay',
+                this.translate?.instant('CLOSE') ?? 'CLOSE'
+            );
+        }
         return this.runAction('play', () =>
             window.electron.recordingsPlayFile?.(filePath)
         );
@@ -157,5 +215,10 @@ export class RecordingsService implements OnDestroy {
                 success: false,
             };
         }
+    }
+
+    /** Kept defensive for prototype-only unit harnesses used by this service. */
+    private get usesBrowserMediaLibrary(): boolean {
+        return this.runtime?.isPwa === true;
     }
 }

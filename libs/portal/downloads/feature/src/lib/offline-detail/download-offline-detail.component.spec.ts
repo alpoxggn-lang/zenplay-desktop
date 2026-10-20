@@ -344,6 +344,21 @@ describe('DownloadOfflineDetailComponent', () => {
         expect(text()).not.toContain('Play from source');
     });
 
+    it('keeps private offline playback visible without exposing a folder action', async () => {
+        await render([
+            download(17, {
+                filePath: 'opfs://zenplay-private-media/downloads/movie-17.mp4',
+            }),
+        ]);
+
+        expect(button('offline-play')).toBeTruthy();
+        expect(
+            (fixture.nativeElement as HTMLElement).querySelector(
+                '[data-testid="movie-overflow"]'
+            )
+        ).toBeNull();
+    });
+
     it('omits sparse facts and does not format non-positive or non-finite file sizes', async () => {
         await render([
             download(17, {

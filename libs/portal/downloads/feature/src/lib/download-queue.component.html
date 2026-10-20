@@ -33,7 +33,10 @@
                             'DOWNLOADS.ARIA.OPEN'
                                 | translate: { title: row.item.title }
                         "
-                        [disabled]="isPending(row.item.id) || row.item.contentType === 'catchup'"
+                        [disabled]="
+                            isPending(row.item.id) ||
+                            row.item.contentType === 'catchup'
+                        "
                         (click)="requestOpen(row.item)"
                     >
                         @if (hasPoster(row.item)) {
@@ -74,7 +77,10 @@
                                     'DOWNLOADS.ARIA.OPEN'
                                         | translate: { title: row.item.title }
                                 "
-                                [disabled]="isPending(row.item.id) || row.item.contentType === 'catchup'"
+                                [disabled]="
+                                    isPending(row.item.id) ||
+                                    row.item.contentType === 'catchup'
+                                "
                                 (click)="requestOpen(row.item)"
                             >
                                 {{ row.item.title }}
@@ -118,7 +124,7 @@
                             </span>
                             @if (row.item.errorMessage?.trim(); as error) {
                                 <span class="download-queue__error">
-                                    {{ error }}
+                                    {{ error | translate }}
                                 </span>
                             }
                         </div>

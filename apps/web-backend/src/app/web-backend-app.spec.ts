@@ -12,6 +12,19 @@ describe('web backend app', () => {
         await withServer(createWebBackendApp(), async (baseUrl) => {
             const response = await fetch(`${baseUrl}/health`);
 
+            expect(response.headers.get('cache-control')).toBe('no-store');
+            expect(response.headers.get('content-security-policy')).toBe(
+                "frame-ancestors 'none'"
+            );
+            expect(response.headers.get('permissions-policy')).toBe(
+                'camera=(), geolocation=(), microphone=()'
+            );
+            expect(response.headers.get('referrer-policy')).toBe('no-referrer');
+            expect(response.headers.get('x-content-type-options')).toBe(
+                'nosniff'
+            );
+            expect(response.headers.get('x-frame-options')).toBe('DENY');
+            expect(response.headers.get('x-powered-by')).toBeNull();
             await expect(response.json()).resolves.toEqual({
                 status: 'ok',
                 service: 'iptvnator-web-backend',
@@ -31,10 +44,25 @@ describe('web backend app', () => {
                 expect(response.headers.get('content-type')).toContain(
                     'application/javascript'
                 );
+                expect(response.headers.get('cache-control')).toBe('no-store');
                 expect(body).toContain('window.__IPTVNATOR_CONFIG__');
                 expect(body).toContain('"BACKEND_URL":"/api"');
             }
         );
+    });
+
+    it('trusts the configured number of reverse-proxy hops', () => {
+        const original = process.env['ZENPLAY_TRUST_PROXY_HOPS'];
+        process.env['ZENPLAY_TRUST_PROXY_HOPS'] = '1';
+        try {
+            expect(createWebBackendApp().get('trust proxy')).toBe(1);
+        } finally {
+            if (original === undefined) {
+                delete process.env['ZENPLAY_TRUST_PROXY_HOPS'];
+            } else {
+                process.env['ZENPLAY_TRUST_PROXY_HOPS'] = original;
+            }
+        }
     });
 
     it('parses remote M3U playlists into the PWA playlist shape', async () => {

@@ -13,6 +13,7 @@ describe('MediaSessionStore', () => {
         timestamp = 1_000;
         store = new MediaSessionStore({
             now: () => timestamp,
+            remotePlaybackTicketTtlMs: 500,
             resourceTtlMs: 5_000,
             sessionTtlMs: 1_000,
         });
@@ -84,6 +85,186 @@ describe('MediaSessionStore', () => {
         expect(store.getResource(replacement.id, token)).toBeNull();
     });
 
+    it('scopes remote playback tickets to one item without exposing credentials', () => {
+        const session = store.issue({
+            password: 'secret-password',
+            targetBaseUrl: 'https://provider.example/',
+            username: 'viewer',
+        });
+        const token = store.createRemotePlaybackTicket(session, {
+            adaptive: false,
+            extension: 'm3u8',
+            kind: 'live',
+            streamId: '42',
+        });
+
+        expect(token).toMatch(/^[A-Za-z0-9_-]{24,}$/);
+        expect(token).not.toContain('viewer');
+        expect(token).not.toContain('secret-password');
+        expect(store.getRemotePlaybackTicket(token)).toEqual({
+            descriptor: {
+                adaptive: false,
+                extension: 'm3u8',
+                kind: 'live',
+                streamId: '42',
+            },
+            session: expect.objectContaining({ id: session.id }),
+        });
+    });
+
+    it('expires a remote playback URL that no receiver claims', () => {
+        const session = store.issue({
+            password: 'secret-password',
+            targetBaseUrl: 'https://provider.example/',
+            username: 'viewer',
+        });
+        const ticket = store.createRemotePlaybackTicket(session, {
+            adaptive: false,
+            extension: 'mp4',
+            kind: 'movie',
+            streamId: '42',
+        });
+
+        timestamp = 1_501;
+        expect(store.getRemotePlaybackTicket(ticket)).toBeNull();
+    });
+
+    it('keeps active remote resources through the issuance TTL and enforces the hard cap', () => {
+        const session = store.issue({
+            password: 'secret-password',
+            targetBaseUrl: 'https://provider.example/',
+            username: 'viewer',
+        });
+        const ticket = store.createRemotePlaybackTicket(session, {
+            adaptive: false,
+            extension: 'm3u8',
+            kind: 'movie',
+            streamId: '9',
+        });
+        const resource = store.createRemotePlaybackResource(
+            ticket,
+            new URL(
+                'https://provider.example/movie/viewer/secret-password/segment.ts'
+            )
+        );
+
+        expect(resource).toMatch(/^[A-Za-z0-9_-]{24,}$/);
+        expect(resource).not.toContain('secret-password');
+        timestamp = 1_400;
+        expect(
+            store.getRemotePlaybackResource(resource ?? '')?.url.pathname
+        ).toContain('segment.ts');
+        timestamp = 1_901;
+        expect(store.getRemotePlaybackResource(resource ?? '')).not.toBeNull();
+        timestamp = 4 * 60 * 60 * 1_000 + 1_001;
+        expect(store.getRemotePlaybackResource(resource ?? '')).toBeNull();
+    });
+
+    it('revokes the previous account cast when the browser authenticates another account', () => {
+        const first = store.issue({
+            password: 'first-password',
+            targetBaseUrl: 'https://first.example/',
+            username: 'first-user',
+        });
+        const ticket = store.createRemotePlaybackTicket(first, {
+            adaptive: false,
+            extension: 'mp4',
+            kind: 'movie',
+            streamId: '12',
+        });
+
+        store.issue({
+            currentSessionId: first.id,
+            password: 'second-password',
+            targetBaseUrl: 'https://second.example/',
+            username: 'second-user',
+        });
+
+        expect(store.getRemotePlaybackTicket(ticket)).toBeNull();
+    });
+
+    it('derives a stable opaque source identity without using the password', () => {
+        const first = store.issue({
+            password: 'one',
+            targetBaseUrl: 'https://Provider.Example/base',
+            username: 'viewer',
+        });
+        const sameSource = store.issue({
+            password: 'two',
+            targetBaseUrl: 'https://provider.example/base/',
+            username: 'viewer',
+        });
+        const otherUser = store.issue({
+            password: 'one',
+            targetBaseUrl: 'https://provider.example/base/',
+            username: 'other',
+        });
+        const otherServer = store.issue({
+            password: 'one',
+            targetBaseUrl: 'https://other.example/base/',
+            username: 'viewer',
+        });
+        const otherTenant = store.issue({
+            password: 'one',
+            targetBaseUrl: 'https://provider.example/base/?tenant=two',
+            username: 'viewer',
+        });
+
+        expect(first.sourceId).toMatch(/^[A-Za-z0-9_-]{43}$/);
+        expect(sameSource.sourceId).toBe(first.sourceId);
+        expect(otherUser.sourceId).not.toBe(first.sourceId);
+        expect(otherServer.sourceId).not.toBe(first.sourceId);
+        expect(otherTenant.sourceId).not.toBe(first.sourceId);
+        expect(first.sourceId).not.toContain('viewer');
+    });
+
+    it('revokes remote playback tickets and resources with their media session', () => {
+        const session = store.issue({
+            password: 'secret-password',
+            targetBaseUrl: 'https://provider.example/',
+            username: 'viewer',
+        });
+        const ticket = store.createRemotePlaybackTicket(session, {
+            adaptive: false,
+            extension: 'mp4',
+            kind: 'series',
+            streamId: '12',
+        });
+        const resource = store.createRemotePlaybackResource(
+            ticket,
+            new URL('https://provider.example/segment.ts')
+        );
+
+        store.revoke(session.id);
+
+        expect(store.getRemotePlaybackTicket(ticket)).toBeNull();
+        expect(store.getRemotePlaybackResource(resource ?? '')).toBeNull();
+    });
+
+    it('allows only the owning media session to revoke one cast ticket', () => {
+        const owner = store.issue({
+            password: 'owner-password',
+            targetBaseUrl: 'https://provider.example/',
+            username: 'owner',
+        });
+        const other = store.issue({
+            password: 'other-password',
+            targetBaseUrl: 'https://provider.example/',
+            username: 'other',
+        });
+        const ticket = store.createRemotePlaybackTicket(owner, {
+            adaptive: false,
+            extension: 'mp4',
+            kind: 'movie',
+            streamId: '12',
+        });
+
+        expect(store.revokeRemotePlaybackTicket(other.id, ticket)).toBe(false);
+        expect(store.getRemotePlaybackTicket(ticket, false)).not.toBeNull();
+        expect(store.revokeRemotePlaybackTicket(owner.id, ticket)).toBe(true);
+        expect(store.getRemotePlaybackTicket(ticket)).toBeNull();
+    });
+
     it('reuses the current session when the account refresh keeps the same identity', () => {
         const first = store.issue({
             password: 'secret',
@@ -137,6 +318,19 @@ describe('MediaSessionStore', () => {
         });
 
         expect(second.id).not.toBe(first.id);
+    });
+
+    it('evicts the least recently used session at the global budget', () => {
+        const sessions = Array.from({ length: 1_025 }, (_, index) =>
+            store.issue({
+                password: `password-${index}`,
+                targetBaseUrl: 'https://provider.example/',
+                username: `viewer-${index}`,
+            })
+        );
+
+        expect(store.get(sessions[0].id)).toBeNull();
+        expect(store.get(sessions.at(-1)?.id)).not.toBeNull();
     });
 
     it('expires a stale-cookie replacement with the underlying session', () => {

@@ -28,6 +28,7 @@ import { RecordingManagerActionsService } from '../recording-manager-actions.ser
 import {
     recordingDurationLabel,
     recordingDurationSeconds,
+    recordingFormatLabel,
 } from '../recording-manager.viewmodel';
 
 /**
@@ -107,6 +108,10 @@ export class RecordingDetailComponent {
         const bytes = this.item()?.fileSizeBytes;
         return bytes ? formatDownloadBytes(bytes) : '';
     });
+    readonly formatLabel = computed(() => {
+        const item = this.item();
+        return item ? recordingFormatLabel(item) : '';
+    });
     /** ≥2 covered programs — the boundary-crossing case worth listing. */
     readonly coveredPrograms = computed(() => {
         const programs = this.item()?.programs ?? [];
@@ -164,5 +169,14 @@ export class RecordingDetailComponent {
     isPending(): boolean {
         const item = this.item();
         return item !== null && this.pendingIds().has(item.id);
+    }
+
+    canStop(): boolean {
+        return this.item()?.browserOwnedByThisTab !== false;
+    }
+
+    canRevealFile(): boolean {
+        const filePath = this.item()?.filePath;
+        return !!filePath && !filePath.startsWith('opfs://');
     }
 }

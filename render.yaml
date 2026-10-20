@@ -11,3 +11,9 @@ services:
     envVars:
       - key: ZENPLAY_XTREAM_URL
         sync: false
+      - key: ZENPLAY_DISABLE_XTREAM_GET
+        value: "1"
+      - key: ZENPLAY_MEDIA_SOURCE_SECRET
+        generateValue: true
+      - key: ZENPLAY_TRUST_PROXY_HOPS
+        value: "1"

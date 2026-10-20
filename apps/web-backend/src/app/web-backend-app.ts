@@ -91,10 +91,16 @@ export interface WebBackendAppOptions {
     readonly storage?: ServerStorage | null;
     /** Managed deployments may restrict registration to one Xtream server. */
     readonly zenPlayXtreamUrl?: string | null;
+    /** Number of reverse-proxy hops Express may trust for forwarded metadata. */
+    readonly trustProxyHops?: number;
+    /** Managed deployments may require credential-safe POST Xtream requests. */
+    readonly disableXtreamGet?: boolean;
     /** Test-only escape hatch; production media cookies are always Secure. */
     readonly mediaSecureCookie?: boolean;
     readonly mediaSessionTtlMs?: number;
     readonly mediaResourceTtlMs?: number;
+    readonly remotePlaybackTicketTtlMs?: number;
+    readonly mediaSourceSecret?: string;
     /** Injectable adaptive MKV gateway; defaults to the local FFmpeg runtime. */
     readonly adaptiveMedia?: AdaptiveMediaGateway;
 }
@@ -116,6 +122,22 @@ export function createWebBackendApp(
     options: WebBackendAppOptions = {}
 ): Express {
     const app = express();
+    app.disable('x-powered-by');
+    const trustProxyHops =
+        options.trustProxyHops ?? getConfiguredTrustProxyHops();
+    if (trustProxyHops > 0) {
+        app.set('trust proxy', trustProxyHops);
+    }
+    app.use((_req, res, next) => {
+        res.set({
+            'Content-Security-Policy': "frame-ancestors 'none'",
+            'Permissions-Policy': 'camera=(), geolocation=(), microphone=()',
+            'Referrer-Policy': 'no-referrer',
+            'X-Content-Type-Options': 'nosniff',
+            'X-Frame-Options': 'DENY',
+        });
+        next();
+    });
     const guid = options.guid ?? createGuid;
     const now = options.now ?? (() => new Date());
     const hostGuard =
@@ -146,11 +168,19 @@ export function createWebBackendApp(
         options.zenPlayXtreamUrl === undefined
             ? process.env['ZENPLAY_XTREAM_URL']
             : options.zenPlayXtreamUrl;
+    const disableXtreamGet =
+        options.disableXtreamGet ??
+        isEnvironmentFlagEnabled('ZENPLAY_DISABLE_XTREAM_GET');
+    const isManagedZenPlayDeployment = Boolean(zenPlayXtreamUrl?.trim());
     const mediaSecureCookie = options.mediaSecureCookie ?? true;
     const mediaSessions = new MediaSessionStore({
         now: () => now().getTime(),
         sessionTtlMs: options.mediaSessionTtlMs,
         resourceTtlMs: options.mediaResourceTtlMs,
+        remotePlaybackTicketTtlMs: options.remotePlaybackTicketTtlMs,
+        sourceIdentitySecret:
+            options.mediaSourceSecret ??
+            (process.env['ZENPLAY_MEDIA_SOURCE_SECRET']?.trim() || undefined),
     });
     const adaptiveMedia =
         options.adaptiveMedia ?? new AdaptiveMediaManager(httpClient);
@@ -171,15 +201,20 @@ export function createWebBackendApp(
     });
 
     app.get('/', (_req, res) => res.send('IPTVnator web backend'));
-    app.get('/health', (_req, res) =>
-        res.json({ status: 'ok', service: 'iptvnator-web-backend' })
-    );
+    app.get('/health', (_req, res) => {
+        res.set('Cache-Control', 'no-store').json({
+            status: 'ok',
+            service: 'iptvnator-web-backend',
+        });
+    });
 
     app.get('/config.js', corsMiddleware, (_req, res) => {
         const config = JSON.stringify({ BACKEND_URL: runtimeBackendUrl });
-        res.type('application/javascript').send(
-            `window.__IPTVNATOR_CONFIG__ = Object.assign({}, window.__IPTVNATOR_CONFIG__, ${config});\n`
-        );
+        res.set('Cache-Control', 'no-store')
+            .type('application/javascript')
+            .send(
+                `window.__IPTVNATOR_CONFIG__ = Object.assign({}, window.__IPTVNATOR_CONFIG__, ${config});\n`
+            );
     });
 
     mountServerStorage(app, {
@@ -248,6 +283,11 @@ export function createWebBackendApp(
 
             if (!rawUrl) {
                 res.status(400).json({ message: 'Missing url', status: 400 });
+                return;
+            }
+
+            if (!isZenPlayProviderTargetAllowed(zenPlayXtreamUrl, rawUrl)) {
+                res.status(403).json(ZENPLAY_PROVIDER_NOT_ALLOWED);
                 return;
             }
 
@@ -409,7 +449,16 @@ export function createWebBackendApp(
     };
 
     app.options('/xtream', corsMiddleware);
-    app.get('/xtream', corsMiddleware, handleXtreamRequest);
+    if (isManagedZenPlayDeployment && disableXtreamGet) {
+        app.get('/xtream', corsMiddleware, (_req, res) => {
+            res.set('Allow', 'POST, OPTIONS').status(405).json({
+                message: 'Xtream GET is disabled; use POST',
+                status: 405,
+            });
+        });
+    } else {
+        app.get('/xtream', corsMiddleware, handleXtreamRequest);
+    }
     app.post(
         '/xtream',
         corsMiddleware,
@@ -659,8 +708,21 @@ function createProviderTargetId(url: URL): string {
 }
 
 function isPrivateNetworkProxyAllowed(): boolean {
-    const value = process.env['IPTVNATOR_PROXY_ALLOW_PRIVATE_NETWORKS'];
+    return isEnvironmentFlagEnabled('IPTVNATOR_PROXY_ALLOW_PRIVATE_NETWORKS');
+}
+
+function isEnvironmentFlagEnabled(name: string): boolean {
+    const value = process.env[name]?.trim().toLowerCase();
     return value === '1' || value === 'true';
+}
+
+function getConfiguredTrustProxyHops(): number {
+    const value = process.env['ZENPLAY_TRUST_PROXY_HOPS']?.trim();
+    if (!value || !/^\d+$/.test(value)) {
+        return 0;
+    }
+    const hops = Number(value);
+    return Number.isSafeInteger(hops) ? hops : 0;
 }
 
 function getClientOrigins(): string[] {

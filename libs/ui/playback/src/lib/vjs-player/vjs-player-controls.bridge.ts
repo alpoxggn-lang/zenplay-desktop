@@ -1,15 +1,22 @@
 import type { WebVideoControlsOptions } from '../player-controls/web-video-controls.adapter';
 import type { WebVideoControlsAdapter } from '../player-controls/web-video-controls.adapter';
+import type { RecordingStartMetadata } from '@iptvnator/shared/interfaces';
 import { VjsAudioTracks } from './vjs-audio-tracks';
 import type { VideoJsPlayer } from './vjs-player.types';
 import { VjsQualityLevels } from './vjs-quality-levels';
 import { VjsTextTracks } from './vjs-text-tracks';
+import type { WebVideoRemotePlaybackResumeState } from '../player-controls/web-video-remote-playback-host';
 
 export interface VjsPlayerControlsBridgeConfig {
     player: VideoJsPlayer;
     adapter: WebVideoControlsAdapter;
     isLive: () => boolean;
     showCaptions: () => boolean;
+    getRecordingMetadata?: () => RecordingStartMetadata | null;
+    suspendForRemotePlayback?: () => void;
+    restoreAfterRemotePlayback?: (
+        state: WebVideoRemotePlaybackResumeState
+    ) => void;
 }
 
 export class VjsPlayerControlsBridge {
@@ -22,6 +29,8 @@ export class VjsPlayerControlsBridge {
 
     private readonly adapterOptions: WebVideoControlsOptions = {
         isLive: () => this.config.isLive(),
+        getRecordingMetadata: () =>
+            this.config.getRecordingMetadata?.() ?? null,
         getDuration: () => this.readDuration(),
         getAudioTracks: () => this.audioTracks.getAudioTracks(),
         setAudioTrack: (id) => this.audioTracks.setAudioTrack(id),
@@ -31,6 +40,10 @@ export class VjsPlayerControlsBridge {
         setQualityLevel: (id) => this.qualityLevels.setQualityLevel(id),
         isAutoQualityEnabled: () => this.qualityLevels.isAutoQualityEnabled(),
         getEngineStats: () => this.qualityLevels.getActiveLevelStats(),
+        suspendForRemotePlayback: () =>
+            this.config.suspendForRemotePlayback?.(),
+        restoreAfterRemotePlayback: (state) =>
+            this.config.restoreAfterRemotePlayback?.(state),
     };
 
     constructor(private readonly config: VjsPlayerControlsBridgeConfig) {

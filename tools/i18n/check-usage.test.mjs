@@ -40,7 +40,7 @@ function check() {
         sourceRoots: ['src'],
         log: (line) => lines.push(line),
     });
-    return { code, output: lines.join('\n') };
+    return { code, output: lines.join('\n').replaceAll(path.sep, '/') };
 }
 
 function keys(source, kind = 'ts') {

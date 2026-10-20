@@ -15,6 +15,7 @@ import {
 import { normalizeTitleKeys } from '@iptvnator/shared/interfaces';
 import {
     SimilarCatalogItem,
+    matchRelatedCatalogItems,
     matchRecommendationsToCatalog,
 } from '../tmdb-similar.util';
 import type { XtreamSerieDetailsView } from './serial-details-playback.service';
@@ -45,14 +46,25 @@ export class SerialDetailsSimilarService {
     readonly similarItems = computed<SimilarCatalogItem[]>(() => {
         const item = this.selectedItem();
         const recommendations = item?.info?.tmdb_recommendations;
-        if (!recommendations?.length) {
-            return [];
+        // Some lightweight route/test hosts only provide the detail signals;
+        // an absent catalog simply means there is no safe local fallback.
+        const catalog = this.xtreamStore.serialStreams?.() ?? [];
+        if (recommendations?.length) {
+            const matched = matchRecommendationsToCatalog(
+                recommendations,
+                catalog,
+                { excludeId: Number(item?.series_id) }
+            );
+            if (matched.length > 0) {
+                return matched;
+            }
         }
-        return matchRecommendationsToCatalog(
-            recommendations,
-            this.xtreamStore.serialStreams(),
-            { excludeId: Number(item?.series_id) }
-        );
+
+        return matchRelatedCatalogItems(catalog, {
+            excludeId: Number(item?.series_id),
+            categoryId: item?.info?.category_id,
+            genres: item?.info?.genre,
+        });
     });
 
     /** Recommendations found in the user's OTHER portals (Electron only) */

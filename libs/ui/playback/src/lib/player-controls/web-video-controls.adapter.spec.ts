@@ -233,6 +233,102 @@ describe('WebVideoControlsAdapter', () => {
         expect(video.playbackRate).toBe(1.5);
     });
 
+    it('routes state and commands to the receiver for the whole Cast session', () => {
+        const local = createVideo({
+            currentTime: 12,
+            duration: 120,
+            paused: true,
+            seekableLength: 1,
+        });
+        const remote = createVideo({
+            currentTime: 48,
+            duration: 180,
+            paused: true,
+            seekableLength: 1,
+        });
+        const english = { enabled: true, label: 'English', language: 'en' };
+        const spanish = { enabled: false, label: 'Español', language: 'es' };
+        Object.defineProperty(remote, 'audioTracks', {
+            configurable: true,
+            value: {
+                0: english,
+                1: spanish,
+                length: 2,
+                addEventListener: jest.fn(),
+                removeEventListener: jest.fn(),
+            },
+        });
+        const subtitle = {
+            kind: 'subtitles',
+            label: 'Español',
+            language: 'es',
+            mode: 'hidden',
+        } as TextTrack;
+        Object.defineProperty(remote, 'textTracks', {
+            configurable: true,
+            value: {
+                0: subtitle,
+                length: 1,
+                addEventListener: jest.fn(),
+                removeEventListener: jest.fn(),
+            },
+        });
+        const suspend = jest.fn();
+        const restore = jest.fn();
+        adapter.attach(local, {
+            isLive: () => false,
+            suspendForRemotePlayback: suspend,
+            restoreAfterRemotePlayback: restore,
+        });
+
+        adapter.beginRemotePlayback(remote, {
+            muted: false,
+            playbackRate: 1,
+            playing: true,
+            positionSeconds: 12,
+            volume: 1,
+        });
+
+        expect(suspend).toHaveBeenCalledTimes(1);
+        expect(adapter.state()).toMatchObject({
+            status: 'playing',
+            positionSeconds: 48,
+            durationSeconds: 180,
+        });
+        expect(adapter.capabilities()).toMatchObject({
+            audioTracks: true,
+            subtitles: true,
+        });
+        adapter.commands.togglePlay();
+        expect(remote.pause).toHaveBeenCalledTimes(1);
+        expect(local.play).not.toHaveBeenCalled();
+        expect(adapter.state().status).toBe('paused');
+
+        adapter.commands.seekTo(75);
+        adapter.commands.setVolume(0.4);
+        adapter.commands.setPlaybackSpeed(1.5);
+        adapter.commands.setAudioTrack(0);
+        adapter.commands.setSubtitleTrack(0);
+
+        expect(remote.currentTime).toBe(75);
+        expect(remote.volume).toBe(0.4);
+        expect(remote.playbackRate).toBe(1.5);
+        expect(english.enabled).toBe(true);
+        expect(spanish.enabled).toBe(false);
+        expect(subtitle.mode).toBe('showing');
+
+        const resume = {
+            muted: false,
+            playbackRate: 1.5,
+            playing: false,
+            positionSeconds: 75,
+            volume: 0.4,
+        };
+        adapter.finishRemotePlayback(resume, true);
+        expect(restore).toHaveBeenCalledWith(resume);
+        expect(adapter.state().positionSeconds).toBe(12);
+    });
+
     it('clamps seekTo to the finite duration', () => {
         const video = createVideo({ duration: 60 });
         adapter.attach(video, { isLive: () => false });
@@ -383,6 +479,26 @@ describe('WebVideoControlsAdapter', () => {
         expect(adapter.capabilities().seriesNavigation).toBe(false);
         expect(adapter.state().canPreviousEpisode).toBe(false);
         expect(adapter.state().canNextEpisode).toBe(false);
+    });
+
+    it('exposes adjacent-channel navigation for live streams', () => {
+        const nav = signal<SeriesPlaybackNavigation | null>({
+            canPrevious: true,
+            canNext: true,
+            autoplayEnabled: false,
+            kind: 'channel',
+        });
+        adapter.attach(createVideo({ duration: Infinity }), {
+            isLive: () => true,
+        });
+        adapter.setContext({ seriesNavigation: nav });
+
+        expect(adapter.capabilities().seriesNavigation).toBe(true);
+        expect(adapter.state()).toMatchObject({
+            canPreviousEpisode: true,
+            canNextEpisode: true,
+            adjacentNavigationKind: 'channel',
+        });
     });
 
     it('removes listeners on detach', () => {

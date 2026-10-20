@@ -1,11 +1,17 @@
-import type { DownloadRecoveryResult } from '@iptvnator/shared/interfaces';
 import { computed, inject, Injectable, OnDestroy, signal } from '@angular/core';
-import type { DownloadMetadataSnapshot } from '@iptvnator/shared/interfaces';
-import type { ElectronBridgeDownloadStartResult } from '@iptvnator/shared/interfaces';
+import { TranslateService } from '@ngx-translate/core';
+import type {
+    DownloadMetadataSnapshot,
+    DownloadRecoveryResult,
+    ElectronBridgeDownloadStartResult,
+} from '@iptvnator/shared/interfaces';
+import { browserMediaLibrary } from './browser-media-library';
+import { BROWSER_MEDIA_MESSAGES } from './browser-media-library/browser-media-messages';
 import { DownloadListLoadState } from './download-list-load-state';
 import { updateDownloadMetadata } from './downloads-metadata-update';
+import { DownloadsQueryBase } from './downloads-query.base';
 import type { DownloadItem, DownloadStartInput } from './downloads.models';
-import { formatDownloadBytes } from './downloads.utils';
+import { tryDownloadAction } from './downloads.utils';
 import { RuntimeCapabilitiesService } from './runtime-capabilities.service';
 
 export type {
@@ -14,10 +20,14 @@ export type {
     DownloadStatus,
 } from './downloads.models';
 
+const BROWSER_DOWNLOAD_RECOVERY_POLL_MS = 15_000;
+
 @Injectable({ providedIn: 'root' })
-export class DownloadsService implements OnDestroy {
+export class DownloadsService extends DownloadsQueryBase implements OnDestroy {
     private readonly runtime = inject(RuntimeCapabilitiesService);
+    private readonly translate = inject(TranslateService, { optional: true });
     private unsubscribe?: () => void;
+    private browserRecoveryPoll?: number;
     private readonly downloadListLoadState = new DownloadListLoadState();
 
     /** Signal for the list of downloads */
@@ -33,7 +43,7 @@ export class DownloadsService implements OnDestroy {
     readonly hasAuthoritativeDownloadList =
         this.downloadListLoadState.hasAuthoritativeList;
 
-    /** Whether the download feature is available (Electron only) */
+    /** Whether downloads are available through Electron or private browser storage. */
     readonly isAvailable = computed(() => this.runtime.supportsDownloads);
 
     /** Whether there are any downloads */
@@ -64,11 +74,23 @@ export class DownloadsService implements OnDestroy {
     readonly downloadFolder = signal<string>('');
 
     constructor() {
+        super();
         this.init();
     }
 
     private async init() {
         if (!this.isAvailable()) {
+            return;
+        }
+
+        if (this.usesBrowserMediaLibrary) {
+            this.unsubscribe = browserMediaLibrary.subscribe((kind) => {
+                if (kind === 'downloads') void this.loadDownloads();
+            });
+            await browserMediaLibrary.initialize();
+            await this.loadDownloads();
+            this.startBrowserRecoveryPolling();
+            this.downloadFolder.set(BROWSER_MEDIA_MESSAGES.privateStorageLabel);
             return;
         }
 
@@ -88,6 +110,9 @@ export class DownloadsService implements OnDestroy {
 
     ngOnDestroy() {
         this.unsubscribe?.();
+        if (this.browserRecoveryPoll !== undefined) {
+            window.clearInterval(this.browserRecoveryPoll);
+        }
     }
 
     /**
@@ -99,7 +124,9 @@ export class DownloadsService implements OnDestroy {
 
         return this.downloadListLoadState.run(async () => {
             try {
-                const list = await window.electron.downloadsGetList();
+                const list = this.usesBrowserMediaLibrary
+                    ? await browserMediaLibrary.listDownloads()
+                    : await window.electron.downloadsGetList();
                 this.downloads.set(list);
                 this.downloadListLoadState.markSucceeded();
             } catch (error) {
@@ -117,6 +144,12 @@ export class DownloadsService implements OnDestroy {
      */
     async loadDownloadFolder(): Promise<string> {
         if (!this.isAvailable()) return '';
+
+        if (this.usesBrowserMediaLibrary) {
+            const folder = BROWSER_MEDIA_MESSAGES.privateStorageLabel;
+            this.downloadFolder.set(folder);
+            return folder;
+        }
 
         // The main process owns folder authorization. It returns either the OS
         // default or a custom folder previously selected through a native
@@ -145,24 +178,28 @@ export class DownloadsService implements OnDestroy {
             return { success: false, error: 'Downloads not available' };
         }
 
+        if (this.usesBrowserMediaLibrary) {
+            return tryDownloadAction(
+                'starting browser download',
+                () => browserMediaLibrary.startDownload(data),
+                (error) => ({ success: false, error })
+            );
+        }
+
         const folder = await this.loadDownloadFolder();
         if (!folder) {
             return { success: false, error: 'No download folder configured' };
         }
 
-        try {
-            const result = await window.electron.downloadsStart({
-                ...data,
-                downloadFolder: folder,
-            });
-            return result;
-        } catch (error) {
-            console.error('[DownloadsService] Error starting download:', error);
-            return {
-                success: false,
-                error: error instanceof Error ? error.message : String(error),
-            };
-        }
+        return tryDownloadAction(
+            'starting download',
+            () =>
+                window.electron.downloadsStart({
+                    ...data,
+                    downloadFolder: folder,
+                }),
+            (error) => ({ success: false, error })
+        );
     }
 
     /**
@@ -175,18 +212,15 @@ export class DownloadsService implements OnDestroy {
             return { success: false, error: 'Downloads not available' };
         }
 
-        try {
-            return await window.electron.downloadsCancel(downloadId);
-        } catch (error) {
-            console.error(
-                '[DownloadsService] Error canceling download:',
-                error
-            );
-            return {
-                success: false,
-                error: error instanceof Error ? error.message : String(error),
-            };
+        if (this.usesBrowserMediaLibrary) {
+            return browserMediaLibrary.cancelDownload(downloadId);
         }
+
+        return tryDownloadAction(
+            'canceling download',
+            () => window.electron.downloadsCancel(downloadId),
+            (error) => ({ success: false, error })
+        );
     }
 
     /**
@@ -198,16 +232,15 @@ export class DownloadsService implements OnDestroy {
         if (!this.isAvailable()) {
             return { success: false, error: 'Downloads not available' };
         }
-
-        try {
-            return await window.electron.downloadsPause(downloadId);
-        } catch (error) {
-            console.error('[DownloadsService] Error pausing download:', error);
-            return {
-                success: false,
-                error: error instanceof Error ? error.message : String(error),
-            };
+        if (this.usesBrowserMediaLibrary) {
+            return browserMediaLibrary.pauseDownload(downloadId);
         }
+
+        return tryDownloadAction(
+            'pausing download',
+            () => window.electron.downloadsPause(downloadId),
+            (error) => ({ success: false, error })
+        );
     }
 
     /**
@@ -219,21 +252,20 @@ export class DownloadsService implements OnDestroy {
         if (!this.isAvailable()) {
             return { success: false, error: 'Downloads not available' };
         }
+        if (this.usesBrowserMediaLibrary) {
+            return browserMediaLibrary.resumeDownload(downloadId);
+        }
 
         const folder = await this.loadDownloadFolder();
         if (!folder) {
             return { success: false, error: 'No download folder configured' };
         }
 
-        try {
-            return await window.electron.downloadsResume(downloadId, folder);
-        } catch (error) {
-            console.error('[DownloadsService] Error resuming download:', error);
-            return {
-                success: false,
-                error: error instanceof Error ? error.message : String(error),
-            };
-        }
+        return tryDownloadAction(
+            'resuming download',
+            () => window.electron.downloadsResume(downloadId, folder),
+            (error) => ({ success: false, error })
+        );
     }
 
     /**
@@ -245,21 +277,20 @@ export class DownloadsService implements OnDestroy {
         if (!this.isAvailable()) {
             return { success: false, error: 'Downloads not available' };
         }
+        if (this.usesBrowserMediaLibrary) {
+            return browserMediaLibrary.resumeDownload(downloadId);
+        }
 
         const folder = await this.loadDownloadFolder();
         if (!folder) {
             return { success: false, error: 'No download folder configured' };
         }
 
-        try {
-            return await window.electron.downloadsRetry(downloadId, folder);
-        } catch (error) {
-            console.error('[DownloadsService] Error retrying download:', error);
-            return {
-                success: false,
-                error: error instanceof Error ? error.message : String(error),
-            };
-        }
+        return tryDownloadAction(
+            'retrying download',
+            () => window.electron.downloadsRetry(downloadId, folder),
+            (error) => ({ success: false, error })
+        );
     }
 
     /**
@@ -271,19 +302,17 @@ export class DownloadsService implements OnDestroy {
         if (!this.isAvailable()) {
             return { success: false, error: 'Downloads not available' };
         }
-
-        try {
-            return await window.electron.downloadsRedownloadMissing(downloadId);
-        } catch (error) {
-            console.error(
-                '[DownloadsService] Error re-downloading missing file:',
-                error
-            );
-            return {
-                success: false,
-                error: error instanceof Error ? error.message : String(error),
-            };
+        if (this.usesBrowserMediaLibrary) {
+            const result =
+                await browserMediaLibrary.redownloadMissing(downloadId);
+            return { ...result, recovered: result.success };
         }
+
+        return tryDownloadAction(
+            're-downloading missing file',
+            () => window.electron.downloadsRedownloadMissing(downloadId),
+            (error) => ({ success: false, error })
+        );
     }
 
     /**
@@ -293,16 +322,15 @@ export class DownloadsService implements OnDestroy {
         if (!this.isAvailable()) {
             return { success: false, error: 'Downloads not available' };
         }
-
-        try {
-            return await window.electron.downloadsRemove(downloadId);
-        } catch (error) {
-            console.error('[DownloadsService] Error removing download:', error);
-            return {
-                success: false,
-                error: error instanceof Error ? error.message : String(error),
-            };
+        if (this.usesBrowserMediaLibrary) {
+            return browserMediaLibrary.removeDownload(downloadId);
         }
+
+        return tryDownloadAction(
+            'removing download',
+            () => window.electron.downloadsRemove(downloadId),
+            (error) => ({ success: false, error })
+        );
     }
 
     /** Update the offline metadata snapshot for a managed download. */
@@ -310,6 +338,9 @@ export class DownloadsService implements OnDestroy {
         id: number,
         snapshot: DownloadMetadataSnapshot
     ): Promise<{ success: boolean; error?: string }> {
+        if (this.usesBrowserMediaLibrary) {
+            return browserMediaLibrary.updateDownloadMetadata(id, snapshot);
+        }
         return updateDownloadMetadata(this, id, snapshot);
     }
 
@@ -322,16 +353,22 @@ export class DownloadsService implements OnDestroy {
         if (!this.isAvailable()) {
             return { success: false, error: 'Downloads not available' };
         }
-
-        try {
-            return await window.electron.downloadsPlayFile(filePath);
-        } catch (error) {
-            console.error('[DownloadsService] Error playing file:', error);
-            return {
-                success: false,
-                error: error instanceof Error ? error.message : String(error),
-            };
+        if (this.usesBrowserMediaLibrary) {
+            const item = this.downloads().find(
+                ({ filePath: path }) => path === filePath
+            );
+            return browserMediaLibrary.playPrivateFile(
+                filePath,
+                item?.title ?? 'ZenPlay',
+                this.translate?.instant('CLOSE') ?? 'CLOSE'
+            );
         }
+
+        return tryDownloadAction(
+            'playing file',
+            () => window.electron.downloadsPlayFile(filePath),
+            (error) => ({ success: false, error })
+        );
     }
 
     /**
@@ -343,16 +380,18 @@ export class DownloadsService implements OnDestroy {
         if (!this.isAvailable()) {
             return { success: false, error: 'Downloads not available' };
         }
-
-        try {
-            return await window.electron.downloadsRevealFile(filePath);
-        } catch (error) {
-            console.error('[DownloadsService] Error revealing file:', error);
+        if (this.usesBrowserMediaLibrary) {
             return {
                 success: false,
-                error: error instanceof Error ? error.message : String(error),
+                error: BROWSER_MEDIA_MESSAGES.privateStorageOnly,
             };
         }
+
+        return tryDownloadAction(
+            'revealing file',
+            () => window.electron.downloadsRevealFile(filePath),
+            (error) => ({ success: false, error })
+        );
     }
 
     /**
@@ -361,6 +400,12 @@ export class DownloadsService implements OnDestroy {
     async selectFolder(): Promise<string | null> {
         if (!this.isAvailable()) {
             return null;
+        }
+        if (this.usesBrowserMediaLibrary) {
+            await browserMediaLibrary.initialize();
+            const folder = BROWSER_MEDIA_MESSAGES.privateStorageLabel;
+            this.downloadFolder.set(folder);
+            return folder;
         }
 
         try {
@@ -382,157 +427,26 @@ export class DownloadsService implements OnDestroy {
         if (!this.isAvailable()) {
             return { success: false };
         }
-
-        try {
-            return await window.electron.downloadsClearCompleted(playlistId);
-        } catch (error) {
-            console.error(
-                '[DownloadsService] Error clearing completed:',
-                error
-            );
-            return { success: false };
+        if (this.usesBrowserMediaLibrary) {
+            return browserMediaLibrary.clearDownloads(playlistId);
         }
-    }
 
-    /**
-     * Get download progress as percentage
-     */
-    getProgressPercent(item: DownloadItem): number {
-        if (!item.totalBytes || item.totalBytes === 0) {
-            return 0;
-        }
-        return Math.round(
-            ((item.bytesDownloaded || 0) / item.totalBytes) * 100
+        return tryDownloadAction(
+            'clearing completed',
+            () => window.electron.downloadsClearCompleted(playlistId),
+            () => ({ success: false })
         );
     }
 
-    /**
-     * Get a download item by managed id
-     */
-    getDownload(downloadId: number): DownloadItem | undefined {
-        return this.downloads().find(({ id }) => id === downloadId);
+    /** Kept defensive for prototype-only unit harnesses used by this service. */
+    private get usesBrowserMediaLibrary(): boolean {
+        return this.runtime?.isPwa === true;
     }
 
-    /**
-     * Get download item by xtreamId and playlistId
-     */
-    getDownloadByContent(
-        xtreamId: number,
-        playlistId: string,
-        contentType: 'vod' | 'episode'
-    ): DownloadItem | undefined {
-        return this.downloads().find(
-            (d) =>
-                d.xtreamId === xtreamId &&
-                d.playlistId === playlistId &&
-                d.contentType === contentType
-        );
-    }
-
-    /**
-     * Check if content is downloaded (completed status)
-     */
-    isDownloaded(
-        xtreamId: number,
-        playlistId: string,
-        contentType: 'vod' | 'episode'
-    ): boolean {
-        const download = this.getDownloadByContent(
-            xtreamId,
-            playlistId,
-            contentType
-        );
-        return this.hasAvailableCompletedFile(download);
-    }
-
-    /**
-     * Check if content is currently downloading, queued, or paused
-     */
-    isDownloading(
-        xtreamId: number,
-        playlistId: string,
-        contentType: 'vod' | 'episode'
-    ): boolean {
-        const download = this.getDownloadByContent(
-            xtreamId,
-            playlistId,
-            contentType
-        );
-        return (
-            download?.status === 'downloading' ||
-            download?.status === 'queued' ||
-            download?.status === 'paused'
-        );
-    }
-
-    /**
-     * Check if content has a paused download
-     */
-    isPaused(
-        xtreamId: number,
-        playlistId: string,
-        contentType: 'vod' | 'episode'
-    ): boolean {
-        const download = this.getDownloadByContent(
-            xtreamId,
-            playlistId,
-            contentType
-        );
-        return download?.status === 'paused';
-    }
-
-    /**
-     * Resume the paused download that belongs to a content item
-     */
-    async resumeDownloadByContent(
-        xtreamId: number,
-        playlistId: string,
-        contentType: 'vod' | 'episode'
-    ): Promise<{ success: boolean; error?: string }> {
-        const download = this.getDownloadByContent(
-            xtreamId,
-            playlistId,
-            contentType
-        );
-        if (!download || download.status !== 'paused') {
-            return { success: false, error: 'No paused download found' };
-        }
-        return this.resumeDownload(download.id);
-    }
-
-    /**
-     * Get the file path for a downloaded content item
-     */
-    getDownloadedFilePath(
-        xtreamId: number,
-        playlistId: string,
-        contentType: 'vod' | 'episode'
-    ): string | undefined {
-        const download = this.getDownloadByContent(
-            xtreamId,
-            playlistId,
-            contentType
-        );
-        if (this.hasAvailableCompletedFile(download)) {
-            return download.filePath;
-        }
-        return undefined;
-    }
-
-    private hasAvailableCompletedFile(
-        item: DownloadItem | undefined
-    ): item is DownloadItem & { filePath: string } {
-        return (
-            item?.status === 'completed' &&
-            !!item.filePath &&
-            item.fileAvailability !== 'missing'
-        );
-    }
-
-    /**
-     * Format bytes to human readable string
-     */
-    formatBytes(bytes: number): string {
-        return formatDownloadBytes(bytes);
+    private startBrowserRecoveryPolling(): void {
+        if (this.browserRecoveryPoll !== undefined) return;
+        this.browserRecoveryPoll = window.setInterval(() => {
+            if (this.activeCount() > 0) void this.loadDownloads();
+        }, BROWSER_DOWNLOAD_RECOVERY_POLL_MS);
     }
 }

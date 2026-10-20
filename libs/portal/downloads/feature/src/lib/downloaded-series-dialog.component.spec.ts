@@ -184,6 +184,15 @@ describe('DownloadedSeriesDialogComponent', () => {
         ]);
     });
 
+    it('hides reveal-in-folder for browser-private episodes', async () => {
+        fixture.componentRef.setInput('nativeFileActions', false);
+        await fixture.whenStable();
+
+        expect(
+            fixture.nativeElement.querySelector('[data-test-action="reveal"]')
+        ).toBeNull();
+    });
+
     it('disables and guards every command for a pending episode until it settles', async () => {
         const pendingIds = signal<ReadonlySet<number>>(new Set([32]));
         fixture.componentRef.setInput('pendingIds', pendingIds);

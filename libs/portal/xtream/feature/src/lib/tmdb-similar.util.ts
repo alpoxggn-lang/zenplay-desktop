@@ -54,6 +54,29 @@ function streamPoster(stream: CatalogStream): string | null {
     return typeof poster === 'string' && poster !== '' ? poster : null;
 }
 
+function streamCategoryId(stream: CatalogStream): string | null {
+    const categoryId =
+        field(stream, 'category_id') ?? field(stream, 'categoryId');
+    return categoryId === undefined || categoryId === null
+        ? null
+        : String(categoryId);
+}
+
+function streamGenres(stream: CatalogStream): Set<string> {
+    const value = field(stream, 'genre') ?? field(stream, 'genres');
+    const genres = Array.isArray(value)
+        ? value
+        : typeof value === 'string'
+          ? value.split(/[,/|]/)
+          : [];
+
+    return new Set(
+        genres
+            .map((genre) => normalizeTitleKeys(String(genre)).exact)
+            .filter((genre) => genre.length > 0)
+    );
+}
+
 export interface CatalogMatch {
     id: number;
     categoryId: string;
@@ -212,4 +235,91 @@ export function matchRecommendationsToCatalog(
     }
 
     return matched;
+}
+
+/**
+ * Provider-local fallback for the Similar rail when TMDB supplies no usable
+ * recommendations (disabled, unavailable, rate-limited, or simply empty).
+ *
+ * Genre overlap wins; a shared provider category is the lower-confidence
+ * fallback used by sparse VOD rows. Original catalog order breaks ties so the
+ * result stays stable and never invents titles outside the user's library.
+ */
+export function matchRelatedCatalogItems(
+    streams: readonly CatalogStream[],
+    options: {
+        excludeId?: number;
+        categoryId?: string | number | null;
+        genres?: string | readonly string[] | null;
+        limit?: number;
+    } = {}
+): SimilarCatalogItem[] {
+    const wantedGenres = streamGenres({ genre: options.genres ?? '' });
+    const wantedCategory =
+        options.categoryId === undefined || options.categoryId === null
+            ? null
+            : String(options.categoryId);
+    const limit = options.limit ?? 12;
+    const seenIds = new Set<number>();
+
+    return streams
+        .map((stream, catalogIndex) => {
+            const id = streamId(stream);
+            if (
+                id === null ||
+                id === options.excludeId
+            ) {
+                return null;
+            }
+
+            const categoryId = streamCategoryId(stream);
+            if (categoryId === null) {
+                return null;
+            }
+            const genreMatches = [...streamGenres(stream)].filter((genre) =>
+                wantedGenres.has(genre)
+            ).length;
+            const categoryMatches =
+                wantedCategory !== null && categoryId === wantedCategory;
+            const score = genreMatches * 10 + (categoryMatches ? 1 : 0);
+            if (score === 0) {
+                return null;
+            }
+
+            const title = streamTitle(stream);
+            if (!title) {
+                return null;
+            }
+            if (seenIds.has(id)) {
+                return null;
+            }
+            seenIds.add(id);
+            return {
+                item: {
+                    id,
+                    categoryId,
+                    title,
+                    posterUrl: streamPoster(stream),
+                    year: normalizeTitleKeys(title).trailingYear,
+                } satisfies SimilarCatalogItem,
+                score,
+                catalogIndex,
+            };
+        })
+        .filter(
+            (
+                candidate
+            ): candidate is {
+                item: SimilarCatalogItem;
+                score: number;
+                catalogIndex: number;
+            } => candidate !== null
+        )
+        .sort(
+            (left, right) =>
+                right.score - left.score ||
+                left.catalogIndex - right.catalogIndex
+        )
+        .slice(0, limit)
+        .map((candidate) => candidate.item);
 }

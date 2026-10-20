@@ -42,6 +42,7 @@ export class DownloadedSeriesDialogComponent {
     readonly pendingIds = input<() => ReadonlySet<number>>(
         () => EMPTY_PENDING_IDS
     );
+    readonly nativeFileActions = input(true);
     readonly itemAction = output<DownloadItemAction>();
     protected readonly currentMembers = computed(() => this.members()());
 

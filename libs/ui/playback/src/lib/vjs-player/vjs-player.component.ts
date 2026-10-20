@@ -14,12 +14,14 @@ import {
     ChangeDetectionStrategy,
 } from '@angular/core';
 import '@yangkghjh/videojs-aspect-ratio-panel';
-import { createDevLogger } from '@iptvnator/shared/interfaces';
+import {
+    createDevLogger,
+    type RecordingStartMetadata,
+} from '@iptvnator/shared/interfaces';
 import videoJs from 'video.js';
 import 'videojs-contrib-quality-levels';
 import 'videojs-quality-selector-hls';
 import { type PlaybackDiagnostic } from '@iptvnator/playback/util';
-import { createVideoJsPlaybackDiagnostic } from './vjs-playback-diagnostics';
 import {
     type LegacyPlayerShortcuts,
     PlayerControlsComponent,
@@ -31,7 +33,6 @@ import {
 } from '../player-controls';
 import { SeriesPlaybackNavigationControlsComponent } from '../portal-inline-player/series-playback-navigation-controls.component';
 import type { SeriesPlaybackNavigation } from '../portal-inline-player/series-playback-navigation';
-import { logVjsAudioTracks, setupVjsAudioTrackMenu } from './vjs-audio-tracks';
 import { VjsLegacyTracks } from './vjs-legacy-tracks';
 import { VjsMpegTsSession } from './vjs-mpegts-session';
 import { attachVjsLegacyShortcuts } from './vjs-legacy-shortcuts';
@@ -50,14 +51,11 @@ import {
     type VideoPlayerOptions,
     type VideoPlayerSource,
     getVideoJsTechVideo,
-    getVideoJsVhsEndList,
 } from './vjs-player.types';
 import { VjsVideoElementSession } from './vjs-video-element-session';
 import type { PlayerTimeUpdate } from '../playback-history/player-time-update';
-import {
-    isAdaptiveVhsDurationFinal,
-    resolveAdaptiveProgressiveStartTime,
-} from '../web-video-support/adaptive-hls-load-policy';
+import { VjsPlayerEvents } from './vjs-player-events';
+import { VjsRemotePlaybackLifecycle } from './vjs-remote-playback-lifecycle';
 
 const debugVjsPlayer = createDevLogger('VjsPlayer');
 
@@ -85,6 +83,7 @@ export class VjsPlayerComponent implements OnInit, OnChanges, OnDestroy {
     readonly interactionEnabled = input(true);
     readonly showCaptions = input(false);
     readonly mediaTitle = input<PlayerMediaTitle | null>(null);
+    readonly recordingMetadata = input<RecordingStartMetadata | null>(null);
     readonly upNext = input<PlayerUpNextItem | null>(null);
     /** Catch-up programmes drawn as track segments; null draws one. */
     readonly timelineSegments = input<readonly PlayerTimelineSegment[] | null>(
@@ -123,6 +122,32 @@ export class VjsPlayerComponent implements OnInit, OnChanges, OnDestroy {
         queueTask: queueVjsTask,
         reportError: (error) =>
             debugVjsPlayer('Failed to reset Video.js player:', error),
+    });
+    private readonly remotePlayback = new VjsRemotePlaybackLifecycle({
+        bindCurrentVideo: () => this.bindCurrentTechVideo(),
+        clearControlsSource: () => this.controlsBridge?.clearSource(),
+        clearSourceApplied: () => this.resetCoordinator.clearSourceApplied(),
+        destroyMpegTs: () => this.mpegTsSession.destroy(),
+        queueTask: queueVjsTask,
+        requestReset: () => this.resetCoordinator.requestReset(),
+        restoreDesiredSource: () => this.restoreDesiredSourceAfterReset(true),
+    });
+    private readonly playerEvents = new VjsPlayerEvents({
+        getPlayer: () => this.player,
+        getSource: () => this.desiredSource,
+        getBoundVideo: () => this.videoSession.video(),
+        getFallbackVideo: () =>
+            getVideoJsTechVideo(this.player) ?? this.target().nativeElement,
+        bindCurrentVideo: () => this.bindCurrentTechVideo(),
+        getStartTime: () => this.startTime(),
+        getFallbackVolume: () => this.volume(),
+        shouldSuppressVolumeChange: () =>
+            this.resetCoordinator.shouldSuppressVolumeChange(),
+        syncMpegTsDuration: () => this.mpegTsSession.syncDuration(),
+        bindLegacyTracks: () => this.legacyTracks?.bind(),
+        refreshControls: () => this.controlsBridge?.refreshInputs(),
+        emitPlaybackIssue: (issue) => this.playbackIssue.emit(issue),
+        emitTimeUpdate: (update) => this.timeUpdate.emit(update),
     });
     private controlsBridge: VjsPlayerControlsBridge | null = null;
     /** Track ownership for the legacy chrome; null with shared controls. */
@@ -221,6 +246,7 @@ export class VjsPlayerComponent implements OnInit, OnChanges, OnDestroy {
         this.detachPointerFocusRelease?.();
         this.detachPointerFocusRelease = null;
         this.resetCoordinator.destroy();
+        this.remotePlayback.destroy();
         this.controlsBridge?.destroy();
         this.controlsBridge = null;
         this.legacyTracks?.destroy();
@@ -254,61 +280,15 @@ export class VjsPlayerComponent implements OnInit, OnChanges, OnDestroy {
         }
     };
 
-    private readonly handleLoadedMetadata = () => {
-        const video = this.bindCurrentTechVideo();
-        if (this.startTime() > 0) {
-            this.player.currentTime(
-                resolveAdaptiveProgressiveStartTime(
-                    this.desiredSource?.src ?? '',
-                    this.startTime(),
-                    video?.seekable ?? emptyTimeRanges
-                )
-            );
-        }
-        this.playbackIssue.emit(null);
-        this.legacyTracks?.bind();
-        logVjsAudioTracks(this.player);
-        setupVjsAudioTrackMenu(this.player);
-        this.controlsBridge?.refreshInputs();
-    };
-
-    private readonly handleVideoJsError = () => {
-        const source = this.desiredSource;
-        const video =
-            this.videoSession.video() ??
-            getVideoJsTechVideo(this.player) ??
-            this.target().nativeElement;
-        this.mpegTsSession.syncDuration();
-        this.playbackIssue.emit(
-            createVideoJsPlaybackDiagnostic(this.player, source, video)
-        );
-    };
-
-    private readonly handleVolumeChange = () => {
-        if (this.resetCoordinator.shouldSuppressVolumeChange()) {
-            return;
-        }
-        const currentVolume = this.player.volume() ?? this.volume();
-        localStorage.setItem('volume', currentVolume.toString());
-    };
-
-    private readonly handleTimeUpdate = () => {
-        this.timeUpdate.emit({
-            currentTime: this.player.currentTime() ?? 0,
-            duration: this.player.duration() ?? 0,
-            durationFinal: isAdaptiveVhsDurationFinal(
-                this.desiredSource?.src ?? '',
-                getVideoJsVhsEndList(this.player)
-            ),
-            playing: !this.player.paused() && !this.player.seeking(),
-        });
-    };
-
     private readonly handlePlayerReset = () => {
         this.player.volume(this.resetCoordinator.handlePlayerReset());
         this.controlsBridge?.clearSource();
         this.legacyTracks?.clear();
         this.mpegTsSession.destroy();
+        if (this.remotePlayback.suspended) {
+            this.bindCurrentTechVideo();
+            return;
+        }
         this.restoreDesiredSourceAfterReset(true);
     };
 
@@ -395,6 +375,11 @@ export class VjsPlayerComponent implements OnInit, OnChanges, OnDestroy {
                     adapter: this.controlsAdapter,
                     isLive: () => this.options().isLive !== false,
                     showCaptions: () => this.showCaptions(),
+                    getRecordingMetadata: () => this.recordingMetadata(),
+                    suspendForRemotePlayback: () =>
+                        this.remotePlayback.suspend(),
+                    restoreAfterRemotePlayback: (state) =>
+                        this.remotePlayback.restore(state),
                 });
                 this.controlsBridge.attach(video);
             } else {
@@ -417,10 +402,10 @@ export class VjsPlayerComponent implements OnInit, OnChanges, OnDestroy {
 
     private bindPlayerEvents(bind: boolean): void {
         const events = {
-            loadedmetadata: this.handleLoadedMetadata,
-            error: this.handleVideoJsError,
-            volumechange: this.handleVolumeChange,
-            timeupdate: this.handleTimeUpdate,
+            loadedmetadata: this.playerEvents.loadedMetadata,
+            error: this.playerEvents.videoJsError,
+            volumechange: this.playerEvents.volumeChange,
+            timeupdate: this.playerEvents.timeUpdate,
             pause: this.handlePauseForReset,
             playerreset: this.handlePlayerReset,
         };
@@ -430,9 +415,3 @@ export class VjsPlayerComponent implements OnInit, OnChanges, OnDestroy {
         }
     }
 }
-
-const emptyTimeRanges: TimeRanges = {
-    length: 0,
-    start: () => 0,
-    end: () => 0,
-};

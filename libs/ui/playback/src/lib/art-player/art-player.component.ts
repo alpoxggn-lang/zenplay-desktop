@@ -13,7 +13,11 @@ import {
     ChangeDetectionStrategy,
 } from '@angular/core';
 import Artplayer from 'artplayer';
-import { Channel, createDevLogger } from '@iptvnator/shared/interfaces';
+import {
+    Channel,
+    createDevLogger,
+    type RecordingStartMetadata,
+} from '@iptvnator/shared/interfaces';
 import { releaseVideoPictureInPicture } from '../player-controls/web-video-picture-in-picture-lifecycle';
 import { PLAYER_PROGRESS_COLOR } from '../player-controls/player-palette';
 import type { PlaybackDiagnostic } from '@iptvnator/playback/util';
@@ -63,6 +67,7 @@ export class ArtPlayerComponent implements OnInit, OnDestroy, OnChanges {
     readonly isLive = input(true);
     readonly interactionEnabled = input(true);
     readonly mediaTitle = input<PlayerMediaTitle | null>(null);
+    readonly recordingMetadata = input<RecordingStartMetadata | null>(null);
     readonly upNext = input<PlayerUpNextItem | null>(null);
     /** Catch-up programmes drawn as track segments; null draws one. */
     readonly timelineSegments = input<readonly PlayerTimelineSegment[] | null>(
@@ -161,6 +166,7 @@ export class ArtPlayerComponent implements OnInit, OnDestroy, OnChanges {
             controlsAdapter: this.controlsAdapter,
             isLive: () => this.isLive(),
             showCaptions: () => this.showCaptions(),
+            getRecordingMetadata: () => this.recordingMetadata(),
             emitPlaybackIssue: (issue) => this.playbackIssue.emit(issue),
             getDrm: () => this.channel().drm,
         });

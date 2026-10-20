@@ -1,5 +1,7 @@
 import type { PlayerTrack } from '../player-controls/player-controls.model';
 import type { WebVideoControlsAdapter } from '../player-controls/web-video-controls.adapter';
+import type { RecordingStartMetadata } from '@iptvnator/shared/interfaces';
+import type { WebVideoRemotePlaybackResumeState } from '../player-controls/web-video-remote-playback-host';
 import { pickExternalSubtitleFile } from './web-video-external-subtitles';
 import { WebVideoSourceStats } from './web-video-source-stats';
 import { WebVideoSubtitleStyle } from './web-video-subtitle-style';
@@ -15,6 +17,11 @@ export interface WebVideoSourceControlsBridgeConfig {
     adapter: WebVideoControlsAdapter;
     isLive: () => boolean;
     showCaptions: () => boolean;
+    getRecordingMetadata?: () => RecordingStartMetadata | null;
+    suspendForRemotePlayback?: () => void;
+    restoreAfterRemotePlayback?: (
+        state: WebVideoRemotePlaybackResumeState
+    ) => void;
 }
 
 export class WebVideoSourceControlsBridge {
@@ -42,6 +49,7 @@ export class WebVideoSourceControlsBridge {
         this.subtitleStyle.attach(this.config.video);
         this.config.adapter.attach(this.config.video, {
             isLive: this.config.isLive,
+            getRecordingMetadata: this.config.getRecordingMetadata,
             getDuration: () => this.readDuration(),
             getAudioTracks: () => this.getAudioTracks(),
             setAudioTrack: (id) => this.setAudioTrack(id),
@@ -58,6 +66,9 @@ export class WebVideoSourceControlsBridge {
             setQualityLevel: (id) => this.tracks.setQualityLevel(id),
             isAutoQualityEnabled: () => this.tracks.isAutoQualityEnabled(),
             getEngineStats: () => this.sourceStats.read(),
+            suspendForRemotePlayback: this.config.suspendForRemotePlayback,
+            restoreAfterRemotePlayback:
+                this.config.restoreAfterRemotePlayback,
         });
         this.attached = true;
     }

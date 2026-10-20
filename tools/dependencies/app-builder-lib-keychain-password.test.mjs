@@ -26,6 +26,7 @@ import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { after, before, describe, it } from 'node:test';
+import { parse as parseYaml } from 'yaml';
 
 const require = createRequire(import.meta.url);
 
@@ -46,21 +47,33 @@ const macCodeSignPath = path.join(
 
 const IMPORT_PASSWORD = 'certificate-import-password';
 
+function readPatchedDependencies() {
+    const rootPackage = JSON.parse(
+        readFileSync(new URL('../../package.json', import.meta.url), 'utf8')
+    );
+    const workspace = parseYaml(
+        readFileSync(
+            new URL('../../pnpm-workspace.yaml', import.meta.url),
+            'utf8'
+        )
+    );
+
+    return {
+        ...(rootPackage.pnpm?.patchedDependencies ?? {}),
+        ...(workspace?.patchedDependencies ?? {}),
+    };
+}
+
 describe('app-builder-lib keychain password patch', () => {
     it('targets the version the patch was written for', () => {
         const { version } = JSON.parse(
             readFileSync(appBuilderLibPackage, 'utf8')
         );
-        const rootPackage = JSON.parse(
-            readFileSync(new URL('../../package.json', import.meta.url), 'utf8')
-        );
-        const patched = Object.keys(
-            rootPackage.pnpm?.patchedDependencies ?? {}
-        );
+        const patched = Object.keys(readPatchedDependencies());
 
         assert.ok(
             patched.includes(`app-builder-lib@${version}`),
-            `installed app-builder-lib ${version} has no entry in pnpm.patchedDependencies (${patched.join(', ')}) — bump or retire the patch`
+            `installed app-builder-lib ${version} has no patchedDependencies entry (${patched.join(', ')}) — bump or retire the patch`
         );
     });
 

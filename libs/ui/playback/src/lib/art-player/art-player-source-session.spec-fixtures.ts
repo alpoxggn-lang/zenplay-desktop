@@ -18,15 +18,15 @@ export const mpegTsInstances: MockMpegTsPlayer[] = [];
 
 export class MockHls {
     static Events = {
-        MANIFEST_PARSED: 'manifestParsed',
-        ERROR: 'error',
-        AUDIO_TRACKS_UPDATED: 'audioTracksUpdated',
-        AUDIO_TRACK_SWITCHING: 'audioTrackSwitching',
-        AUDIO_TRACK_SWITCHED: 'audioTrackSwitched',
-        SUBTITLE_TRACKS_UPDATED: 'subtitleTracksUpdated',
-        SUBTITLE_TRACKS_CLEARED: 'subtitleTracksCleared',
-        SUBTITLE_TRACK_SWITCH: 'subtitleTrackSwitch',
-        MANIFEST_LOADING: 'manifestLoading',
+        MANIFEST_PARSED: 'hlsManifestParsed',
+        ERROR: 'hlsError',
+        AUDIO_TRACKS_UPDATED: 'hlsAudioTracksUpdated',
+        AUDIO_TRACK_SWITCHING: 'hlsAudioTrackSwitching',
+        AUDIO_TRACK_SWITCHED: 'hlsAudioTrackSwitched',
+        SUBTITLE_TRACKS_UPDATED: 'hlsSubtitleTracksUpdated',
+        SUBTITLE_TRACKS_CLEARED: 'hlsSubtitleTracksCleared',
+        SUBTITLE_TRACK_SWITCH: 'hlsSubtitleTrackSwitch',
+        MANIFEST_LOADING: 'hlsManifestLoading',
     };
 
     static isSupported = jest.fn(() => true);

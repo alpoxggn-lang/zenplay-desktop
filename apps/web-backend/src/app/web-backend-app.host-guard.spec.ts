@@ -14,6 +14,7 @@ import {
 import { isHostConnectivityFastFailMessage } from '@iptvnator/shared/interfaces';
 import { createWebBackendApp } from './web-backend-app';
 import express, { Response } from 'express';
+import { ZENPLAY_PROVIDER_NOT_ALLOWED } from './zenplay-provider-target-policy';
 import {
     registerProviderTarget,
     resolvePublicHost,
@@ -945,6 +946,36 @@ describe('web backend host connectivity guard', () => {
                 await expect(unusable.json()).resolves.toEqual({
                     reset: false,
                 });
+            }
+        );
+    });
+
+    it('rejects resetting a provider outside the managed ZenPlay endpoint', async () => {
+        const { guard } = createTestGuard();
+        const reset = jest.spyOn(guard, 'reset');
+
+        await withServer(
+            createWebBackendApp({
+                hostGuard: guard,
+                zenPlayXtreamUrl: 'https://zenplay.example/panel',
+            }),
+            async (baseUrl) => {
+                const response = await fetch(
+                    `${baseUrl}/connectivity-guard/reset`,
+                    {
+                        body: JSON.stringify({
+                            url: 'https://other.example/panel',
+                        }),
+                        headers: { 'content-type': 'application/json' },
+                        method: 'POST',
+                    }
+                );
+
+                expect(response.status).toBe(403);
+                await expect(response.json()).resolves.toEqual(
+                    ZENPLAY_PROVIDER_NOT_ALLOWED
+                );
+                expect(reset).not.toHaveBeenCalled();
             }
         );
     });

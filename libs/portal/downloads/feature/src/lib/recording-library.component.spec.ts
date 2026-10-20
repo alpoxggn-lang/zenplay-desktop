@@ -254,6 +254,18 @@ describe('RecordingLibraryComponent', () => {
         expect(opened).toHaveBeenCalledWith(item);
     });
 
+    it('hides reveal-in-folder for browser-private recordings', async () => {
+        const item = createItem(5, { programTitle: 'Browser recording' });
+        fixture.componentRef.setInput('nativeFileActions', false);
+        render([createRow(item)]);
+
+        const menu = await openCardMenu(card(5));
+
+        expect(
+            menu.querySelector('[data-test-action="reveal-recording"]')
+        ).toBeNull();
+    });
+
     it('falls back to channel name and start date for an untitled recording', () => {
         const item = createItem(9);
         render([createRow(item)]);

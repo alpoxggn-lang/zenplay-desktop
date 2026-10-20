@@ -1,4 +1,5 @@
 import { Signal, computed, signal } from '@angular/core';
+import { formatRemainingTime } from './controls-format.utils';
 import {
     findTimelineSegment,
     normalizeTimelineSegments,
@@ -37,6 +38,10 @@ export class ControlsTimeline {
             this.normalize(
                 this.scrubPosition() ?? this.state().positionSeconds
             ) ?? 0
+    );
+
+    readonly remainingTimeText = computed(() =>
+        formatRemainingTime(this.value(), this.duration())
     );
 
     readonly progress = computed(() => {

@@ -322,7 +322,10 @@ export class EmbeddedMpvPlayerComponent implements OnDestroy {
         () => this.session()?.recording?.active === true
     );
     readonly showSeriesNavigation = computed(
-        () => !this.isLivePlayback() && this.seriesNavigation() !== null
+        () =>
+            this.seriesNavigation() !== null &&
+            (!this.isLivePlayback() ||
+                this.seriesNavigation()?.kind === 'channel')
     );
     readonly canPreviousEpisode = computed(
         () =>
@@ -333,6 +336,16 @@ export class EmbeddedMpvPlayerComponent implements OnDestroy {
         () =>
             this.showSeriesNavigation() &&
             this.seriesNavigation()?.canNext === true
+    );
+    readonly previousNavigationLabelKey = computed(() =>
+        this.seriesNavigation()?.kind === 'channel'
+            ? 'EMBEDDED_MPV.PLAYER.PREVIOUS_CHANNEL'
+            : 'EMBEDDED_MPV.PLAYER.PREVIOUS_EPISODE'
+    );
+    readonly nextNavigationLabelKey = computed(() =>
+        this.seriesNavigation()?.kind === 'channel'
+            ? 'EMBEDDED_MPV.PLAYER.NEXT_CHANNEL'
+            : 'EMBEDDED_MPV.PLAYER.NEXT_EPISODE'
     );
     readonly recordingElapsed = computed(() => {
         const startedAt = this.session()?.recording?.startedAt;

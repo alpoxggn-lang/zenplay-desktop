@@ -313,6 +313,18 @@ describe('DownloadLibraryComponent', () => {
         ).toBeTruthy();
     });
 
+    it('hides reveal-in-folder for browser-private downloads', async () => {
+        fixture.componentRef.setInput('nativeFileActions', false);
+        await fixture.whenStable();
+
+        const card = byTestId('download-library-movie-9');
+        await click(button(card, 'More actions: Moonrise'));
+
+        expect(
+            document.querySelector('[data-test-action="reveal"]')
+        ).toBeNull();
+    });
+
     it('opens downloaded episodes from the series overflow without a file action', async () => {
         const card = byTestId('download-library-series-playlist-a-77');
         const episodeGroups: DownloadSeriesCardViewModel[] = [];

@@ -38,10 +38,15 @@ describe('RecentlyAddedCollectionComponent', () => {
     const withholdsEverything = signal(false);
     const queryParamMap = new BehaviorSubject(convertToParamMap({}));
     const activeImportSessionId = signal<string | null>(null);
-    const contentLoadStateByType = signal({
-        live: 'ready' as const,
-        vod: 'ready' as const,
-        series: 'ready' as const,
+    const contentLoadStateByType = signal<
+        Record<
+            'live' | 'vod' | 'series',
+            'idle' | 'loading' | 'ready' | 'error'
+        >
+    >({
+        live: 'ready',
+        vod: 'ready',
+        series: 'ready',
     });
     const isContentInitialized = signal(true);
     const isPendingRestoreBlocked = signal(false);

@@ -2,7 +2,10 @@ import type Artplayer from 'artplayer';
 import type { Option } from 'artplayer';
 import Hls, { type ErrorData, type ManifestParsedData } from 'hls.js';
 import mpegts from 'mpegts.js';
-import type { ChannelDrm } from '@iptvnator/shared/interfaces';
+import type {
+    ChannelDrm,
+    RecordingStartMetadata,
+} from '@iptvnator/shared/interfaces';
 import {
     InlinePlaybackPlayer,
     type PlaybackDiagnostic,
@@ -29,12 +32,15 @@ import {
 import { WebVideoSourceTracks } from '../web-video-support/web-video-source-tracks';
 import { addHlsAudioTrackSettings } from './art-player-audio-tracks';
 import { ART_PLAYER_NATIVE_SOURCE_TYPE } from './art-player-setup';
+import type { WebVideoRemotePlaybackResumeState } from '../player-controls/web-video-remote-playback-host';
+import { restoreWebVideoAfterRemotePlayback } from '../web-video-support/web-video-remote-resume';
 
 export interface ArtPlayerSourceSessionConfig {
     sharedControls: boolean;
     controlsAdapter: WebVideoControlsAdapter;
     isLive: () => boolean;
     showCaptions: () => boolean;
+    getRecordingMetadata?: () => RecordingStartMetadata | null;
     emitPlaybackIssue: (issue: PlaybackDiagnostic) => void;
     /** DRM config of the active channel, used by the DASH (`mpd`) engine. */
     getDrm?: () => ChannelDrm | undefined;
@@ -76,6 +82,8 @@ export class ArtPlayerSourceSession {
         ((type: unknown, details: unknown, info: unknown) => void) | null =
         null;
     private shakaSession: ShakaVideoSession | null = null;
+    private activeSourceUrl: string | null = null;
+    private remoteRestoreCleanup: (() => void) | null = null;
     private destroyed = false;
 
     constructor(private readonly config: ArtPlayerSourceSessionConfig) {}
@@ -101,6 +109,11 @@ export class ArtPlayerSourceSession {
             adapter: this.config.controlsAdapter,
             isLive: this.config.isLive,
             showCaptions: this.config.showCaptions,
+            getRecordingMetadata: this.config.getRecordingMetadata,
+            suspendForRemotePlayback: () =>
+                this.suspendForRemotePlayback(),
+            restoreAfterRemotePlayback: (state) =>
+                this.restoreAfterRemotePlayback(state),
         });
         this.controlsBridge = bridge;
         bridge.attach();
@@ -129,6 +142,8 @@ export class ArtPlayerSourceSession {
         }
 
         this.destroyed = true;
+        this.remoteRestoreCleanup?.();
+        this.remoteRestoreCleanup = null;
         this.controlsBridge?.destroy();
         this.controlsBridge = null;
         this.captionTracks?.destroy();
@@ -148,6 +163,8 @@ export class ArtPlayerSourceSession {
         if (this.destroyed) {
             return;
         }
+
+        this.activeSourceUrl = url;
 
         this.prepareForSourceChange();
         if (Hls.isSupported()) {
@@ -186,6 +203,8 @@ export class ArtPlayerSourceSession {
         if (this.destroyed) {
             return;
         }
+
+        this.activeSourceUrl = url;
 
         this.prepareForSourceChange();
         if (!mpegts.isSupported()) {
@@ -227,6 +246,8 @@ export class ArtPlayerSourceSession {
             return;
         }
 
+        this.activeSourceUrl = url;
+
         this.prepareForSourceChange();
         const session = this.getShakaSession();
         this.bindControlsSource({ kind: 'shaka', session });
@@ -237,6 +258,8 @@ export class ArtPlayerSourceSession {
         if (this.destroyed) {
             return;
         }
+
+        this.activeSourceUrl = url;
 
         this.prepareForSourceChange();
         video.src = url;
@@ -249,6 +272,30 @@ export class ArtPlayerSourceSession {
         this.destroyHls();
         this.destroyMpegTs();
         this.shakaSession?.stop();
+    }
+
+    private suspendForRemotePlayback(): void {
+        const video = this.player?.video;
+        if (!video) return;
+        this.remoteRestoreCleanup?.();
+        this.remoteRestoreCleanup = null;
+        video.pause();
+        this.prepareForSourceChange();
+        video.removeAttribute('src');
+        video.load();
+    }
+
+    private restoreAfterRemotePlayback(
+        state: WebVideoRemotePlaybackResumeState
+    ): void {
+        const player = this.player;
+        const sourceUrl = this.activeSourceUrl;
+        if (!player || !sourceUrl) return;
+        player.url = sourceUrl;
+        this.remoteRestoreCleanup = restoreWebVideoAfterRemotePlayback(
+            player.video,
+            state
+        );
     }
 
     private getShakaSession(): ShakaVideoSession {

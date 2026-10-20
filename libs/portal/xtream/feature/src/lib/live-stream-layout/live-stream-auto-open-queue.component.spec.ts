@@ -188,7 +188,7 @@ describe('Xtream live auto-open playback queue', () => {
                 target,
                 zulu,
             ]);
-            component['handleRemoteChannelChange']('down');
+            component.changeLiveChannel('down');
             expect(store.constructStreamUrl).toHaveBeenLastCalledWith(zulu);
         }
     );

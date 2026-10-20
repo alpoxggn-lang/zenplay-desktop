@@ -44,6 +44,7 @@ import {
 export class RecordingLibraryComponent {
     readonly items = input.required<readonly RecordingRowViewModel[]>();
     readonly pendingIds = input<ReadonlySet<number>>(new Set());
+    readonly nativeFileActions = input(true);
     readonly itemAction = output<RecordingItemAction>();
     readonly openRequested = output<RecordingItem>();
 

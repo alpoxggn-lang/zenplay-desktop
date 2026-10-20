@@ -9,6 +9,54 @@ ignoredBuiltDependencies:
 onlyBuiltDependencies:
     - nx
 
+overrides:
+    '@esbuild-kit/core-utils>esbuild': 0.25.12
+    '@hono/node-server@1.19.9': 1.19.17
+    '@humanfs/node@0.16.7': 0.16.8
+    '@xmldom/xmldom@0.8.11': 0.8.15
+    'ajv@6.12.6': 6.14.0
+    'ajv@8.17.1': 8.20.0
+    'brace-expansion@1.1.12': 1.1.18
+    'browserslist@4.28.1': 4.28.8
+    'defu@6.1.4': 6.1.6
+    'devalue@5.6.2': 5.6.4
+    'express-rate-limit@8.2.1': 8.3.0
+    'fast-uri@3.1.0': 3.1.6
+    'flatted@3.3.3': 3.4.2
+    'follow-redirects@1.15.11': 1.16.0
+    'form-data@4.0.5': 4.0.6
+    'h3@1.15.5': 1.15.10
+    'hono@4.12.0': 4.13.5
+    'immutable@5.1.4': 5.1.9
+    'ip-address@10.1.0': 10.5.0
+    'js-yaml@4.1.1': 4.3.2
+    'js-yaml@4.3.0': 4.3.2
+    'jsdom>ws': 8.21.3
+    'lodash-es@4.17.22': 4.18.1
+    'minimatch@3.1.2': 3.1.5
+    'node-forge@1.3.3': 1.4.0
+    'path-to-regexp@0.1.12': 0.1.13
+    'picomatch@2.3.1': 2.3.2
+    'picomatch@4.0.3': 4.0.7
+    'postcss-selector-parser@6.1.2': 6.1.4
+    'postcss@8.5.6': 8.5.26
+    'qs@6.14.1': 6.15.3
+    'rollup@4.52.3': 4.59.0
+    'serialize-javascript@6.0.2': 7.1.0
+    'smol-toml@1.6.0': 1.7.1
+    'smol-toml@1.6.1': 1.7.1
+    'svgo@3.3.2': 3.3.3
+    'svgo@4.0.0': 4.1.0
+    'svgo@4.0.2': 4.1.0
+    'undici@7.28.0': 7.29.0
+    'uuid@8.3.2': 11.1.1
+    'yaml@1.10.2': 1.10.3
+
+patchedDependencies:
+    'nx-electron@22.0.0': patches/nx-electron@22.0.0.patch
+    'app-builder-lib@26.15.7': patches/app-builder-lib@26.15.7.patch
+    'vite@8.1.5': patches/vite@8.1.5.patch
+
 # nx-electron imports this at runtime but omits it from its manifest.
 packageExtensions:
     'nx-electron@22.0.0':

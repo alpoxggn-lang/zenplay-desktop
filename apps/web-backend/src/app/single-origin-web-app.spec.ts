@@ -25,7 +25,9 @@ describe('single-origin ZenPlay PWA gateway', () => {
         const app = createSingleOriginWebApp({
             backend: createWebBackendApp({ storage: null }),
             staticDirectory,
+            trustProxyHops: 1,
         });
+        expect(app.get('trust proxy')).toBe(1);
 
         await withServer(app, async (baseUrl) => {
             const health = await fetch(`${baseUrl}/api/health`);
@@ -36,6 +38,18 @@ describe('single-origin ZenPlay PWA gateway', () => {
             });
 
             const asset = await fetch(`${baseUrl}/main.js`);
+            expect(asset.headers.get('content-security-policy')).toBe(
+                "frame-ancestors 'none'"
+            );
+            expect(asset.headers.get('permissions-policy')).toBe(
+                'camera=(), geolocation=(), microphone=()'
+            );
+            expect(asset.headers.get('referrer-policy')).toBe('no-referrer');
+            expect(asset.headers.get('x-content-type-options')).toBe(
+                'nosniff'
+            );
+            expect(asset.headers.get('x-frame-options')).toBe('DENY');
+            expect(asset.headers.get('x-powered-by')).toBeNull();
             await expect(asset.text()).resolves.toBe('window.ZenPlay=true;');
 
             const route = await fetch(`${baseUrl}/workspace/xtreams/demo`);

@@ -26,13 +26,13 @@ import { ControlsStreamStats } from './controls-stream-stats';
 import { ControlsSurface } from './controls-surface';
 import { ControlsTimeline } from './controls-timeline';
 import { ControlsTimelineLabel } from './controls-timeline-label';
+import { createControlsTopChrome } from './controls-top-chrome';
 import { ControlsUpNext } from './controls-up-next';
 import { ControlsVisibility } from './controls-visibility';
 import { createControlsViewModel } from './controls-view-model';
 import { ControlsVolume } from './controls-volume';
 import { ControlsVolumeInteractions } from './controls-volume-interactions';
 import { ControlsSubtitleSettings } from './controls-subtitle-settings';
-import { formatRemainingTime } from './controls-format.utils';
 import type {
     PlayerController,
     PlayerMediaTitle,
@@ -42,6 +42,7 @@ import type {
 import { PlayerSettingsPanelComponent } from './player-settings-panel.component';
 import { PlayerTimelineComponent } from './player-timeline.component';
 import { PlayerUpNextCardComponent } from './player-up-next-card.component';
+import { WebVideoRemotePlaybackButtonDirective } from './web-video-remote-playback-button.directive';
 
 @Component({
     selector: 'app-player-controls',
@@ -55,6 +56,7 @@ import { PlayerUpNextCardComponent } from './player-up-next-card.component';
         PlayerSettingsPanelComponent,
         PlayerTimelineComponent,
         PlayerUpNextCardComponent,
+        WebVideoRemotePlaybackButtonDirective,
     ],
     changeDetection: ChangeDetectionStrategy.OnPush,
     host: {
@@ -67,6 +69,7 @@ export class PlayerControlsComponent implements OnDestroy {
     private readonly translate = inject(TranslateService);
     readonly controller = input.required<PlayerController>();
     readonly playerSurface = input<HTMLElement | null>(null);
+    readonly remotePlaybackSource = input<string | null>(null);
     /**
      * Element put into DOM fullscreen; defaults to `playerSurface`. Hosts
      * that remount their player shell per source (`WebPlayerViewComponent`
@@ -79,11 +82,9 @@ export class PlayerControlsComponent implements OnDestroy {
     readonly showControls = input(true);
     readonly shortcutsEnabled = input(true);
     readonly mediaTitle = input<PlayerMediaTitle | null>(null);
-    /** Chapters / programmes drawn as track segments; null draws one. */
     readonly timelineSegments = input<readonly PlayerTimelineSegment[] | null>(
         null
     );
-    /** The next episode, for the "Up next" card near the end of this one. */
     readonly upNext = input<PlayerUpNextItem | null>(null);
     readonly previousEpisodeRequested = output<void>();
     readonly nextEpisodeRequested = output<void>();
@@ -92,7 +93,6 @@ export class PlayerControlsComponent implements OnDestroy {
     readonly anyMenuOpen = this.menus.anyOpen;
     private readonly shortcuts = new ControlsShortcuts();
     readonly layout = new ControlsLayout();
-    /** Compact dock: narrow inline players and phone-sized viewports. */
     readonly isCompact = computed(() => this.layout.mode() === 'compact');
     private readonly visibility = new ControlsVisibility(() => this.canHide());
     private readonly fullscreen = new ControlsFullscreen(
@@ -174,35 +174,18 @@ export class PlayerControlsComponent implements OnDestroy {
         value: this.timeline.value,
         scrubbing: computed(() => this.scrubPosition() !== null),
     });
-    /** `−7:03` while a finite duration is known; the dock prefers it to the total. */
-    readonly remainingTimeText = computed(() =>
-        formatRemainingTime(this.timeline.value(), this.timeline.duration())
-    );
-
+    readonly remainingTimeText = this.timeline.remainingTimeText;
     readonly displayVolume = this.volume.value;
     readonly isFullscreen = this.fullscreen.isFullscreen;
 
-    // The page around the player already names the content; the overlay only
-    // fills that gap in fullscreen, where no other chrome is visible.
-    readonly fullscreenMediaTitle = computed<PlayerMediaTitle | null>(() => {
-        if (!this.showControls() || !this.isFullscreen()) {
-            return null;
-        }
-        const mediaTitle = this.mediaTitle();
-        return mediaTitle?.primary?.trim() ? mediaTitle : null;
-    });
-
-    /**
-     * The top scrim is shared by every piece of top chrome (the fullscreen
-     * media title and the corner buttons): rendering one per consumer would
-     * stack two gradients and darken the overlap twice.
-     */
-    readonly showTopScrim = computed(
-        () =>
-            this.showControls() &&
-            (this.capabilities().streamStats ||
-                this.fullscreenMediaTitle() !== null)
+    private readonly topChrome = createControlsTopChrome(
+        this.showControls,
+        this.isFullscreen,
+        this.mediaTitle,
+        this.capabilities
     );
+    readonly fullscreenMediaTitle = this.topChrome.fullscreenMediaTitle;
+    readonly showTopScrim = this.topChrome.showTopScrim;
 
     private readonly vm = createControlsViewModel({
         state: this.state,
@@ -312,14 +295,18 @@ export class PlayerControlsComponent implements OnDestroy {
                     state
                 );
                 this.visibility.scheduleHide();
-                this.feedback.flashRecordingState(state.recording, {
-                    active: this.translate.instant(
-                        'EMBEDDED_MPV.PLAYER.RECORDING'
-                    ),
-                    inactive: this.translate.instant(
-                        'EMBEDDED_MPV.PLAYER.RECORDING_SAVED'
-                    ),
-                });
+                this.feedback.flashRecordingState(
+                    state.recording,
+                    {
+                        active: this.translate.instant(
+                            'EMBEDDED_MPV.PLAYER.RECORDING'
+                        ),
+                        inactive: this.translate.instant(
+                            'EMBEDDED_MPV.PLAYER.RECORDING_SAVED'
+                        ),
+                    },
+                    (key) => this.translate.instant(key)
+                );
             });
         });
     }

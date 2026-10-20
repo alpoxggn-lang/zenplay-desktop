@@ -10,6 +10,11 @@ export interface SeriesPlaybackNavigation {
     canPrevious: boolean;
     canNext: boolean;
     autoplayEnabled: boolean;
+    /**
+     * The adjacent items represented by the transport arrows. Omitted keeps
+     * the historical episode behavior; live-TV hosts opt into channel copy.
+     */
+    kind?: 'episode' | 'channel';
 }
 
 export interface SeriesPlaybackEpisodeState<TEpisode> {

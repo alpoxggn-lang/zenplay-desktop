@@ -1353,8 +1353,34 @@ that event carries no activation. Browsers, including iOS/WebKit versions that
 do not offer this Media Session action or the standard element API, keep normal
 inline playback and the existing manual controls when available.
 
-AirPlay, Cast, Document Picture-in-Picture, a PiP keyboard shortcut, and an
-Embedded MPV popup or native mini-window are out of scope.
+Remote playback is progressive-enhancement-only in the three browser engines.
+The shared controls attach `WebVideoRemotePlaybackButtonDirective` to the
+current HTML video surface and show the Cast/AirPlay action only when the
+browser exposes either the standard Remote Playback picker or WebKit's AirPlay
+picker. The sender accepts only same-origin opaque `/api/media/...` sources,
+exchanges the authenticated browser session for a media-scoped bearer ticket,
+and gives the receiver that temporary URL; provider credentials and the
+HttpOnly browser cookie are never placed in the receiver URL. An unclaimed
+ticket has a short issuance window, while the first receiver request keeps the
+same URL usable for later range requests up to the server's hard lifetime.
+The sender keeps the ticket while a picker is explicitly `connecting`, then
+revokes it only after cancellation, receiver disconnection, source change, or
+player detach; replacing or logging out the browser media session also revokes
+every ticket it owns. While the receiver is active, the shared state and
+play/pause, timeline, volume, mute, speed, audio, and subtitle controls target
+the remote media element. The HTML5, ArtPlayer, and Video.js hosts unload their
+local source/engine rather than merely muting it, so providers with a
+single-connection limit do not keep a second network stream open. On
+disconnect the host rebuilds its engine and restores the receiver state. A
+position is restored only after the receiver reports real metadata or time
+progress; an untouched remote `currentTime=0` never rewinds local playback.
+Recoverable ticket failures remain attached and retry safely, honoring
+`Retry-After` for throttling. Teardown pauses and removes the hidden remote
+media element, cancels stale availability watches, and generation-guards and
+revokes late picker/watch callbacks.
+Unsupported browsers keep ordinary local playback and do not render a dead
+button. Document Picture-in-Picture, a PiP keyboard shortcut, and an Embedded
+MPV popup or native mini-window remain out of scope.
 
 ### Quality (bitrate/level) selection
 

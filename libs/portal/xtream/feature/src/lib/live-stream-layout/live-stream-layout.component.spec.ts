@@ -1069,7 +1069,8 @@ describe('LiveStreamLayoutComponent', () => {
         selectedCategoryId.set(2);
         xtreamStore.selectItemsFromSelectedCategory.mockReturnValue([]);
         component.setLiveChannelSortMode('name-desc');
-        component['handleRemoteChannelChange']('down');
+        expect(component.liveChannelNavigation()?.kind).toBe('channel');
+        component.changeLiveChannel('down');
         expect(xtreamStore.constructStreamUrl).toHaveBeenLastCalledWith(next);
         expect(xtreamStore.setSelectedCategory).not.toHaveBeenCalled();
     });
@@ -1092,11 +1093,7 @@ describe('LiveStreamLayoutComponent', () => {
         liveStreams.set([{ ...sampleChannel, category_id: '1' }, nextChannel]);
         component.playLive(sampleChannel);
         xtreamStore.openPlayer.mockClear();
-        (
-            component as unknown as {
-                handleRemoteChannelChange(direction: 'up' | 'down'): void;
-            }
-        ).handleRemoteChannelChange('down');
+        component.changeLiveChannel('down');
 
         expect(xtreamStore.openPlayer).toHaveBeenCalledWith(
             'https://example.com/live.ts',

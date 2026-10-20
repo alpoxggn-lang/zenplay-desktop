@@ -64,20 +64,23 @@
                     >
                         <mat-icon aria-hidden="true">play_arrow</mat-icon>
                     </button>
-                    <button
-                        mat-icon-button
-                        type="button"
-                        [disabled]="isPending(member)"
-                        [attr.aria-label]="
-                            ('DOWNLOADS.REVEAL' | translate) +
-                            ': ' +
-                            episodeIdentity(member)
-                        "
-                        [matTooltip]="'DOWNLOADS.REVEAL' | translate"
-                        (click)="emitAction('reveal', member)"
-                    >
-                        <mat-icon aria-hidden="true">folder_open</mat-icon>
-                    </button>
+                    @if (nativeFileActions()) {
+                        <button
+                            mat-icon-button
+                            type="button"
+                            data-test-action="reveal"
+                            [disabled]="isPending(member)"
+                            [attr.aria-label]="
+                                ('DOWNLOADS.REVEAL' | translate) +
+                                ': ' +
+                                episodeIdentity(member)
+                            "
+                            [matTooltip]="'DOWNLOADS.REVEAL' | translate"
+                            (click)="emitAction('reveal', member)"
+                        >
+                            <mat-icon aria-hidden="true">folder_open</mat-icon>
+                        </button>
+                    }
                     <button
                         mat-icon-button
                         type="button"

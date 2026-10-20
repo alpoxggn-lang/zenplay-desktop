@@ -10,6 +10,7 @@
         <app-player-controls
             [controller]="controlsAdapter"
             [playerSurface]="playerRoot"
+            [remotePlaybackSource]="channel().url"
             [fullscreenTarget]="fullscreenTarget()"
             [mediaTitle]="mediaTitle()"
             [upNext]="upNext()"

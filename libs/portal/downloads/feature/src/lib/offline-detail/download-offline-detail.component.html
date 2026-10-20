@@ -117,7 +117,10 @@
                 </span>
             }
 
-            @if (offlineDetail.kind === 'movie') {
+            @if (
+                offlineDetail.kind === 'movie' &&
+                canRevealFile(offlineDetail.item)
+            ) {
                 <button
                     mat-icon-button
                     type="button"
@@ -312,50 +315,20 @@
                                                 | translate
                                         }}
                                     </button>
-                                    <button
-                                        mat-icon-button
-                                        type="button"
-                                        [matMenuTriggerFor]="episodeMenu"
-                                        [disabled]="isPending(episode.item)"
-                                        [attr.data-testid]="
-                                            'episode-overflow-' +
-                                            episode.item.id
-                                        "
-                                        [attr.aria-label]="
-                                            ('DOWNLOADS.MORE_ACTIONS'
-                                                | translate) +
-                                            ': ' +
-                                            episodeTitle(
-                                                episode.item,
-                                                $safeNavigationMigration(
-                                                    episode.episodeMetadata
-                                                        ?.title
-                                                )
-                                            )
-                                        "
-                                    >
-                                        <mat-icon aria-hidden="true"
-                                            >more_vert</mat-icon
-                                        >
-                                    </button>
-                                    <mat-menu #episodeMenu="matMenu">
+                                    @if (canRevealFile(episode.item)) {
                                         <button
-                                            mat-menu-item
+                                            mat-icon-button
                                             type="button"
+                                            [matMenuTriggerFor]="episodeMenu"
+                                            [disabled]="isPending(episode.item)"
                                             [attr.data-testid]="
-                                                'episode-reveal-' +
+                                                'episode-overflow-' +
                                                 episode.item.id
                                             "
-                                            [disabled]="isPending(episode.item)"
                                             [attr.aria-label]="
-                                                ('DOWNLOADS.REVEAL'
+                                                ('DOWNLOADS.MORE_ACTIONS'
                                                     | translate) +
                                                 ': ' +
-                                                episodeCoordinate(
-                                                    episode.seasonNumber,
-                                                    episode.episodeNumber
-                                                ) +
-                                                ' ' +
                                                 episodeTitle(
                                                     episode.item,
                                                     $safeNavigationMigration(
@@ -364,21 +337,59 @@
                                                     )
                                                 )
                                             "
-                                            (click)="
-                                                runFileAction(
-                                                    'reveal',
-                                                    episode.item
-                                                )
-                                            "
                                         >
                                             <mat-icon aria-hidden="true">
-                                                folder_open
+                                                more_vert
                                             </mat-icon>
-                                            <span>{{
-                                                'DOWNLOADS.REVEAL' | translate
-                                            }}</span>
                                         </button>
-                                    </mat-menu>
+                                        <mat-menu #episodeMenu="matMenu">
+                                            <button
+                                                mat-menu-item
+                                                type="button"
+                                                [attr.data-testid]="
+                                                    'episode-reveal-' +
+                                                    episode.item.id
+                                                "
+                                                [disabled]="
+                                                    isPending(episode.item)
+                                                "
+                                                [attr.aria-label]="
+                                                    ('DOWNLOADS.REVEAL'
+                                                        | translate) +
+                                                    ': ' +
+                                                    episodeCoordinate(
+                                                        episode.seasonNumber,
+                                                        episode.episodeNumber
+                                                    ) +
+                                                    ' ' +
+                                                    episodeTitle(
+                                                        episode.item,
+                                                        $safeNavigationMigration(
+                                                            episode
+                                                                .episodeMetadata
+                                                                ?.title
+                                                        )
+                                                    )
+                                                "
+                                                (click)="
+                                                    runFileAction(
+                                                        'reveal',
+                                                        episode.item
+                                                    )
+                                                "
+                                            >
+                                                <mat-icon aria-hidden="true">
+                                                    folder_open
+                                                </mat-icon>
+                                                <span>
+                                                    {{
+                                                        'DOWNLOADS.REVEAL'
+                                                            | translate
+                                                    }}
+                                                </span>
+                                            </button>
+                                        </mat-menu>
+                                    }
                                 </div>
                             </article>
                         }

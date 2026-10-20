@@ -18,6 +18,7 @@ import {
 } from '@iptvnator/shared/interfaces';
 import {
     SimilarCatalogItem,
+    matchRelatedCatalogItems,
     matchRecommendationsToCatalog,
 } from '../tmdb-similar.util';
 
@@ -39,13 +40,16 @@ export class VodDetailsSimilarService {
 
     private vodInfo: Signal<XtreamVodInfo | null> = signal(null);
     private routeContentId: Signal<number> = signal(NaN);
+    private categoryId: Signal<string | number | null> = signal(null);
 
     bind(bindings: {
         vodInfo: Signal<XtreamVodInfo | null>;
         routeContentId: Signal<number>;
+        categoryId?: Signal<string | number | null>;
     }): void {
         this.vodInfo = bindings.vodInfo;
         this.routeContentId = bindings.routeContentId;
+        this.categoryId = bindings.categoryId ?? signal(null);
     }
 
     /**
@@ -53,24 +57,35 @@ export class VodDetailsSimilarService {
      * a rail would match against another portal's streams.
      */
     private readonly scopedVodStreams = computed(() => {
-        const playlistId = this.xtreamStore.currentPlaylist()?.id;
+        const playlistId = this.xtreamStore.currentPlaylist?.()?.id;
         return playlistId &&
-            this.xtreamStore.vodStreamsPlaylistId() === playlistId
-            ? this.xtreamStore.vodStreams()
+            this.xtreamStore.vodStreamsPlaylistId?.() === playlistId
+            ? (this.xtreamStore.vodStreams?.() ?? [])
             : [];
     });
 
     /** TMDB recommendations matched against the loaded VOD catalog. */
     readonly similarItems = computed<SimilarCatalogItem[]>(() => {
         const info = this.vodInfo();
-        if (!info?.tmdb_recommendations?.length) {
-            return [];
+        const recommendations = info?.tmdb_recommendations;
+        if (recommendations?.length) {
+            const matched = matchRecommendationsToCatalog(
+                recommendations,
+                this.scopedVodStreams(),
+                { excludeId: this.routeContentId() }
+            );
+            if (matched.length > 0) {
+                return matched;
+            }
         }
 
-        return matchRecommendationsToCatalog(
-            info.tmdb_recommendations,
+        return matchRelatedCatalogItems(
             this.scopedVodStreams(),
-            { excludeId: this.routeContentId() }
+            {
+                excludeId: this.routeContentId(),
+                categoryId: this.categoryId(),
+                genres: info?.genre,
+            }
         );
     });
 

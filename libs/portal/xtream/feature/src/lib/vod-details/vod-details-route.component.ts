@@ -197,6 +197,12 @@ export class VodDetailsRouteComponent implements OnInit, OnDestroy {
         this.similar.bind({
             vodInfo: this.selectedVodInfo,
             routeContentId: this.selectedVodId,
+            categoryId: computed(
+                () =>
+                    this.selectedCatalogItem()?.category_id ??
+                    this.selectedItem()?.movie_data?.category_id ??
+                    null
+            ),
         });
 
         this.msUi.bind({

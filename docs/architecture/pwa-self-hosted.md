@@ -82,6 +82,14 @@ The current self-hosted PWA uses these `apps/web-backend` routes:
   movies and episodes)
 - `GET /media/resource/:opaqueToken` (rewritten HLS resources)
 - `DELETE /media/session` (revoke the browser media session)
+- `POST /media/cast` (exchange the authenticated media session for an opaque
+  receiver ticket)
+- `DELETE /media/cast/:opaqueToken` (revoke a receiver ticket from its sender
+  session)
+- `GET /media/cast/:opaqueToken/:file` (receiver-facing direct media or HLS
+  manifest)
+- `GET /media/cast-resource/:opaqueToken` (receiver-facing rewritten HLS
+  resources)
 - `GET /stalker?targetId=<id>&macAddress=<mac>&action=<action>`
 
 The POST Xtream form is preferred for browser clients because credentials stay
@@ -198,12 +206,16 @@ Renderer code that needs to branch by runtime should use
 `RuntimeCapabilitiesService` from `@iptvnator/services` instead of adding new
 direct `window.electron` or `DataService.getAppEnvironment()` checks. Keep
 feature decisions expressed as capabilities such as `supportsEpg`,
-`supportsSqlite`, `supportsXtreamSqliteDataSource`, `supportsDownloads`, or
-`supportsManagedExternalPlayers` so PWA and Electron behavior stays auditable
+`supportsSqlite`, `supportsXtreamSqliteDataSource`, `supportsDownloads`,
+`supportsRecordings`, or `supportsManagedExternalPlayers` so PWA and Electron
+behavior stays auditable
 from one shared boundary. `supportsSqlite` requires the complete playlist
-storage preload API surface used by `PlaylistsService`, `supportsDownloads`
-requires the complete downloads preload API surface used by `DownloadsService`,
-and EPG renderer code should use `EpgRuntimeBridgeService` from
+storage preload API surface used by `PlaylistsService`. In Electron,
+`supportsDownloads` requires the complete downloads preload API surface; in a
+PWA it requires IndexedDB plus OPFS. `supportsRecordings` similarly selects the
+native recording bridge in Electron and requires OPFS, MediaRecorder, and media
+element stream capture in the PWA. EPG renderer code should use
+`EpgRuntimeBridgeService` from
 `@iptvnator/epg/data-access` instead of calling `window.electron` directly.
 Playback-position renderer code should use `PlaybackPositionRuntimeBridgeService`
 from `@iptvnator/services` for Electron SQLite persistence and external-player
@@ -247,10 +259,21 @@ these limitations explicit in UI, troubleshooting, and release notes:
   `DatabaseService`. `PlaylistsService.deletePlaylist()` runs registered
   cleanup hooks such as the PWA Xtream cleanup so localStorage sidecar data does
   not survive after the source is removed.
-- The Docker/PWA runtime cannot launch MPV, VLC, IINA, Embedded MPV, download
-  manager flows, or Electron remote-control features. If inline browser
-  playback fails, the supported browser fallback is copying the stream URL and
-  opening it manually in an external player.
+- The Docker/PWA runtime cannot launch MPV, VLC, IINA, Embedded MPV, or Electron
+  remote-control features. Compatible browsers can privately download managed
+  Xtream movies/episodes and record a capturable live player into OPFS; browser
+  quota, codec support, protected/cross-origin capture rules, and keeping the
+  player page open remain hard limits. HLS manifests are not presented as
+  offline downloads until segment packaging is available. If inline browser playback fails, the
+  supported browser fallback is copying the stream URL and opening it manually
+  in an external player.
+- Browser players expose remote playback only when the platform provides the
+  standard Remote Playback API or WebKit AirPlay picker. The backend exchanges
+  the authenticated session for a short-lived, media-scoped bearer URL so the
+  receiver never receives Xtream credentials or the browser's HttpOnly cookie.
+  Receiver discovery, codec/container compatibility, and actual TV support
+  remain browser, operating-system, network, and receiver capabilities; the UI
+  hides the action when no supported picker exists.
 - Browser account-expiry alerts are evaluated when ZenPlay opens, returns to
   the foreground, or remains in use. A compatible browser can enable system
   notifications from Settings; selecting one returns to Settings. There is no
@@ -434,8 +457,55 @@ better-sqlite3 is a native addon, so the Dockerfile builds it in a separate
 produce it for each target platform. nginx raises `client_max_body_size` to
 64 MB for `/api/` and gzips JSON responses.
 
+## Native remote playback
+
+The web player shows its TV button only when the browser exposes a real Remote
+Playback picker or Safari's AirPlay picker. The receiver gets a media-scoped,
+opaque backend URL: it never receives Xtream credentials or the browser's
+HttpOnly session cookie. Unclaimed URLs expire quickly; an active receiver can
+reuse the same URL for Range and HLS requests until the bounded hard expiry.
+Ticket budgets apply both per browser session and per HMAC-bound media source,
+so opening more sessions for the same provider account cannot consume the
+global receiver capacity. Capacity pressure may evict only unclaimed tickets;
+an active receiver remains valid until expiry or explicit revocation. The
+authenticated sender deletes its ticket after picker cancellation,
+disconnection, source replacement, or teardown. Replacing an account session
+or logging out revokes all of that session's tickets and opaque HLS resources;
+an invalid cast path never activates the ticket's extended lifetime.
+The picker may resolve before the receiver finishes connecting, so the sender
+retains the ticket through the explicit `connecting` state and waits for a
+connect or disconnect event. A `429` or another recoverable preparation
+failure keeps the control attached and retries with the server's bounded
+`Retry-After` delay instead of permanently hiding Cast.
+HLS resource budgets are also aggregated by source. Reaching either that quota
+or the protected global resource capacity fails with a retryable response
+instead of evicting resource URLs that another active receiver still needs.
+
+iPhone and iPad use the native WebKit AirPlay path. Chromium-based browsers use
+the standard Remote Playback API when the browser/device combination exposes
+it. A custom Google Cast CAF receiver is intentionally not bundled because it
+requires a separately hosted and registered receiver application; unsupported
+browsers therefore hide the control instead of offering a nonfunctional one.
+
+While connected, the shared controls operate on the remote media session and
+the local HTML5, ArtPlayer, or Video.js engine releases its source connection.
+After disconnect the selected engine is rebuilt with the remote volume, mute,
+speed, play state, and only a receiver position that was actually observed; a
+default zero from a receiver that never reported progress is not resume
+evidence.
+
 When hosting behind another domain, set `CLIENT_URL` to the browser origin and
 keep `BACKEND_URL=/api` unless the reverse proxy exposes the backend elsewhere.
+Set `ZENPLAY_MEDIA_SOURCE_SECRET` to a long random deployment secret and keep
+it stable across restarts. It HMAC-binds resumable media to the normalized
+provider and username without exposing either value. If omitted, the backend
+uses a process-random secret so stale downloads fail closed after a restart;
+the Render blueprint generates and persists this secret automatically.
+Set `ZENPLAY_DISABLE_XTREAM_GET=1` on managed public deployments to reject the
+legacy credential-bearing `GET /xtream` form; browser clients use the POST form.
+When a trusted reverse proxy terminates HTTPS, set `ZENPLAY_TRUST_PROXY_HOPS`
+to its exact hop count so secure cookies and client protocol detection work
+without trusting arbitrary forwarded headers.
 Only set `IPTVNATOR_PROXY_ALLOW_PRIVATE_NETWORKS=1` when the self-hosted
 instance is restricted to trusted users and intentionally needs private network
 IPTV targets. For providers using private certificate authorities, mount the CA

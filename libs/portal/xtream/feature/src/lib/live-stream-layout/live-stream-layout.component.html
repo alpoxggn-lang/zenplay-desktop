@@ -168,9 +168,12 @@
                     [playback]="activePlayback()"
                     [timelineSegments]="catchupTimelineSegments()"
                     [recordingMetadata]="recordingMetadata()"
+                    [seriesNavigation]="liveChannelNavigation()"
                     (externalFallbackRequested)="
                         handleExternalFallbackRequest($event)
                     "
+                    (previousEpisodeRequested)="changeLiveChannel('up')"
+                    (nextEpisodeRequested)="changeLiveChannel('down')"
                     (recordingStopped)="onRecordingStopped($event)"
                 />
             </div>

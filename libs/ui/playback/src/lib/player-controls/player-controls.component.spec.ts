@@ -1,9 +1,11 @@
 import { WritableSignal, signal } from '@angular/core';
+import { By } from '@angular/platform-browser';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { TranslateModule, TranslateService } from '@ngx-translate/core';
 import { DEFAULT_PLAYER_CAPABILITIES } from './player-controls-defaults';
 import { createEmptyControlsState } from './player-controls-defaults';
 import { PlayerControlsComponent } from './player-controls.component';
+import { WebVideoRemotePlaybackButtonDirective } from './web-video-remote-playback-button.directive';
 import type {
     PlayerControlsCapabilities,
     PlayerControlsCommands,
@@ -73,6 +75,8 @@ describe('PlayerControlsComponent', () => {
                     PAUSE: 'Pause',
                     PREVIOUS_EPISODE: 'Previous episode',
                     NEXT_EPISODE: 'Next episode',
+                    PREVIOUS_CHANNEL: 'Previous channel',
+                    NEXT_CHANNEL: 'Next channel',
                     BACK_10_SECONDS: 'Back 10 seconds',
                     FORWARD_10_SECONDS: 'Forward 10 seconds',
                     LIVE_STREAM: 'Live stream',
@@ -92,6 +96,8 @@ describe('PlayerControlsComponent', () => {
                     ASPECT_DEFAULT: 'Default',
                     START_RECORDING: 'Start recording',
                     STOP_RECORDING: 'Stop recording',
+                    CAST_TO_TV: 'Cast to TV',
+                    CASTING_TO_TV: 'Casting to TV',
                     ENTER_FULLSCREEN: 'Enter fullscreen',
                     EXIT_FULLSCREEN: 'Exit fullscreen',
                 },
@@ -274,6 +280,130 @@ describe('PlayerControlsComponent', () => {
             expect(fixture.componentInstance.feedback.current()?.label).toBe(
                 'Stumm'
             );
+        });
+    });
+
+    describe('remote playback lifecycle', () => {
+        it('keeps Cast active while roomy settings are open and restores local playback on disconnect', async () => {
+            const remote = new ControlsFakeRemotePlayback();
+            const prompt = controlsDeferred<void>();
+            remote.prompt.mockImplementation(() => prompt.promise);
+            const originalRemote = Object.getOwnPropertyDescriptor(
+                HTMLMediaElement.prototype,
+                'remote'
+            );
+            const originalFetch = globalThis.fetch;
+            Object.defineProperty(HTMLMediaElement.prototype, 'remote', {
+                configurable: true,
+                get: () => remote,
+            });
+            globalThis.fetch = jest.fn(async (_input, init?: RequestInit) =>
+                controlsJsonResponse(
+                    init?.method === 'DELETE'
+                        ? {}
+                        : {
+                              expiresInSeconds: 900,
+                              url: `/api/media/cast/${'t'.repeat(
+                                  32
+                              )}/stream.mp4`,
+                          }
+                )
+            ) as typeof fetch;
+
+            const surface = document.createElement('section');
+            const source = controlsControllableVideo(false);
+            source.currentTime = 12;
+            source.muted = false;
+            surface.append(source);
+            document.body.append(surface);
+
+            try {
+                setCapabilities({ aspectRatio: true });
+                fixture.componentInstance.layout.applyWidth(1200);
+                fixture.componentRef.setInput('playerSurface', surface);
+                fixture.componentRef.setInput(
+                    'remotePlaybackSource',
+                    '/api/media/movie/42.mp4'
+                );
+                fixture.detectChanges();
+                await controlsSettlePromises();
+                fixture.detectChanges();
+
+                const castBefore = query(
+                    '[data-test-id="player-controls-cast"]'
+                ) as HTMLButtonElement;
+                const directiveBefore = fixture.debugElement
+                    .query(By.directive(WebVideoRemotePlaybackButtonDirective))
+                    .injector.get(WebVideoRemotePlaybackButtonDirective);
+                const remoteVideo = document.querySelector<HTMLVideoElement>(
+                    'video[aria-hidden="true"]'
+                );
+                expect(remoteVideo).not.toBeNull();
+                const remoteMethods = controlsControllableMethods(
+                    remoteVideo as HTMLVideoElement,
+                    true
+                );
+
+                castBefore.click();
+                remote.state = 'connected';
+                remote.dispatchEvent(new Event('connect'));
+                prompt.resolve();
+                await controlsSettlePromises();
+                fixture.detectChanges();
+
+                expect(directiveBefore.state().active).toBe(true);
+                expect(source.pause).toHaveBeenCalled();
+                expect(source.paused).toBe(true);
+                expect(source.muted).toBe(true);
+                expect(remoteMethods.play).toHaveBeenCalled();
+
+                query(
+                    '[data-test-id="player-controls-settings-button"]'
+                )?.click();
+                fixture.detectChanges();
+
+                const castWhileSettingsOpen = query(
+                    '[data-test-id="player-controls-cast"]'
+                ) as HTMLButtonElement;
+                const directiveWhileSettingsOpen = fixture.debugElement
+                    .query(By.directive(WebVideoRemotePlaybackButtonDirective))
+                    .injector.get(WebVideoRemotePlaybackButtonDirective);
+                expect(castWhileSettingsOpen).toBe(castBefore);
+                expect(castWhileSettingsOpen.hidden).toBe(true);
+                expect(directiveWhileSettingsOpen).toBe(directiveBefore);
+                expect(directiveWhileSettingsOpen.state().active).toBe(true);
+                expect(source.paused).toBe(true);
+
+                (remoteVideo as HTMLVideoElement).currentTime = 48;
+                remoteVideo?.dispatchEvent(new Event('timeupdate'));
+                remote.state = 'disconnected';
+                remote.dispatchEvent(new Event('disconnect'));
+                await controlsSettlePromises();
+
+                expect(directiveBefore.state().active).toBe(false);
+                expect(source.currentTime).toBe(48);
+                expect(source.muted).toBe(false);
+                expect(source.play).toHaveBeenCalled();
+                expect(source.paused).toBe(false);
+            } finally {
+                fixture.componentRef.setInput('playerSurface', null);
+                fixture.componentRef.setInput('remotePlaybackSource', null);
+                fixture.detectChanges();
+                surface.remove();
+                globalThis.fetch = originalFetch;
+                if (originalRemote) {
+                    Object.defineProperty(
+                        HTMLMediaElement.prototype,
+                        'remote',
+                        originalRemote
+                    );
+                } else {
+                    Reflect.deleteProperty(
+                        HTMLMediaElement.prototype,
+                        'remote'
+                    );
+                }
+            }
         });
     });
 
@@ -821,5 +951,85 @@ describe('PlayerControlsComponent', () => {
             expect(previous).toHaveBeenCalledTimes(1);
             expect(next).toHaveBeenCalledTimes(1);
         });
+
+        it('uses channel labels when the adjacent items are live channels', () => {
+            setCapabilities({ seriesNavigation: true });
+            setState({
+                canPreviousEpisode: true,
+                canNextEpisode: true,
+                adjacentNavigationKind: 'channel',
+            });
+            fixture.detectChanges();
+
+            expect(query('[aria-label="Previous channel"]')).not.toBeNull();
+            expect(query('[aria-label="Next channel"]')).not.toBeNull();
+            expect(query('[aria-label="Previous episode"]')).toBeNull();
+            expect(query('[aria-label="Next episode"]')).toBeNull();
+        });
     });
 });
+
+class ControlsFakeRemotePlayback extends EventTarget {
+    state: RemotePlaybackState = 'disconnected';
+    readonly prompt = jest.fn<Promise<void>, []>(async () => undefined);
+    readonly cancelWatchAvailability = jest.fn(async () => undefined);
+    readonly watchAvailability = jest.fn(async () => 1);
+}
+
+function controlsControllableVideo(paused: boolean): HTMLVideoElement {
+    const video = document.createElement('video');
+    controlsControllableMethods(video, paused);
+    return video;
+}
+
+function controlsControllableMethods(
+    video: HTMLVideoElement,
+    paused: boolean
+): { readonly pause: jest.Mock; readonly play: jest.Mock } {
+    Object.defineProperty(video, 'paused', {
+        configurable: true,
+        value: paused,
+        writable: true,
+    });
+    const play = jest.fn(async () => {
+        Reflect.set(video, 'paused', false);
+        video.dispatchEvent(new Event('play'));
+    });
+    const pause = jest.fn(() => {
+        const changed = !video.paused;
+        Reflect.set(video, 'paused', true);
+        if (changed) video.dispatchEvent(new Event('pause'));
+    });
+    Object.defineProperty(video, 'play', { configurable: true, value: play });
+    Object.defineProperty(video, 'pause', {
+        configurable: true,
+        value: pause,
+    });
+    return { pause, play };
+}
+
+function controlsJsonResponse(value: unknown): Response {
+    return {
+        headers: new Headers(),
+        json: async () => value,
+        ok: true,
+        status: 200,
+    } as Response;
+}
+
+function controlsDeferred<T>(): {
+    readonly promise: Promise<T>;
+    readonly resolve: (value: T) => void;
+} {
+    let resolve!: (value: T) => void;
+    const promise = new Promise<T>((done) => {
+        resolve = done;
+    });
+    return { promise, resolve };
+}
+
+async function controlsSettlePromises(): Promise<void> {
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+}

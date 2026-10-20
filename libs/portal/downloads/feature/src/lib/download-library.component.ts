@@ -41,6 +41,7 @@ import { DownloadSourceMenuHeaderComponent } from './download-source-menu-header
 export class DownloadLibraryComponent {
     readonly entities = input.required<readonly DownloadLibraryEntity[]>();
     readonly pendingIds = input<ReadonlySet<number>>(new Set());
+    readonly nativeFileActions = input(true);
     readonly itemAction = output<DownloadItemAction>();
     readonly openRequested = output<DownloadItem>();
     readonly episodesOpened = output<DownloadSeriesCardViewModel>();

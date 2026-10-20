@@ -14,7 +14,10 @@ import {
     EpgProgramActivationEvent,
     EpgTimelineSummary,
 } from '@iptvnator/ui/epg';
-import { PlaybackFallbackRequest } from '@iptvnator/ui/playback';
+import {
+    PlaybackFallbackRequest,
+    SeriesPlaybackNavigation,
+} from '@iptvnator/ui/playback';
 
 @Component({
     changeDetection: ChangeDetectionStrategy.Eager,
@@ -63,7 +66,10 @@ export class StubWebPlayerViewComponent {
     readonly playback = input<unknown>(null);
     readonly timelineSegments = input<unknown>(null);
     readonly recordingMetadata = input<RecordingStartMetadata | null>(null);
+    readonly seriesNavigation = input<SeriesPlaybackNavigation | null>(null);
     readonly externalFallbackRequested = output<PlaybackFallbackRequest>();
+    readonly previousEpisodeRequested = output<void>();
+    readonly nextEpisodeRequested = output<void>();
     readonly recordingStopped = output<RecordingStoppedEvent>();
 }
 

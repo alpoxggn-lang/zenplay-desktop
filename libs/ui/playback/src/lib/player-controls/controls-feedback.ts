@@ -44,13 +44,16 @@ export class ControlsFeedback {
      */
     flashRecordingState(
         recording: PlayerRecordingState,
-        labels: RecordingFeedbackLabels
+        labels: RecordingFeedbackLabels,
+        translateMessage: (key: string) => string = (key) => key
     ): void {
         this.flashRecordingTransition(
             recording.active,
             {
                 ...labels,
-                inactive: recording.message || labels.inactive,
+                inactive: recording.message
+                    ? translateMessage(recording.message)
+                    : labels.inactive,
             },
             recording.transitionKey ?? null
         );

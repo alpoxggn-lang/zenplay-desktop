@@ -20,6 +20,7 @@ import {
     PlaylistsService,
     type RecordingItem,
     RecordingsService,
+    RuntimeCapabilitiesService,
     injectTranslationTick,
 } from '@iptvnator/services';
 import { EmptyStateComponent } from '@iptvnator/playlist/shared/ui';
@@ -100,15 +101,23 @@ export class DownloadsComponent {
     private readonly translate = inject(TranslateService);
     private readonly shellActions = inject(PORTAL_SHELL_ACTIONS);
     private readonly destroyRef = inject(DestroyRef);
+    private readonly runtime = inject(RuntimeCapabilitiesService);
     readonly downloadsService = inject(DownloadsService);
     readonly recordingsService = inject(RecordingsService);
     private readonly recordingActions = inject(RecordingManagerActionsService);
 
+    nativeFileActionsAvailable(): boolean {
+        return !this.runtime.isPwa;
+    }
+
     readonly pendingIds = this.actions.pendingIds;
     readonly isClearing = this.actions.isClearing;
     readonly downloadFolder = this.downloadsService.downloadFolder;
+    readonly displayedDownloadFolder = computed(() =>
+        this.translate.instant(this.downloadFolder())
+    );
     readonly downloadFolderParts = computed(() => {
-        const path = this.downloadFolder();
+        const path = this.displayedDownloadFolder();
         const separatorIndex = Math.max(
             path.lastIndexOf('/'),
             path.lastIndexOf('\\')
@@ -315,6 +324,10 @@ export class DownloadsComponent {
         });
         ref.componentRef?.setInput('members', liveMembers);
         ref.componentRef?.setInput('pendingIds', this.pendingIds);
+        ref.componentRef?.setInput(
+            'nativeFileActions',
+            this.nativeFileActionsAvailable()
+        );
         const actionSubscription = ref.componentInstance.itemAction.subscribe(
             (action) => void this.runAction(action)
         );

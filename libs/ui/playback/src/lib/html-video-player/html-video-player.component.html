@@ -11,6 +11,7 @@
         <app-player-controls
             [controller]="controlsAdapter"
             [playerSurface]="playerRoot"
+            [remotePlaybackSource]="channel?.url ?? null"
             [fullscreenTarget]="fullscreenTarget()"
             [mediaTitle]="mediaTitle()"
             [upNext]="upNext()"

@@ -3,6 +3,7 @@ import {
     buildRecordingManagerViewModel,
     recordingDurationLabel,
     recordingDurationSeconds,
+    recordingFormatLabel,
 } from './recording-manager.viewmodel';
 
 let nextId = 1;
@@ -37,6 +38,28 @@ describe('recordingDurationSeconds', () => {
                 recording({ endedAt: '2026-08-15T20:00:00Z' })
             )
         ).toBeNull();
+    });
+});
+
+describe('recordingFormatLabel', () => {
+    it('uses the actual PWA recorder MIME type before the file extension', () => {
+        expect(
+            recordingFormatLabel(
+                recording({
+                    filePath: 'opfs://zenplay-private-media/recordings/1.bin',
+                    browserMimeType: 'video/webm;codecs=vp9,opus',
+                })
+            )
+        ).toBe('WebM');
+    });
+
+    it('derives MP4 and native MPEG-TS labels from their paths', () => {
+        expect(
+            recordingFormatLabel(recording({ filePath: '/rec/1.mp4' }))
+        ).toBe('MP4');
+        expect(recordingFormatLabel(recording({ filePath: '/rec/1.ts' }))).toBe(
+            'MPEG-TS'
+        );
     });
 });
 
@@ -157,9 +180,7 @@ describe('buildRecordingManagerViewModel', () => {
             ],
             filter: 'all',
         });
-        expect(
-            model.library.map(({ item }) => item.startedAt)
-        ).toEqual([
+        expect(model.library.map(({ item }) => item.startedAt)).toEqual([
             '2026-08-15T10:00:00Z',
             '2026-08-14T10:00:00Z',
             '2026-08-13T10:00:00Z',

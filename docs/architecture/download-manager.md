@@ -1,11 +1,101 @@
 # Download Manager Architecture
 
-The download manager is a desktop-only feature that layers a curated queue,
-progress tracking, storage configuration, and playback controls on top of the
-existing Xtream (`libs/portal/xtream`) + Stalker (`libs/portal/stalker`) portal
-views. Backend work is handled in the Electron process while the Angular
-renderer exposes the global `/workspace/downloads` page, source-scoped route
-variants, contextual buttons, and theme-aware styling.
+The download manager layers a curated queue, progress tracking, storage
+configuration, and playback controls on top of the existing Xtream
+(`libs/portal/xtream`) + Stalker (`libs/portal/stalker`) portal views. Native
+filesystem work is handled in the Electron process; compatible browser PWAs
+use origin-private browser storage. The Angular renderer exposes the shared
+global `/workspace/downloads` page, source-scoped route variants, contextual
+buttons, and theme-aware styling.
+
+## Browser/PWA private media
+
+`BrowserMediaLibrary` is the PWA capability implementation behind the existing
+`DownloadsService` and `RecordingsService` APIs. Metadata is stored in
+IndexedDB and media bytes in the Origin Private File System (OPFS). Its
+`opfs://zenplay-private-media/...` identifiers are internal references, not
+provider URLs or public filesystem paths. The app requests persistent browser
+storage, but quota and eviction remain browser policy.
+
+- Movie and episode downloads accept only the managed opaque
+  `/api/media/movie|series/:id.:extension` routes. A provider-shaped Xtream URL
+  is reduced to that route before persistence, so the browser library never
+  stores the provider host, username, password, request headers, portal URL, or
+  MAC address. Its IndexedDB row is built from an explicit presentation and
+  media-identity allowlist rather than by copying the native download request.
+  Poster and metadata snapshots use a second, nested allowlist: only
+  query-free same-origin image paths survive, and legacy rows are scrubbed when
+  read. The migration reconstructs the complete row from an allowlist, converts
+  old provider URLs into opaque same-origin media routes, and removes copied
+  headers, server/portal addresses, MAC addresses, credentials, and every
+  unknown field. An unconvertible source is cleared and made non-resumable.
+  External image hosts, userinfo, fragments, query tokens and unknown snapshot
+  fields are never retained.
+  Unsupported sources fail with an explicit message instead of falling back to
+  a public download link.
+- Transfers stream directly into OPFS. Pause/resume uses `Range` plus
+  `If-Range` with a strong ETag or Last-Modified value. Appending requires an
+  exact `206 Content-Range` start and the same validator; otherwise the file is
+  truncated and fetched from byte zero. A partial without a validator also
+  restarts, because mixing two versions is worse than losing partial progress.
+  A successful response must contribute at least one byte; an empty 200 is
+  removed and recorded as failed rather than becoming a playable library item.
+- The backend binds every response to an opaque `X-ZenPlay-Media-Source`
+  identity. A resume sends that identity back and fails before opening OPFS if
+  the active Xtream source changed. Web Locks plus an IndexedDB ownership lease
+  prevent another tab from recovering, replacing, or deleting an active file.
+  Resume ownership is claimed in one IndexedDB read-write transaction before a
+  worker enters the Web Lock, so simultaneous tabs cannot leave an ownerless
+  queued row. A busy lock rolls that claim back atomically, and missing-file
+  re-download uses the same compare-and-write ownership transition. An
+  already-open tab also polls active rows every 15 seconds: once a crashed
+  owner's lease expires it probes cross-tab liveness, obtains the Web Lock when
+  available, and pauses the row with an owner-and-lease compare-and-write so a
+  renewed or observable owner is never overwritten. The local
+  FIFO starts at most two transfers at once. Compact `BroadcastChannel`
+  invalidations make other open tabs reload the authoritative IndexedDB list.
+  Removing media deletes its OPFS bytes before its row; only `NotFoundError` is
+  idempotent, while permission or I/O failures keep the row and are shown so
+  the user can retry without creating an unreachable orphan.
+- HLS (`.m3u8`) is rejected for browser offline downloads because saving only
+  its manifest would not save the segments. Direct VOD files remain supported.
+- Completed files open through a short-lived blob URL in ZenPlay's private
+  player. This hides ordinary filesystem and reusable provider links, but is
+  not DRM: browser developer tools, an extension, or same-origin script with
+  equivalent access remain inside the user's security boundary. Playback still
+  depends on codecs supported by that browser.
+- Browser live recording is exposed only when OPFS, `MediaRecorder`, and
+  `HTMLMediaElement.captureStream()` (or the Firefox equivalent) all exist.
+  Each `MediaRecorder` chunk is appended through a fresh OPFS writer and
+  closed before the next chunk, so a crash preserves the last committed media
+  prefix instead of discarding everything held by one long-lived writer. A
+  recorder error is retained while the final `dataavailable` and `stop` events
+  drain; a bounded quiet-period fallback settles implementations that omit the
+  final stop event without racing the last chunk. The shared recordings library
+  tracks progress, stop, playback, and removal. A
+  15-second library poll lets an already-open tab recover a recording after
+  another tab crashes and its ownership lease expires. Hidden mobile tabs use
+  a conservative lease and a `BroadcastChannel` liveness probe; an observable
+  owner is never recovered merely because its JavaScript timer was throttled.
+  Recovery uses an IndexedDB compare-and-write against the expired
+  lease: a nonempty OPFS file becomes interrupted and playable, while a missing
+  or zero-byte file becomes failed and is removed. Removal claims the row in an
+  IndexedDB transaction before touching OPFS, and file-availability refreshes
+  update only an unchanged existing row, preventing cross-tab resurrection.
+  Programme enrichment uses the same versioned compare-and-write rule. A real
+  OPFS deletion error releases its matching removal claim so the row remains
+  retryable instead of becoming permanently hidden.
+  Every recording row is rebuilt from an explicit presentation-field allowlist
+  before an IndexedDB write. Channel art keeps only a clean same-origin path
+  (never a provider host, userinfo, query, or fragment); list/get also replace
+  legacy rows with their sanitized form so old connection metadata and unknown
+  fields do not remain in the browser profile.
+  Protected/cross-origin media may refuse capture; a recording lasts only while
+  its page and player remain alive, so scheduled or background recording is not
+  promised.
+- Electron is excluded from this capability even though its Chromium renderer
+  exposes browser APIs; packaged desktop builds keep their native queue and
+  Embedded MPV recording paths.
 
 ## Xtream archive downloads
 
@@ -447,9 +537,9 @@ available after restart and after the source archive expires.
 
 ## Live-TV recordings
 
-Recordings made with the embedded MPV player live beside downloads, not inside
-them: a recording has no source URL to re-fetch, no byte totals, and no
-retry/resume semantics, so it gets its own `recordings` SQLite table (no
+Electron recordings made with the embedded MPV player live beside downloads,
+not inside them: a recording has no source URL to re-fetch, no byte totals, and
+no retry/resume semantics, so it gets its own `recordings` SQLite table (no
 unique index — re-recording a channel is normal; `playlist_id` carries no FK
 so recordings survive source deletion, with `playlist_name` stored as a
 display snapshot via `playlistDisplayLabel`).
@@ -505,9 +595,10 @@ display snapshot via `playlistDisplayLabel`).
   probe: `ElectronRecordingItem.fileAvailability` adds `'unknown'`, and
   consumers gate on `=== 'missing'` so only proven absence reaches Needs
   attention or hides file actions. The focused
-  recording detail route is guarded by the `supportsRecordings` capability
-  (redirect to the manager) since `RecordingsService` never becomes
-  authoritative in the PWA. Tracker finalization is bound to the exact open entry, never the
+  recording detail route is guarded by the `supportsRecordings` capability.
+  In a compatible PWA, `RecordingsService` becomes authoritative from the
+  browser library instead of this Electron tracker. Tracker finalization is
+  bound to the exact open entry, never the
   reusable session id: a stop → immediate restart on the same session leaves
   the old entry to its own settle timer, and replacing the map entry arms
   that timer if no stop was ever observed, so neither row can be finalized

@@ -78,6 +78,7 @@ import {
     type FullscreenChannelPanelContext,
     type FullscreenChannelPanelHost,
     type PlaybackFallbackRequest,
+    type SeriesPlaybackNavigation,
     WebPlayerViewComponent,
 } from '@iptvnator/ui/playback';
 import { LiveEpgPanelSummary } from '@iptvnator/ui/shared-portals';
@@ -445,6 +446,22 @@ export class LiveStreamLayoutComponent
             ? createPlaybackSessionKey({ kind: 'live', sourceId, contentId })
             : '';
     });
+    /** Reuses the playback queue captured when the user opened this channel. */
+    readonly liveChannelNavigation = computed<SeriesPlaybackNavigation | null>(
+        () => {
+            const active = this.channelNavigation.activeItem();
+            const channels = this.channelNavigation.remoteChannels();
+            if (!active || channels.length < 2) {
+                return null;
+            }
+            return {
+                canPrevious: true,
+                canNext: true,
+                autoplayEnabled: false,
+                kind: 'channel',
+            };
+        }
+    );
     readonly activeStreamUrl = computed(
         () => this.activePlayback()?.streamUrl ?? ''
     );
@@ -626,7 +643,7 @@ export class LiveStreamLayoutComponent
         if (remoteControl?.onChannelChange) {
             const unsubscribe = remoteControl.onChannelChange(
                 (data: { direction: 'up' | 'down' }) => {
-                    this.handleRemoteChannelChange(data.direction);
+                    this.changeLiveChannel(data.direction);
                 }
             );
             if (typeof unsubscribe === 'function') {
@@ -823,7 +840,7 @@ export class LiveStreamLayoutComponent
         );
     }
 
-    private handleRemoteChannelChange(direction: 'up' | 'down'): void {
+    changeLiveChannel(direction: 'up' | 'down'): void {
         const activeItem = this.xtreamStore.selectedItem();
         if (!activeItem?.xtream_id) {
             return;

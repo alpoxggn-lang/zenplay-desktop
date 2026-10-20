@@ -5,6 +5,7 @@ import express, { type Express } from 'express';
 export interface SingleOriginWebAppOptions {
     readonly backend: Express;
     readonly staticDirectory: string;
+    readonly trustProxyHops?: number;
 }
 
 /** Serves the production PWA and its backend from one HTTPS-ready origin. */
@@ -21,6 +22,21 @@ export function createSingleOriginWebApp(
 
     const app = express();
     app.disable('x-powered-by');
+    const trustProxyHops =
+        options.trustProxyHops ?? getConfiguredTrustProxyHops();
+    if (trustProxyHops > 0) {
+        app.set('trust proxy', trustProxyHops);
+    }
+    app.use((_req, res, next) => {
+        res.set({
+            'Content-Security-Policy': "frame-ancestors 'none'",
+            'Permissions-Policy': 'camera=(), geolocation=(), microphone=()',
+            'Referrer-Policy': 'no-referrer',
+            'X-Content-Type-Options': 'nosniff',
+            'X-Frame-Options': 'DENY',
+        });
+        next();
+    });
     app.use('/api', options.backend);
     app.use('/api', (_req, res) => {
         res.status(404).json({ message: 'API route not found', status: 404 });
@@ -48,4 +64,13 @@ export function createSingleOriginWebApp(
     });
 
     return app;
+}
+
+function getConfiguredTrustProxyHops(): number {
+    const value = process.env['ZENPLAY_TRUST_PROXY_HOPS']?.trim();
+    if (!value || !/^\d+$/.test(value)) {
+        return 0;
+    }
+    const hops = Number(value);
+    return Number.isSafeInteger(hops) ? hops : 0;
 }

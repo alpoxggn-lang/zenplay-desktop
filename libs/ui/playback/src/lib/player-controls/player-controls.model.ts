@@ -131,6 +131,8 @@ export interface PlayerControlsState {
     canPictureInPicture: boolean;
     canPreviousEpisode: boolean;
     canNextEpisode: boolean;
+    /** Copy/semantics for the adjacent-item transport arrows. */
+    adjacentNavigationKind: 'episode' | 'channel';
 }
 
 /** Imperative command surface. All fire-and-forget (void). */

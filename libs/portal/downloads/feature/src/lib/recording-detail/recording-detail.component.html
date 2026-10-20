@@ -49,17 +49,27 @@
                     <mat-icon aria-hidden="true">fiber_manual_record</mat-icon>
                     {{ 'DOWNLOADS.RECORDING_BADGE' | translate }}
                 </app-meta-chip>
-                <app-meta-chip>{{ recording.channelName }}</app-meta-chip>
+                <app-meta-chip>{{
+                    recording.channelName | translate
+                }}</app-meta-chip>
                 @if (durationLabel()) {
                     <app-meta-chip>{{ durationLabel() }}</app-meta-chip>
                 }
                 @if (sizeLabel()) {
                     <app-meta-chip>{{ sizeLabel() }}</app-meta-chip>
                 }
-                <app-meta-chip>MPEG-TS</app-meta-chip>
+                <app-meta-chip>{{ formatLabel() }}</app-meta-chip>
                 @if (recording.status === 'interrupted') {
                     <app-meta-chip variant="status">
                         {{ 'DOWNLOADS.STATUS.INTERRUPTED' | translate }}
+                    </app-meta-chip>
+                }
+                @if (isActive() && !canStop()) {
+                    <app-meta-chip variant="status">
+                        {{
+                            'DOWNLOADS.BROWSER.RECORDING_ACTIVE_OTHER_TAB'
+                                | translate
+                        }}
                     </app-meta-chip>
                 }
             </ng-template>
@@ -93,17 +103,19 @@
 
             <ng-template appDetailActions>
                 @if (isActive()) {
-                    <button
-                        mat-flat-button
-                        class="recording-detail__stop-action"
-                        type="button"
-                        data-testid="recording-stop"
-                        [disabled]="isPending()"
-                        (click)="runAction('stop')"
-                    >
-                        <mat-icon aria-hidden="true">stop</mat-icon>
-                        {{ 'DOWNLOADS.STOP_RECORDING' | translate }}
-                    </button>
+                    @if (canStop()) {
+                        <button
+                            mat-flat-button
+                            class="recording-detail__stop-action"
+                            type="button"
+                            data-testid="recording-stop"
+                            [disabled]="isPending()"
+                            (click)="runAction('stop')"
+                        >
+                            <mat-icon aria-hidden="true">stop</mat-icon>
+                            {{ 'DOWNLOADS.STOP_RECORDING' | translate }}
+                        </button>
+                    }
                 } @else {
                     <button
                         mat-flat-button
@@ -117,16 +129,18 @@
                         {{ 'DOWNLOADS.OFFLINE_DETAIL.PLAY' | translate }}
                     </button>
                 }
-                <button
-                    mat-stroked-button
-                    type="button"
-                    data-testid="recording-reveal"
-                    [disabled]="isPending()"
-                    (click)="runAction('reveal')"
-                >
-                    <mat-icon aria-hidden="true">folder_open</mat-icon>
-                    {{ 'DOWNLOADS.REVEAL' | translate }}
-                </button>
+                @if (canRevealFile()) {
+                    <button
+                        mat-stroked-button
+                        type="button"
+                        data-testid="recording-reveal"
+                        [disabled]="isPending()"
+                        (click)="runAction('reveal')"
+                    >
+                        <mat-icon aria-hidden="true">folder_open</mat-icon>
+                        {{ 'DOWNLOADS.REVEAL' | translate }}
+                    </button>
+                }
                 <button
                     mat-icon-button
                     type="button"

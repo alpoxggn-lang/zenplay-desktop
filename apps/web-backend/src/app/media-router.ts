@@ -2,6 +2,8 @@ import type { Express, Request, RequestHandler, Response } from 'express';
 import type { Readable } from 'node:stream';
 import type { AdaptiveMediaGateway } from './adaptive-media-manager';
 import { mountAdaptiveMediaRoute } from './adaptive-media-route';
+import { mountRemotePlaybackRoutes } from './media-remote-playback-router';
+import { RemotePlaybackCapacityError } from './remote-playback-ticket-store';
 import { ProviderRequestError } from './provider-request-error';
 import { ValidatedHttpClient } from './validated-http-client';
 import {
@@ -33,6 +35,8 @@ const VOD_EXTENSIONS = new Set([
     'ts',
     'webm',
 ]);
+export const MEDIA_SOURCE_HEADER = 'X-ZenPlay-Media-Source';
+export const EXPECTED_MEDIA_SOURCE_HEADER = 'X-ZenPlay-Expected-Media-Source';
 
 export interface MediaRouterOptions {
     readonly adaptiveMedia: AdaptiveMediaGateway;
@@ -53,6 +57,7 @@ export function mountMediaRouter(
         secureCookie: options.secureCookie,
         store: options.store,
     });
+    mountRemotePlaybackRoutes(app, options, proxyMedia);
     const route =
         (kind: 'live' | 'movie' | 'series') =>
         async (req: Request, res: Response) => {
@@ -162,8 +167,28 @@ async function proxyMedia(
     res: Response,
     session: MediaSession,
     url: URL,
-    options: MediaRouterOptions
+    options: MediaRouterOptions,
+    remotePlayback?: {
+        readonly resourcePath: (url: URL) => string | null;
+    }
 ): Promise<void> {
+    if (!remotePlayback) {
+        res.setHeader(MEDIA_SOURCE_HEADER, session.sourceId);
+        res.setHeader('Access-Control-Expose-Headers', MEDIA_SOURCE_HEADER);
+        const expectedSource =
+            req.headers[EXPECTED_MEDIA_SOURCE_HEADER.toLowerCase()];
+        if (
+            expectedSource !== undefined &&
+            (Array.isArray(expectedSource) ||
+                expectedSource !== session.sourceId)
+        ) {
+            res.status(409).json({
+                message: 'Media source changed',
+                status: 409,
+            });
+            return;
+        }
+    }
     const range = normalizeRange(req.headers.range);
     if (req.headers.range && !range) {
         res.status(416).end();
@@ -197,6 +222,7 @@ async function proxyMedia(
                 body: manifest,
                 manifestUrl: url,
                 resourcePath: (resourceUrl) =>
+                    remotePlayback?.resourcePath(resourceUrl) ??
                     resourcePath(
                         options,
                         options.store.createResource(session, resourceUrl)
@@ -218,6 +244,7 @@ async function proxyMedia(
         upstream?.destroy();
         if (controller.signal.aborted || res.headersSent) return;
         const status = mediaErrorStatus(error);
+        if (status === 429) res.setHeader('Retry-After', '60');
         res.status(status).json({ message: 'Media request failed', status });
     } finally {
         req.removeListener('aborted', abort);
@@ -305,6 +332,7 @@ function setPrivateResponseHeaders(res: Response): void {
 }
 
 function mediaErrorStatus(error: unknown): number {
+    if (error instanceof RemotePlaybackCapacityError) return 429;
     const cause = error instanceof ProviderRequestError ? error.cause : error;
     const status = (cause as { response?: { status?: unknown } } | null)
         ?.response?.status;

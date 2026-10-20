@@ -1,5 +1,9 @@
 import { Injectable } from '@angular/core';
 import { ElectronBridgeApi } from '@iptvnator/shared/interfaces';
+import {
+    supportsBrowserLiveRecording,
+    supportsBrowserPrivateMediaStorage,
+} from './browser-media-library';
 
 export type RuntimeEnvironment = 'electron' | 'pwa';
 
@@ -237,6 +241,9 @@ export class RuntimeCapabilitiesService {
     }
 
     get supportsDownloads(): boolean {
+        if (this.isPwa) {
+            return supportsBrowserPrivateMediaStorage();
+        }
         return [
             'downloadsStart',
             'downloadsCancel',
@@ -260,6 +267,9 @@ export class RuntimeCapabilitiesService {
     // all-or-nothing, and folding the recordings bridge into it would make
     // older Electron builds lose the entire download manager.
     get supportsRecordings(): boolean {
+        if (this.isPwa) {
+            return supportsBrowserLiveRecording();
+        }
         return [
             'recordingsGetList',
             'recordingsGet',

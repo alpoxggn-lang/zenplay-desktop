@@ -66,7 +66,11 @@
                             >
                                 {{ durationLabel(row) }}
                                 @if (row.interrupted) {
-                                    · {{ 'DOWNLOADS.STATUS.INTERRUPTED' | translate }}
+                                    ·
+                                    {{
+                                        'DOWNLOADS.STATUS.INTERRUPTED'
+                                            | translate
+                                    }}
                                 }
                             </span>
                         } @else if (row.interrupted) {
@@ -101,14 +105,18 @@
                                 <mat-icon>play_arrow</mat-icon>
                                 <span>{{ 'DOWNLOADS.PLAY' | translate }}</span>
                             </button>
-                            <button
-                                mat-menu-item
-                                data-test-action="reveal-recording"
-                                (click)="emitAction('reveal', row.item)"
-                            >
-                                <mat-icon>folder_open</mat-icon>
-                                <span>{{ 'DOWNLOADS.REVEAL' | translate }}</span>
-                            </button>
+                            @if (nativeFileActions()) {
+                                <button
+                                    mat-menu-item
+                                    data-test-action="reveal-recording"
+                                    (click)="emitAction('reveal', row.item)"
+                                >
+                                    <mat-icon>folder_open</mat-icon>
+                                    <span>
+                                        {{ 'DOWNLOADS.REVEAL' | translate }}
+                                    </span>
+                                </button>
+                            }
                             <button
                                 mat-menu-item
                                 data-test-action="open-recording-detail"
@@ -126,7 +134,10 @@
                             >
                                 <mat-icon>remove_circle_outline</mat-icon>
                                 <span>
-                                    {{ 'DOWNLOADS.REMOVE_FROM_MANAGER' | translate }}
+                                    {{
+                                        'DOWNLOADS.REMOVE_FROM_MANAGER'
+                                            | translate
+                                    }}
                                 </span>
                             </button>
                         </mat-menu>
@@ -148,7 +159,7 @@
                             }}
                         </button>
                         <span class="recording-library__facts">
-                            {{ row.channelName }}
+                            {{ row.channelName | translate }}
                             · {{ row.item.startedAt | date: 'd MMM' }}
                             @if (row.item.fileSizeBytes) {
                                 · {{ formatBytes(row.item.fileSizeBytes) }}

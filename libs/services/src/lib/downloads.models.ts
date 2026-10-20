@@ -35,6 +35,13 @@ export interface DownloadItem {
     status: DownloadStatus;
     bytesDownloaded?: number;
     totalBytes?: number;
+    /** Browser-only strong ETag or Last-Modified used with Range/If-Range. */
+    resumeValidator?: string;
+    /** Opaque backend identity that binds browser bytes to their Xtream source. */
+    mediaSourceId?: string;
+    /** Browser tab ownership lease used to prevent cross-tab write races. */
+    browserOwnerId?: string;
+    browserLeaseUntil?: number;
     errorMessage?: string;
     createdAt?: string;
     updatedAt?: string;

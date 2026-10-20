@@ -2,6 +2,7 @@ import { TmdbRecommendation } from '@iptvnator/shared/interfaces';
 import {
     buildCatalogTitleIndex,
     lookupCatalogTitle,
+    matchRelatedCatalogItems,
     matchRecommendationsToCatalog,
 } from './tmdb-similar.util';
 
@@ -91,6 +92,81 @@ describe('matchRecommendationsToCatalog', () => {
         expect(
             matchRecommendationsToCatalog([rec(1, 'Anything')], [])
         ).toEqual([]);
+    });
+});
+
+describe('matchRelatedCatalogItems', () => {
+    const catalog = [
+        {
+            stream_id: 1,
+            name: 'Current Film',
+            category_id: '7',
+            genre: 'Drama, Thriller',
+        },
+        {
+            stream_id: 2,
+            name: 'Same Category',
+            category_id: '7',
+            genre: 'Comedy',
+        },
+        {
+            stream_id: 3,
+            name: 'Shared Genre 2025',
+            category_id: '9',
+            genre: 'Drama / Mystery',
+            stream_icon: 'https://provider.example/shared.jpg',
+        },
+        {
+            stream_id: 4,
+            name: 'Unrelated',
+            category_id: '3',
+            genre: 'Animation',
+        },
+    ];
+
+    it('prefers genre overlap and falls back to the provider category', () => {
+        expect(
+            matchRelatedCatalogItems(catalog, {
+                excludeId: 1,
+                categoryId: 7,
+                genres: 'Drama, Thriller',
+            })
+        ).toEqual([
+            {
+                id: 3,
+                categoryId: '9',
+                title: 'Shared Genre 2025',
+                posterUrl: 'https://provider.example/shared.jpg',
+                year: 2025,
+            },
+            {
+                id: 2,
+                categoryId: '7',
+                title: 'Same Category',
+                posterUrl: null,
+                year: null,
+            },
+        ]);
+    });
+
+    it('uses same-category rows when sparse catalog items have no genre', () => {
+        expect(
+            matchRelatedCatalogItems(catalog, {
+                excludeId: 1,
+                categoryId: '7',
+            }).map((item) => item.id)
+        ).toEqual([2]);
+    });
+
+    it('returns no unrelated rows and respects the limit', () => {
+        expect(
+            matchRelatedCatalogItems(catalog, {
+                excludeId: 1,
+                genres: ['Drama'],
+                limit: 1,
+            }).map((item) => item.id)
+        ).toEqual([3]);
+        expect(matchRelatedCatalogItems(catalog)).toEqual([]);
     });
 });
 

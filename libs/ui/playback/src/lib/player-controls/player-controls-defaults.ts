@@ -66,5 +66,6 @@ export function createEmptyControlsState(): PlayerControlsState {
         canPictureInPicture: false,
         canPreviousEpisode: false,
         canNextEpisode: false,
+        adjacentNavigationKind: 'episode',
     };
 }
