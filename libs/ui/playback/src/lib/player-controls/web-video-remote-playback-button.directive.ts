@@ -1,4 +1,11 @@
-import { Directive, effect, input, untracked } from '@angular/core';
+import {
+    DestroyRef,
+    Directive,
+    effect,
+    inject,
+    input,
+    untracked,
+} from '@angular/core';
 import { WebVideoRemotePlaybackController } from './web-video-remote-playback.controller';
 import {
     isWebVideoRemotePlaybackHost,
@@ -17,6 +24,7 @@ export class WebVideoRemotePlaybackButtonDirective {
     readonly state = this.controller.state;
 
     constructor() {
+        inject(DestroyRef).onDestroy(() => this.controller.detach());
         effect((onCleanup) => {
             const surface = this.remotePlaybackSurface();
             const source = this.remotePlaybackSource();
@@ -25,12 +33,17 @@ export class WebVideoRemotePlaybackButtonDirective {
                 isWebVideoRemotePlaybackHost(candidateHost)
                     ? candidateHost
                     : null;
-            const attach = () => {
+            const attachAvailableVideo = () => {
                 const video = surface?.querySelector('video') ?? null;
-                if (video) this.controller.attach(video, source, host);
-                return Boolean(video);
+                if (!video) return false;
+                this.controller.attach(video, source, host);
+                return true;
             };
-            const attached = untracked(attach);
+            const attached = untracked(() => {
+                const video = surface?.querySelector('video') ?? null;
+                this.controller.attach(video, source, host);
+                return Boolean(video);
+            });
             let observer: MutationObserver | null = null;
             if (
                 !attached &&
@@ -38,17 +51,14 @@ export class WebVideoRemotePlaybackButtonDirective {
                 typeof MutationObserver !== 'undefined'
             ) {
                 observer = new MutationObserver(() => {
-                    if (attach()) observer?.disconnect();
+                    if (attachAvailableVideo()) observer?.disconnect();
                 });
             }
             observer?.observe(surface as Node, {
                 childList: true,
                 subtree: true,
             });
-            onCleanup(() => {
-                observer?.disconnect();
-                this.controller.detach();
-            });
+            onCleanup(() => observer?.disconnect());
         });
     }
 

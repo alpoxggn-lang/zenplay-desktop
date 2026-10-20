@@ -745,20 +745,24 @@ describe('WebVideoRemotePlaybackController', () => {
         expect(controller.state().supported).toBe(false);
     });
 
-    it('pauses an active remote element before detaching it', async () => {
+    it('pauses the remote without restoring its host on terminal detach', async () => {
         const fetchMock = jest.fn(async () =>
             mockJsonResponse({
                 expiresInSeconds: 900,
                 url: `/api/media/cast/${OPAQUE_TOKEN}/stream.mp4`,
             })
         );
+        const host = {
+            beginRemotePlayback: jest.fn(),
+            finishRemotePlayback: jest.fn(),
+        };
         const controller = new WebVideoRemotePlaybackController(
             fetchMock as typeof fetch
         );
         const source = document.createElement('video');
         jest.spyOn(source, 'pause').mockImplementation(() => undefined);
 
-        controller.attach(source, '/api/media/movie/42.mp4');
+        controller.attach(source, '/api/media/movie/42.mp4', host);
         await settlePromises();
         const remoteVideo = document.querySelector<HTMLVideoElement>(
             'video[aria-hidden="true"]'
@@ -774,7 +778,81 @@ describe('WebVideoRemotePlaybackController', () => {
         controller.detach();
 
         expect(pause).toHaveBeenCalledTimes(1);
+        expect(host.finishRemotePlayback).toHaveBeenCalledWith(
+            expect.any(Object),
+            false
+        );
         expect(remoteVideo?.isConnected).toBe(false);
+    });
+
+    it('restores a suspended host before attaching a changed source', async () => {
+        let postCount = 0;
+        const fetchMock = jest.fn(async (_input, init?: RequestInit) => {
+            if (init?.method === 'DELETE') return mockJsonResponse({});
+            const token =
+                postCount++ === 0 ? OPAQUE_TOKEN : SECOND_OPAQUE_TOKEN;
+            return mockJsonResponse({
+                expiresInSeconds: 900,
+                url: `/api/media/cast/${token}/stream.mp4`,
+            });
+        });
+        let suspended = false;
+        const host = {
+            beginRemotePlayback: jest.fn(() => {
+                suspended = true;
+            }),
+            finishRemotePlayback: jest.fn(
+                (_state: unknown, restoreLocal: boolean) => {
+                    if (restoreLocal) suspended = false;
+                }
+            ),
+        };
+        const controller = new WebVideoRemotePlaybackController(
+            fetchMock as typeof fetch
+        );
+
+        controller.attach(
+            createControllableVideo(false),
+            '/api/media/movie/42.mp4',
+            host
+        );
+        await settlePromises();
+        const firstRemoteVideo = document.querySelector<HTMLVideoElement>(
+            'video[aria-hidden="true"]'
+        );
+        expect(firstRemoteVideo).not.toBeNull();
+        createControllableMethods(firstRemoteVideo as HTMLVideoElement, true);
+
+        remote.state = 'connected';
+        remote.dispatchEvent(new Event('connect'));
+        expect(suspended).toBe(true);
+        (firstRemoteVideo as HTMLVideoElement).currentTime = 87;
+        firstRemoteVideo?.dispatchEvent(new Event('timeupdate'));
+
+        remote.state = 'disconnected';
+        controller.attach(
+            createControllableVideo(true),
+            '/api/media/movie/43.mp4',
+            host
+        );
+        await settlePromises();
+
+        expect(host.finishRemotePlayback).toHaveBeenCalledTimes(1);
+        const [resumeState, restoreLocal] =
+            host.finishRemotePlayback.mock.calls[0];
+        expect(resumeState).toEqual(
+            expect.objectContaining({ playing: true })
+        );
+        expect(resumeState).not.toHaveProperty('positionSeconds');
+        expect(restoreLocal).toBe(true);
+        expect(suspended).toBe(false);
+        expect(firstRemoteVideo?.isConnected).toBe(false);
+        expect(controller.state()).toMatchObject({
+            active: false,
+            canPrompt: true,
+            supported: true,
+        });
+        controller.detach();
     });
 
     it('rejects a ticket URL issued by another origin', async () => {

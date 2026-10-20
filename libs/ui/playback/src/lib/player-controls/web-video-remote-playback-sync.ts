@@ -76,10 +76,11 @@ export class WebVideoRemotePlaybackSync {
         return snapshot;
     }
 
-    finish(): WebVideoRemotePlaybackResumeState {
+    finish(includePosition = true): WebVideoRemotePlaybackResumeState {
         const local = this.localSnapshot ?? this.readLocalSnapshot();
         const remotePosition = this.remote.currentTime;
         const hasPosition =
+            includePosition &&
             this.remotePositionObserved &&
             Number.isFinite(remotePosition) &&
             remotePosition >= 0;

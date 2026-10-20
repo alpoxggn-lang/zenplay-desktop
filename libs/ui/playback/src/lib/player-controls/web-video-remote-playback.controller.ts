@@ -61,7 +61,7 @@ export class WebVideoRemotePlaybackController {
         sourceUrl: string | null,
         host: WebVideoRemotePlaybackHost | null = null
     ): void {
-        this.detach();
+        this.detach(true);
         if (!sourceVideo || !sourceUrl) return;
         const ticketRequest = resolveRemotePlaybackTicketRequest(
             sourceUrl,
@@ -199,7 +199,7 @@ export class WebVideoRemotePlaybackController {
         }
     }
 
-    detach(): void {
+    detach(restoreLocal = false): void {
         const remoteWasActive = this.remoteSessionActive;
         this.generation += 1;
         this.prepareAbort?.abort();
@@ -211,14 +211,11 @@ export class WebVideoRemotePlaybackController {
         this.clearPromptTimer();
         this.availability.cancel();
         for (const detach of this.detachListeners.splice(0)) detach();
-        if (this.remoteVideo && remoteWasActive) {
-            this.remoteVideo.pause();
-        }
-        this.finishRemotePlayback(false);
+        if (this.remoteVideo && remoteWasActive) this.remoteVideo.pause();
+        this.finishRemotePlayback(restoreLocal, false);
         this.releaseTicket(false);
         this.remoteVideo?.remove();
-        this.sourceVideo = null;
-        this.remoteVideo = null;
+        this.sourceVideo = this.remoteVideo = null;
         this.remote = null;
         this.mediaSync = null;
         this.host = null;
@@ -321,11 +318,14 @@ export class WebVideoRemotePlaybackController {
         this.refreshState(true);
     }
 
-    private finishRemotePlayback(restoreLocal = true): void {
+    private finishRemotePlayback(
+        restoreLocal = true,
+        restoreRemotePosition = true
+    ): void {
         this.clearPromptTimer();
         this.refreshState(false);
         if (this.remoteSessionActive && this.mediaSync) {
-            const resume = this.mediaSync.finish();
+            const resume = this.mediaSync.finish(restoreRemotePosition);
             if (this.host) {
                 this.host.finishRemotePlayback(resume, restoreLocal);
             } else if (restoreLocal) {
