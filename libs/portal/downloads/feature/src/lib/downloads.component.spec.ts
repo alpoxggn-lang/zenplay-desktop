@@ -539,6 +539,51 @@ describe('DownloadsComponent', () => {
         expect(component.activeCount()).toBe(1);
     });
 
+    it('keeps the manager available when only recordings are supported', () => {
+        fixture.destroy();
+        downloadsService.isAvailable.set(false);
+        recordingsService.isAvailable.set(true);
+        recordings.set([recording(3)]);
+
+        fixture = TestBed.createComponent(DownloadsComponent);
+        component =
+            fixture.componentInstance as unknown as ExpectedDownloadsComponent;
+        fixture.detectChanges();
+        TestBed.flushEffects();
+
+        const root = fixture.nativeElement as HTMLElement;
+        expect(root.querySelector('app-recording-library')).not.toBeNull();
+        expect(
+            root.querySelector('[data-test-id="downloads-filters"]')
+        ).not.toBeNull();
+        expect(
+            root.querySelector('[data-test-id="downloads-tracked-bytes"]')
+        ).toBeNull();
+        expect(
+            root.querySelector('[data-test-id="downloads-folder"]')
+        ).toBeNull();
+        expect(root.textContent).not.toContain('DOWNLOADS.NOT_AVAILABLE');
+        expect(recordingsService.loadRecordings).toHaveBeenCalledTimes(1);
+    });
+
+    it('ignores an unavailable download loader in a recording-only runtime', () => {
+        fixture.destroy();
+        downloadsService.isAvailable.set(false);
+        downloadsService.hasLoadedDownloads.set(false);
+        downloadsService.isLoadingDownloads.set(true);
+        recordingsService.isAvailable.set(true);
+
+        fixture = TestBed.createComponent(DownloadsComponent);
+        component =
+            fixture.componentInstance as unknown as ExpectedDownloadsComponent;
+        fixture.detectChanges();
+        TestBed.flushEffects();
+
+        const root = fixture.nativeElement as HTMLElement;
+        expect(root.querySelector('.downloads__skeleton')).toBeNull();
+        expect(root.querySelector('app-empty-state')).not.toBeNull();
+    });
+
     it('keeps retained offline downloads visible after the last source is removed', () => {
         playlistItems.next([]);
         downloads.set([

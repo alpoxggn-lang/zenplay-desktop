@@ -21,9 +21,12 @@ export class WorkspaceKeyboardShortcutsService {
     private readonly runtime = inject(RuntimeCapabilitiesService);
     // Root-provided; optional keeps standalone unit tests light. The help key must not open a dialog over the modal phone
     // context drawer.
-    private readonly contextDrawer = inject(WorkspaceShellContextDrawerService, {
-        optional: true,
-    });
+    private readonly contextDrawer = inject(
+        WorkspaceShellContextDrawerService,
+        {
+            optional: true,
+        }
+    );
     private readonly onDocumentKeydown = (event: KeyboardEvent): void =>
         this.handleKeydown(event);
 
@@ -59,7 +62,9 @@ export class WorkspaceKeyboardShortcutsService {
                 groups: getKeyboardShortcutGroups({
                     isMac: platform === 'mac',
                     isElectron: this.runtime.isElectron,
-                    supportsDownloads: this.runtime.supportsDownloads,
+                    supportsDownloads:
+                        this.runtime.supportsDownloads ||
+                        this.runtime.supportsRecordings,
                 }),
                 platformIcon:
                     platform === 'mac' ? 'laptop_mac' : 'desktop_windows',
@@ -186,5 +191,4 @@ export class WorkspaceKeyboardShortcutsService {
 
         return /Mac|iPhone|iPad|iPod/i.test(platform) ? 'mac' : 'other';
     }
-
 }

@@ -14,7 +14,11 @@ describe('WorkspaceKeyboardShortcutsService', () => {
             [unknown, MatDialogConfig<WorkspaceKeyboardShortcutsDialogData>]
         >;
     };
-    let runtime: { isElectron: boolean; supportsDownloads: boolean };
+    let runtime: {
+        isElectron: boolean;
+        supportsDownloads: boolean;
+        supportsRecordings: boolean;
+    };
     let service: WorkspaceKeyboardShortcutsService;
 
     function openedDialogData(): WorkspaceKeyboardShortcutsDialogData {
@@ -32,7 +36,11 @@ describe('WorkspaceKeyboardShortcutsService', () => {
                 afterClosed: () => afterClosed$.asObservable(),
             }),
         };
-        runtime = { isElectron: true, supportsDownloads: true };
+        runtime = {
+            isElectron: true,
+            supportsDownloads: true,
+            supportsRecordings: false,
+        };
 
         TestBed.configureTestingModule({
             providers: [
@@ -79,6 +87,7 @@ describe('WorkspaceKeyboardShortcutsService', () => {
                     useValue: {
                         isElectron: true,
                         supportsDownloads: true,
+                        supportsRecordings: false,
                     },
                 },
                 {
@@ -361,8 +370,9 @@ describe('WorkspaceKeyboardShortcutsService', () => {
         expect(itemIds).not.toContain('open-global-search');
     });
 
-    it('hides download-only shortcuts when downloads are unsupported', () => {
+    it('hides manager shortcuts when downloads and recordings are unsupported', () => {
         runtime.supportsDownloads = false;
+        runtime.supportsRecordings = false;
 
         service.openShortcutsDialog();
 
@@ -371,5 +381,18 @@ describe('WorkspaceKeyboardShortcutsService', () => {
         );
 
         expect(itemIds).not.toContain('downloads-open-item');
+    });
+
+    it('keeps manager shortcuts when only recordings are supported', () => {
+        runtime.supportsDownloads = false;
+        runtime.supportsRecordings = true;
+
+        service.openShortcutsDialog();
+
+        const itemIds = openedDialogData().groups.flatMap((group) =>
+            group.items.map((item) => item.id)
+        );
+
+        expect(itemIds).toContain('downloads-open-item');
     });
 });

@@ -17,11 +17,16 @@ change intentionally restores or imports missing backend capabilities.
 ## Runtime Backend Configuration
 
 The PWA reads `window.__IPTVNATOR_CONFIG__.BACKEND_URL` through
-`apps/web/src/app/services/runtime-config.ts`. The static placeholder lives at
-`apps/web/src/assets/app-config.js` and keeps hosted builds working without
-Docker-specific values.
+`apps/web/src/app/services/runtime-config.ts`. The same object carries the
+`MANAGED_MEDIA` capability: it is `true` only when the backend has a non-empty
+`ZENPLAY_XTREAM_URL` and can establish the HttpOnly media session used by
+private downloads. A missing or false value fails closed. The static
+placeholder lives at `apps/web/src/assets/app-config.js` and keeps hosted builds
+working without Docker-specific values.
 
-The Docker entrypoint rewrites `assets/app-config.js` at container startup.
+The Docker entrypoint rewrites `assets/app-config.js` at container startup. The
+single-origin server redirects that asset to its generated `/api/config.js`, so
+Render and the iOS preview receive the same backend-owned capability value.
 `ngsw-config.json` explicitly excludes this file from Angular service worker
 asset hashing so a runtime rewrite does not break cache validation.
 
@@ -212,12 +217,17 @@ behavior stays auditable
 from one shared boundary. `supportsSqlite` requires the complete playlist
 storage preload API surface used by `PlaylistsService`. In Electron,
 `supportsDownloads` requires the complete downloads preload API surface; in a
-PWA it requires IndexedDB plus OPFS. `supportsDownloadFileReveal` is a separate
-native-shell capability: private browser downloads remain playable while their
-OPFS identifiers never surface a file-manager action. `supportsRecordings`
-similarly selects the native recording bridge in Electron and requires OPFS,
-MediaRecorder, and media element stream capture in the PWA. EPG renderer code
-should use
+PWA it requires the backend-provided `MANAGED_MEDIA` flag plus IndexedDB and
+OPFS. Storage support alone is insufficient because an unmanaged backend cannot
+issue the media cookie and its download requests would receive HTTP 401.
+The workspace exposes the shared download/recording manager when either
+`supportsDownloads` or `supportsRecordings` is true, so disabling unmanaged PWA
+downloads does not hide compatible browser recordings.
+`supportsDownloadFileReveal` is a separate native-shell capability: private
+browser downloads remain playable while their OPFS identifiers never surface a
+file-manager action. `supportsRecordings` similarly selects the native recording
+bridge in Electron and requires OPFS, MediaRecorder, and media element stream
+capture in the PWA. EPG renderer code should use
 `EpgRuntimeBridgeService` from
 `@iptvnator/epg/data-access` instead of calling `window.electron` directly.
 Playback-position renderer code should use `PlaybackPositionRuntimeBridgeService`

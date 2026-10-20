@@ -2,12 +2,36 @@ import { RuntimeCapabilitiesService } from './runtime-capabilities.service';
 
 describe('RuntimeCapabilitiesService', () => {
     const testWindow = window as unknown as {
+        __IPTVNATOR_CONFIG__?: {
+            BACKEND_URL?: string;
+            MANAGED_MEDIA?: boolean;
+        };
         electron?: Record<string, unknown>;
     };
     const originalElectron = testWindow.electron;
+    const originalRuntimeConfig = testWindow.__IPTVNATOR_CONFIG__;
+    const originalStorage = Object.getOwnPropertyDescriptor(
+        navigator,
+        'storage'
+    );
+    const originalIndexedDb = Object.getOwnPropertyDescriptor(
+        globalThis,
+        'indexedDB'
+    );
 
     afterEach(() => {
         testWindow.electron = originalElectron;
+        testWindow.__IPTVNATOR_CONFIG__ = originalRuntimeConfig;
+        if (originalStorage) {
+            Object.defineProperty(navigator, 'storage', originalStorage);
+        } else {
+            Reflect.deleteProperty(navigator, 'storage');
+        }
+        if (originalIndexedDb) {
+            Object.defineProperty(globalThis, 'indexedDB', originalIndexedDb);
+        } else {
+            Reflect.deleteProperty(globalThis, 'indexedDB');
+        }
     });
 
     it('offers the portal cooldown setting only with both desktop bridge methods', () => {
@@ -68,6 +92,32 @@ describe('RuntimeCapabilitiesService', () => {
         expect(service.supportsEpgDataManagement).toBe(false);
         expect(service.supportsEpgGuide).toBe(false);
         expect(service.supportsEpgProgramSearch).toBe(false);
+    });
+
+    it('requires managed backend media and private storage for PWA downloads', () => {
+        testWindow.electron = undefined;
+        Object.defineProperty(globalThis, 'indexedDB', {
+            configurable: true,
+            value: {},
+        });
+        Object.defineProperty(navigator, 'storage', {
+            configurable: true,
+            value: { getDirectory: jest.fn() },
+        });
+        const service = new RuntimeCapabilitiesService();
+
+        testWindow.__IPTVNATOR_CONFIG__ = undefined;
+        expect(service.supportsDownloads).toBe(false);
+
+        testWindow.__IPTVNATOR_CONFIG__ = { MANAGED_MEDIA: false };
+        expect(service.supportsDownloads).toBe(false);
+
+        testWindow.__IPTVNATOR_CONFIG__ = { MANAGED_MEDIA: true };
+        expect(service.supportsDownloads).toBe(true);
+        expect(service.supportsDownloadFileReveal).toBe(false);
+
+        Reflect.deleteProperty(globalThis, 'indexedDB');
+        expect(service.supportsDownloads).toBe(false);
     });
 
     it('reports Electron capabilities from the available preload bridge methods', () => {

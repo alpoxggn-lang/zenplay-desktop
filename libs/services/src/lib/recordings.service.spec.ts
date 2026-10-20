@@ -77,10 +77,7 @@ describe('RecordingsService', () => {
     }
 
     /** Constructor-driven instance: init() runs against the given capability. */
-    function createInjectedService(
-        supportsRecordings: boolean,
-        isPwa = false
-    ) {
+    function createInjectedService(supportsRecordings: boolean, isPwa = false) {
         const injector = createEnvironmentInjector(
             [
                 RecordingsService,
@@ -115,8 +112,7 @@ describe('RecordingsService', () => {
         return service;
     }
 
-    const flush = () =>
-        new Promise<void>((resolve) => setTimeout(resolve, 0));
+    const flush = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
     it('never touches the bridge when recordings are unavailable', async () => {
         const electron: RecordingsElectronStub = {
@@ -142,6 +138,35 @@ describe('RecordingsService', () => {
                 success: false,
             });
             expect(electron.recordingsStop).not.toHaveBeenCalled();
+        } finally {
+            injector.destroy();
+        }
+    });
+
+    it('settles the browser list and disables recordings when private storage initialization fails', async () => {
+        const error = new Error('IndexedDB unavailable');
+        const unsubscribe = jest.fn();
+        jest.spyOn(console, 'error').mockImplementation(() => undefined);
+        jest.spyOn(browserMediaLibrary, 'subscribe').mockReturnValue(
+            unsubscribe
+        );
+        jest.spyOn(browserMediaLibrary, 'initialize').mockRejectedValue(error);
+        const list = jest.spyOn(browserMediaLibrary, 'listRecordings');
+        const { injector, service } = createInjectedService(true, true);
+
+        try {
+            await flush();
+
+            expect(service.isAvailable()).toBe(false);
+            expect(service.hasLoadedRecordings()).toBe(true);
+            expect(service.hasAuthoritativeRecordingList()).toBe(false);
+            expect(service.isLoadingRecordings()).toBe(false);
+            expect(list).not.toHaveBeenCalled();
+            expect(unsubscribe).toHaveBeenCalledTimes(1);
+            expect(console.error).toHaveBeenCalledWith(
+                '[RecordingsService] Browser media initialization failed:',
+                error
+            );
         } finally {
             injector.destroy();
         }
@@ -301,12 +326,12 @@ describe('RecordingsService', () => {
         await expect(
             service.updatePrograms('/recordings/1.ts', [])
         ).resolves.toEqual(unavailable);
-        await expect(
-            service.revealFile('/recordings/1.ts')
-        ).resolves.toEqual(unavailable);
-        await expect(
-            service.playFile('/recordings/1.ts')
-        ).resolves.toEqual(unavailable);
+        await expect(service.revealFile('/recordings/1.ts')).resolves.toEqual(
+            unavailable
+        );
+        await expect(service.playFile('/recordings/1.ts')).resolves.toEqual(
+            unavailable
+        );
         expect(electron.recordingsGetList).not.toHaveBeenCalled();
     });
 
@@ -318,10 +343,7 @@ describe('RecordingsService', () => {
             recordingsRemove: jest.fn(async () => ({ success: true })),
         };
         testWindow.electron = electron;
-        const service = createService([
-            createRecording(1),
-            createRecording(2),
-        ]);
+        const service = createService([createRecording(1), createRecording(2)]);
 
         await expect(service.stopRecording(1)).resolves.toEqual({
             success: true,

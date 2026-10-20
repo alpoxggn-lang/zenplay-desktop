@@ -19,7 +19,7 @@ async function installRuntimeConfig(page: Page): Promise<void> {
     await page.route('**/assets/app-config.js', async (route) => {
         await route.fulfill({
             contentType: 'application/javascript',
-            body: `window.__IPTVNATOR_CONFIG__ = { BACKEND_URL: ${JSON.stringify(WEB_BACKEND_URL)} };\n`,
+            body: `window.__IPTVNATOR_CONFIG__ = { BACKEND_URL: ${JSON.stringify(WEB_BACKEND_URL)}, MANAGED_MEDIA: false };\n`,
         });
     });
 }
@@ -131,6 +131,11 @@ test('@self-hosted runtime config points PWA calls at the monorepo backend', asy
             page.evaluate(() => window.__IPTVNATOR_CONFIG__?.BACKEND_URL)
         )
         .toBe(WEB_BACKEND_URL);
+    await expect
+        .poll(() =>
+            page.evaluate(() => window.__IPTVNATOR_CONFIG__?.MANAGED_MEDIA)
+        )
+        .toBe(false);
 
     const response = await request.get(`${WEB_BACKEND_URL}/health`);
     expect(response.ok()).toBeTruthy();

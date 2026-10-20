@@ -7,10 +7,12 @@ import type {
 import type { DownloadItem, DownloadStartInput } from '../downloads.models';
 import { resolvePrivateBrowserMediaUrl } from './browser-media-capabilities';
 import { BROWSER_MEDIA_MESSAGES } from './browser-media-messages';
+import { sanitizeBrowserMediaSourceId } from './browser-download-source';
 
 interface BrowserDownloadItemContext {
     readonly id: number;
     readonly safeUrl: string;
+    readonly mediaSourceId: string;
     readonly fileName: string;
     readonly filePath: string;
     readonly ownerId: string;
@@ -225,6 +227,7 @@ export function sanitizeBrowserDownloadItem(value: DownloadItem): DownloadItem {
     const metadataSnapshot = sanitizeBrowserDownloadMetadata(
         source.metadataSnapshot
     );
+    const mediaSourceId = sanitizeBrowserMediaSourceId(source.mediaSourceId);
     const errorMessage = !url
         ? BROWSER_MEDIA_MESSAGES.sourceUnsupported
         : KNOWN_ERROR_MESSAGES.has(text(source.errorMessage) ?? '')
@@ -279,10 +282,7 @@ export function sanitizeBrowserDownloadItem(value: DownloadItem): DownloadItem {
         ...(text(source.resumeValidator)
             ? { resumeValidator: text(source.resumeValidator) }
             : {}),
-        ...(text(source.mediaSourceId) &&
-        OPAQUE_ID.test(text(source.mediaSourceId) ?? '')
-            ? { mediaSourceId: text(source.mediaSourceId) }
-            : {}),
+        ...(mediaSourceId ? { mediaSourceId } : {}),
         ...(activeOwner ? { browserOwnerId: ownerId } : {}),
         ...(activeOwner && finiteNumber(source.browserLeaseUntil) !== undefined
             ? { browserLeaseUntil: finiteNumber(source.browserLeaseUntil) }
@@ -328,6 +328,7 @@ export function createBrowserDownloadItem(
         fileAvailability: 'available',
         status: 'queued',
         bytesDownloaded: 0,
+        mediaSourceId: context.mediaSourceId,
         browserOwnerId: context.ownerId,
         browserLeaseUntil: context.leaseUntil,
         createdAt: context.createdAt,

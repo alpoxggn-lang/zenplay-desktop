@@ -17,6 +17,7 @@ declare global {
     interface Window {
         __IPTVNATOR_CONFIG__?: {
             BACKEND_URL?: string;
+            MANAGED_MEDIA?: boolean;
         };
         electron: ElectronBridgeApi;
         process: NodeJS.Process;

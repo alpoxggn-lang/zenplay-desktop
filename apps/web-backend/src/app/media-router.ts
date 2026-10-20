@@ -88,7 +88,15 @@ export function mountMediaRouter(
     app.options('/media/movie/:streamId.:extension', options.corsMiddleware);
     app.options('/media/series/:streamId.:extension', options.corsMiddleware);
     app.options('/media/resource/:token', options.corsMiddleware);
+    app.options('/media/source', options.corsMiddleware);
     app.options('/media/session', options.corsMiddleware);
+    app.get('/media/source', options.corsMiddleware, (req, res) => {
+        setPrivateResponseHeaders(res);
+        const session = requireSession(req, res, options);
+        if (!session) return;
+        exposeMediaSource(res, session);
+        res.status(204).end();
+    });
     app.delete('/media/session', options.corsMiddleware, (req, res) => {
         setPrivateResponseHeaders(res);
         const sessionId = readMediaSessionId(req.headers.cookie);
@@ -173,8 +181,7 @@ async function proxyMedia(
     }
 ): Promise<void> {
     if (!remotePlayback) {
-        res.setHeader(MEDIA_SOURCE_HEADER, session.sourceId);
-        res.setHeader('Access-Control-Expose-Headers', MEDIA_SOURCE_HEADER);
+        exposeMediaSource(res, session);
         const expectedSource =
             req.headers[EXPECTED_MEDIA_SOURCE_HEADER.toLowerCase()];
         if (
@@ -250,6 +257,11 @@ async function proxyMedia(
         req.removeListener('aborted', abort);
         if (res.writableEnded) res.removeListener('close', abort);
     }
+}
+
+function exposeMediaSource(res: Response, session: MediaSession): void {
+    res.setHeader(MEDIA_SOURCE_HEADER, session.sourceId);
+    res.setHeader('Access-Control-Expose-Headers', MEDIA_SOURCE_HEADER);
 }
 
 function resourcePath(options: MediaRouterOptions, token: string): string {

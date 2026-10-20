@@ -24,8 +24,11 @@ That means:
 - Docker cannot launch local desktop players or Embedded MPV. If a stream does
   not play inline in the browser, use the in-app copy URL action and open the
   stream manually in an external player such as MPV, VLC, or IINA.
-- Electron-only features such as the download manager, external-player process
-  control, and remote-control integrations are outside this runtime.
+- Private movie and episode downloads require a managed deployment with
+  `ZENPLAY_XTREAM_URL` plus browser IndexedDB/OPFS support. The generic Compose
+  example leaves that variable unset, so download actions stay hidden instead
+  of failing with unauthorized media requests. External-player process control
+  and remote-control integrations remain Electron-only.
 
 ## Run With Docker Compose
 
@@ -85,8 +88,9 @@ every merge to `master`.
 ## Runtime Configuration
 
 The container writes `/usr/share/nginx/html/assets/app-config.js` on startup.
-That file sets `window.__IPTVNATOR_CONFIG__.BACKEND_URL`, which the PWA reads
-before it creates `PwaService`.
+That file sets `window.__IPTVNATOR_CONFIG__.BACKEND_URL` and the backend-owned
+`MANAGED_MEDIA` capability, which the PWA reads before it creates services.
+`MANAGED_MEDIA` is true only when `ZENPLAY_XTREAM_URL` is non-empty.
 
 These variables are supported by the Docker image. The compose file sets the
 safe local defaults shown below.
@@ -96,6 +100,7 @@ safe local defaults shown below.
 | `BACKEND_URL`                            | `/api`                  | Browser-facing backend URL used by the PWA. Keep `/api` for the bundled nginx proxy.                                                         |
 | `CLIENT_URL`                             | `http://localhost:4333` | Allowed browser origin for backend CORS. Use the public URL when hosting behind a reverse proxy. Multiple origins can be comma-separated.    |
 | `PORT`                                   | `3000`                  | Internal Express backend port. nginx proxy config is rendered from the template to match it at startup.                                      |
+| `ZENPLAY_XTREAM_URL`                     | unset                   | Restricts the deployment to one Xtream server, enables its credential-free media gateway, and advertises managed browser downloads.          |
 | `IPTVNATOR_PROXY_ALLOW_PRIVATE_NETWORKS` | `0`                     | Set to `1` or `true` only for trusted local/LAN deployments that intentionally proxy private network IPTV or mock endpoints.                 |
 | `NODE_EXTRA_CA_CERTS`                    | unset                   | Optional Node.js CA bundle path for providers using private certificate authorities. Mount the CA file into the container and set this path. |
 | `IPTVNATOR_STORAGE`                      | `server` in the image   | `server` opens the server storage database under `IPTVNATOR_DATA_DIR` and its `/api/v1` routes; `none` keeps the backend stateless.          |

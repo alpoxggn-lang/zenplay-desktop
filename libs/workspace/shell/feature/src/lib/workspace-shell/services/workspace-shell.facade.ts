@@ -131,7 +131,7 @@ export class WorkspaceShellFacade {
     readonly headerSidebarToggle = this.header.headerSidebarToggle;
     readonly playlistSubtitle = this.header.playlistSubtitle;
     readonly activeDownloadsCount = computed(() =>
-        this.supportsDownloads ? this.downloadsService.activeCount() : 0
+        this.runtime.supportsDownloads ? this.downloadsService.activeCount() : 0
     );
     readonly hasActiveDownloads = computed(
         () => this.activeDownloadsCount() > 0
@@ -157,8 +157,11 @@ export class WorkspaceShellFacade {
         return this.runtime.isMacOS;
     }
 
+    /** Legacy shell input name for visibility of the shared media manager. */
     get supportsDownloads(): boolean {
-        return this.runtime.supportsDownloads;
+        return (
+            this.runtime.supportsDownloads || this.runtime.supportsRecordings
+        );
     }
 
     closeActiveExternalSession(): void {

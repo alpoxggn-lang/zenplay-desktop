@@ -2,6 +2,7 @@ import { AppConfig } from '../../environments/environment';
 
 export interface IptvnatorRuntimeConfig {
     readonly BACKEND_URL?: string;
+    readonly MANAGED_MEDIA?: boolean;
 }
 
 export function resolveBackendUrl(
@@ -26,8 +27,7 @@ export interface ServiceWorkerRuntimeContext {
 
 function getDefaultServiceWorkerRuntimeContext(): ServiceWorkerRuntimeContext {
     const browserWindow = globalThis.window as
-        | (Window & { electron?: unknown })
-        | undefined;
+        (Window & { electron?: unknown }) | undefined;
 
     return {
         electronBridge: browserWindow?.electron,

@@ -110,6 +110,59 @@ describe('transferBrowserDownload', () => {
         return fetchMock;
     }
 
+    it('asserts the captured source on the first transfer request', async () => {
+        const { storage } = testStorage(0);
+        const fetchMock = installFetch(
+            testResponse([1], 200, {
+                'Content-Length': '1',
+                ETag: '"version-1"',
+                'X-ZenPlay-Media-Source': 'source-a',
+            })
+        );
+        const item = downloadItem();
+        item.bytesDownloaded = 0;
+        item.resumeValidator = undefined;
+
+        await transferBrowserDownload(
+            storage,
+            item,
+            0,
+            new AbortController(),
+            jest.fn()
+        );
+
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({
+            headers: {
+                'x-zenplay-expected-media-source': 'source-a',
+            },
+        });
+        expect(item.status).toBe('completed');
+    });
+
+    it('does not make an initial request without a persisted source', async () => {
+        const { createWritable, storage } = testStorage(0);
+        const fetchMock = installFetch();
+        const item = downloadItem();
+        item.bytesDownloaded = 0;
+        item.mediaSourceId = undefined;
+
+        await transferBrowserDownload(
+            storage,
+            item,
+            0,
+            new AbortController(),
+            jest.fn()
+        );
+
+        expect(fetchMock).not.toHaveBeenCalled();
+        expect(createWritable).not.toHaveBeenCalled();
+        expect(item.status).toBe('failed');
+        expect(item.errorMessage).toBe(
+            BROWSER_MEDIA_MESSAGES.sourceUnconfirmed
+        );
+    });
+
     it('appends only when Content-Range starts at the saved file size', async () => {
         const { createWritable, storage, writer } = testStorage(128);
         const fetchMock = installFetch(

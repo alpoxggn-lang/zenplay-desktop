@@ -12,7 +12,12 @@ const fs = require('node:fs');
 fs.writeFileSync(
     '/usr/share/nginx/html/assets/app-config.js',
     `window.__IPTVNATOR_CONFIG__ = ${JSON.stringify(
-        { BACKEND_URL: process.env.BACKEND_URL || '/api' },
+        {
+            BACKEND_URL: process.env.BACKEND_URL || '/api',
+            MANAGED_MEDIA: Boolean(
+                process.env.ZENPLAY_XTREAM_URL?.trim()
+            ),
+        },
         null,
         2
     )};\n`

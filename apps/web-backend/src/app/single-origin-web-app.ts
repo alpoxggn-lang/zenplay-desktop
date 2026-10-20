@@ -49,9 +49,8 @@ export function createSingleOriginWebApp(
             next();
         }
     );
-    app.get('/assets/app-config.js', (_req, res, next) => {
-        res.set('Cache-Control', 'no-store');
-        next();
+    app.get('/assets/app-config.js', (_req, res) => {
+        res.set('Cache-Control', 'no-store').redirect(307, '/api/config.js');
     });
     app.use(express.static(staticDirectory, { index: false }));
 

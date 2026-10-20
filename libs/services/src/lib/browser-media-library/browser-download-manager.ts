@@ -13,6 +13,10 @@ import {
     createBrowserDownloadItem,
     sanitizeBrowserPersistedUrl,
 } from './browser-download-item';
+import {
+    captureBrowserDownloadSourceId,
+    sourceIdForBrowserDownloadEnqueue,
+} from './browser-download-source';
 import { updateBrowserDownloadMetadata } from './browser-download-metadata';
 import { BrowserDownloadQueue } from './browser-download-queue';
 import { redownloadMissingBrowserDownload } from './browser-download-redownload';
@@ -139,9 +143,16 @@ export class BrowserDownloadManager {
             safeUrl.match(/\.([a-z0-9]{1,12})(?:$|\?)/iu)?.[1] ?? 'media';
         const fileName = `${id}.${extension}`;
         const createdAt = new Date().toISOString();
+        let mediaSourceId: string;
+        try {
+            mediaSourceId = await captureBrowserDownloadSourceId(safeUrl);
+        } catch (error) {
+            return { success: false, error: errorMessage(error) };
+        }
         const item = createBrowserDownloadItem(input, {
             id,
             safeUrl,
+            mediaSourceId,
             fileName,
             filePath: privateMediaPath(DOWNLOAD_DIRECTORY, fileName),
             ownerId: this.ownerId,
@@ -215,11 +226,30 @@ export class BrowserDownloadManager {
 
     async resume(id: number): Promise<ElectronBridgeErrorResult> {
         await this.recoverExpired();
+        const current = await this.storage.sanitizeDownload(id);
+        const currentOffset =
+            current?.status === 'canceled'
+                ? 0
+                : (current?.bytesDownloaded ?? 0);
+        let capturedSourceId: string | undefined;
+        try {
+            capturedSourceId =
+                current &&
+                ['paused', 'failed', 'canceled'].includes(current.status)
+                    ? await sourceIdForBrowserDownloadEnqueue(
+                          current,
+                          currentOffset
+                      )
+                    : undefined;
+        } catch (error) {
+            return { success: false, error: errorMessage(error) };
+        }
         const claim = await this.storage.claimDownloadForResume(
             id,
             this.ownerId,
             Date.now() + OWNER_LEASE_MS,
-            new Date().toISOString()
+            new Date().toISOString(),
+            capturedSourceId
         );
         if (!claim) {
             const current = await this.storage.getDownload(id);

@@ -1,11 +1,13 @@
 import type { DownloadItem } from '../downloads.models';
 import { responseMatchesRequestedRange } from './browser-media-capabilities';
 import { BROWSER_MEDIA_MESSAGES } from './browser-media-messages';
+import {
+    assertBrowserDownloadResponseSource,
+    EXPECTED_MEDIA_SOURCE_HEADER,
+} from './browser-download-source';
 import type { BrowserPrivateStorage } from './browser-private-storage';
 
 type DownloadChangeEmitter = () => void;
-const MEDIA_SOURCE_HEADER = 'x-zenplay-media-source';
-const EXPECTED_MEDIA_SOURCE_HEADER = 'x-zenplay-expected-media-source';
 const OWNER_LEASE_MS = 60_000;
 const OWNER_HEARTBEAT_MS = 15_000;
 
@@ -101,23 +103,6 @@ async function fetchDownload(
     });
 }
 
-function bindResponseToMediaSource(
-    response: Response,
-    item: DownloadItem
-): void {
-    if ([409, 412].includes(response.status)) {
-        throw new Error(BROWSER_MEDIA_MESSAGES.sourceChanged);
-    }
-    const sourceId = response.headers.get(MEDIA_SOURCE_HEADER)?.trim();
-    if (!sourceId) {
-        throw new Error(BROWSER_MEDIA_MESSAGES.sourceUnconfirmed);
-    }
-    if (item.mediaSourceId && sourceId !== item.mediaSourceId) {
-        throw new Error(BROWSER_MEDIA_MESSAGES.sourceChanged);
-    }
-    item.mediaSourceId = sourceId;
-}
-
 function responseResumeValidator(response: Response): string | undefined {
     const etag = response.headers.get('etag')?.trim();
     if (etag && !/^W\//iu.test(etag)) return etag;
@@ -163,8 +148,12 @@ export async function transferBrowserDownload(
             offset = (await storage.getFile(filePath))?.size ?? 0;
             item.bytesDownloaded = offset;
         }
-        if (offset > 0 && !item.mediaSourceId) {
-            throw new Error(BROWSER_MEDIA_MESSAGES.sourcePartialUnconfirmed);
+        if (!item.mediaSourceId) {
+            throw new Error(
+                offset > 0
+                    ? BROWSER_MEDIA_MESSAGES.sourcePartialUnconfirmed
+                    : BROWSER_MEDIA_MESSAGES.sourceUnconfirmed
+            );
         }
         if (offset > 0 && !item.resumeValidator) {
             offset = 0;
@@ -178,7 +167,7 @@ export async function transferBrowserDownload(
             item.mediaSourceId,
             controller.signal
         );
-        bindResponseToMediaSource(response, item);
+        assertBrowserDownloadResponseSource(response, item.mediaSourceId);
         const responseValidator = responseResumeValidator(response);
         const restartableRangeResponse = [200, 206, 416].includes(
             response.status
@@ -204,7 +193,10 @@ export async function transferBrowserDownload(
                     item.mediaSourceId,
                     controller.signal
                 );
-                bindResponseToMediaSource(response, item);
+                assertBrowserDownloadResponseSource(
+                    response,
+                    item.mediaSourceId
+                );
             }
         }
         if (!response.ok) throw new Error(`HTTP ${response.status}`);

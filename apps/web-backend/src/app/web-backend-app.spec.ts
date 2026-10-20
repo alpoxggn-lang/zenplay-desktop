@@ -36,6 +36,7 @@ describe('web backend app', () => {
         await withServer(
             createWebBackendApp({
                 runtimeBackendUrl: '/api',
+                zenPlayXtreamUrl: null,
             }),
             async (baseUrl) => {
                 const response = await fetch(`${baseUrl}/config.js`);
@@ -47,6 +48,37 @@ describe('web backend app', () => {
                 expect(response.headers.get('cache-control')).toBe('no-store');
                 expect(body).toContain('window.__IPTVNATOR_CONFIG__');
                 expect(body).toContain('"BACKEND_URL":"/api"');
+                expect(body).toContain('"MANAGED_MEDIA":false');
+            }
+        );
+    });
+
+    it('advertises managed media only for a configured ZenPlay backend', async () => {
+        await withServer(
+            createWebBackendApp({
+                runtimeBackendUrl: '/api',
+                zenPlayXtreamUrl: '   ',
+            }),
+            async (baseUrl) => {
+                const response = await fetch(`${baseUrl}/config.js`);
+
+                await expect(response.text()).resolves.toContain(
+                    '"MANAGED_MEDIA":false'
+                );
+            }
+        );
+
+        await withServer(
+            createWebBackendApp({
+                runtimeBackendUrl: '/api',
+                zenPlayXtreamUrl: 'https://provider.example',
+            }),
+            async (baseUrl) => {
+                const response = await fetch(`${baseUrl}/config.js`);
+
+                await expect(response.text()).resolves.toContain(
+                    '"MANAGED_MEDIA":true'
+                );
             }
         );
     });

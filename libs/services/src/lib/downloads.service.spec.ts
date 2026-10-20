@@ -12,6 +12,7 @@ import type {
     ElectronBridgeDownloadStartPayload,
     ElectronBridgeDownloadStartResult,
 } from '@iptvnator/shared/interfaces';
+import { browserMediaLibrary } from './browser-media-library';
 import { DownloadListLoadState } from './download-list-load-state';
 import { DownloadItem, DownloadsService } from './downloads.service';
 import { RuntimeCapabilitiesService } from './runtime-capabilities.service';
@@ -169,6 +170,52 @@ describe('DownloadsService', () => {
 
             expect(service.isAvailable()).toBe(false);
             expect(service.canRevealFiles()).toBe(false);
+        } finally {
+            injector.destroy();
+        }
+    });
+
+    it('settles the browser list and disables downloads when private storage initialization fails', async () => {
+        const error = new Error('OPFS unavailable');
+        const unsubscribe = jest.fn();
+        jest.spyOn(console, 'error').mockImplementation(() => undefined);
+        jest.spyOn(browserMediaLibrary, 'subscribe').mockReturnValue(
+            unsubscribe
+        );
+        jest.spyOn(browserMediaLibrary, 'initialize').mockRejectedValue(error);
+        const list = jest.spyOn(browserMediaLibrary, 'listDownloads');
+        const injector = createEnvironmentInjector(
+            [
+                DownloadsService,
+                {
+                    provide: RuntimeCapabilitiesService,
+                    useValue: {
+                        isPwa: true,
+                        supportsDownloads: true,
+                        supportsDownloadFileReveal: false,
+                    },
+                },
+            ],
+            Injector.NULL as unknown as EnvironmentInjector
+        );
+
+        try {
+            const service = runInInjectionContext(
+                injector,
+                () => new DownloadsService()
+            );
+            await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+            expect(service.isAvailable()).toBe(false);
+            expect(service.hasLoadedDownloads()).toBe(true);
+            expect(service.hasAuthoritativeDownloadList()).toBe(false);
+            expect(service.isLoadingDownloads()).toBe(false);
+            expect(list).not.toHaveBeenCalled();
+            expect(unsubscribe).toHaveBeenCalledTimes(1);
+            expect(console.error).toHaveBeenCalledWith(
+                '[DownloadsService] Browser media initialization failed:',
+                error
+            );
         } finally {
             injector.destroy();
         }

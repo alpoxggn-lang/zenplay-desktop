@@ -26,6 +26,7 @@ const BROWSER_DOWNLOAD_RECOVERY_POLL_MS = 15_000;
 export class DownloadsService extends DownloadsQueryBase implements OnDestroy {
     private readonly runtime = inject(RuntimeCapabilitiesService);
     private readonly translate = inject(TranslateService, { optional: true });
+    private readonly browserMediaAvailable = signal(true);
     private unsubscribe?: () => void;
     private browserRecoveryPoll?: number;
     private readonly downloadListLoadState = new DownloadListLoadState();
@@ -44,7 +45,11 @@ export class DownloadsService extends DownloadsQueryBase implements OnDestroy {
         this.downloadListLoadState.hasAuthoritativeList;
 
     /** Whether downloads are available through Electron or private browser storage. */
-    readonly isAvailable = computed(() => this.runtime.supportsDownloads);
+    readonly isAvailable = computed(
+        () =>
+            this.runtime.supportsDownloads &&
+            (!this.usesBrowserMediaLibrary || this.browserMediaAvailable())
+    );
 
     /** Whether a completed file can be revealed in a native file manager. */
     readonly canRevealFiles = computed(
@@ -80,7 +85,7 @@ export class DownloadsService extends DownloadsQueryBase implements OnDestroy {
 
     constructor() {
         super();
-        this.init();
+        void this.init();
     }
 
     private async init() {
@@ -89,13 +94,26 @@ export class DownloadsService extends DownloadsQueryBase implements OnDestroy {
         }
 
         if (this.usesBrowserMediaLibrary) {
-            this.unsubscribe = browserMediaLibrary.subscribe((kind) => {
-                if (kind === 'downloads') void this.loadDownloads();
-            });
-            await browserMediaLibrary.initialize();
-            await this.loadDownloads();
-            this.startBrowserRecoveryPolling();
-            this.downloadFolder.set(BROWSER_MEDIA_MESSAGES.privateStorageLabel);
+            try {
+                this.unsubscribe = browserMediaLibrary.subscribe((kind) => {
+                    if (kind === 'downloads') void this.loadDownloads();
+                });
+                await browserMediaLibrary.initialize();
+                await this.loadDownloads();
+                this.startBrowserRecoveryPolling();
+                this.downloadFolder.set(
+                    BROWSER_MEDIA_MESSAGES.privateStorageLabel
+                );
+            } catch (error) {
+                this.unsubscribe?.();
+                this.unsubscribe = undefined;
+                this.browserMediaAvailable.set(false);
+                this.downloadListLoadState.markFailed();
+                console.error(
+                    '[DownloadsService] Browser media initialization failed:',
+                    error
+                );
+            }
             return;
         }
 

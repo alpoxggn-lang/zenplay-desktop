@@ -78,6 +78,7 @@ const config = [
   { term: 'Port', value: 'The container listens on 80; the compose file maps it to 4333 on the host. Change the host side to taste.' },
   { term: 'CLIENT_URL', value: 'The origin browsers use to open the app, for CORS. Set it to your public URL behind a reverse proxy; several origins can be comma-separated.' },
   { term: 'BACKEND_URL', value: 'Where the app finds its backend. Keep the default /api for the bundled proxy.' },
+  { term: 'ZENPLAY_XTREAM_URL', value: 'Optional managed Xtream server. Setting it restricts the deployment to that server and enables private movie and episode downloads in browsers with IndexedDB and OPFS.' },
   { term: 'IPTVNATOR_PROXY_ALLOW_PRIVATE_NETWORKS', value: 'Off by default. Set to 1 only when your provider lives on your own LAN and the instance is limited to trusted users.' },
   { term: 'NODE_EXTRA_CA_CERTS', value: 'Path to a CA bundle you mount into the container, for providers behind a private certificate authority. Keeps TLS validation on.' },
 ];
@@ -92,7 +93,7 @@ const tags = [
 const faq: FaqEntry[] = [
   {
     q: 'Is the browser version the same app as the desktop version?',
-    a: 'Yes, built from the same code. What it lacks is everything that needs to reach outside a browser tab: launching MPV or VLC, the embedded MPV engine, downloading files, storing an XMLTV guide, mapping EPG channels by hand, search across every source and the phone remote. Portal schedules from Xtream and Stalker sources still work.',
+    a: 'Yes, built from the same code. What it lacks is everything that needs to reach outside a browser tab: launching MPV or VLC, the embedded MPV engine, storing an XMLTV guide, mapping EPG channels by hand, search across every source and the phone remote. A managed deployment with ZENPLAY_XTREAM_URL can download movies and episodes into compatible browser-private storage; generic deployments hide those actions. Portal schedules from Xtream and Stalker sources still work.',
   },
   {
     q: 'Does it need a separate backend container?',
@@ -267,9 +268,11 @@ const jsonLd = [
       <div class="space-y-4 text-base leading-relaxed text-surface-400">
         <p>
           A browser tab cannot launch other programs, write files where it likes or keep a database the size of a TV
-          guide. So the browser version has no MPV or VLC handoff, no embedded MPV engine, no downloads or recordings,
-          no XMLTV guide and no manual channel mapping, no search across every source, and no phone remote. Xtream and
-          Stalker schedules still show, because they come from the provider on demand.
+          guide. So the browser version has no MPV or VLC handoff, no embedded MPV engine, no XMLTV guide and no manual
+          channel mapping, no search across every source, and no phone remote. Managed deployments can keep movie and
+          episode downloads in browser-private storage, while compatible browsers can record live media for as long as
+          the player page remains open. Xtream and Stalker schedules still show, because they come from the provider on
+          demand.
         </p>
         <p>
           The full side-by-side table is on the{' '}

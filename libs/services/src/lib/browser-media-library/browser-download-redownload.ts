@@ -1,6 +1,7 @@
 import type { ElectronBridgeErrorResult } from '@iptvnator/shared/interfaces';
 import { withBrowserDownloadLock } from './browser-download-lock';
 import type { BrowserDownloadQueue } from './browser-download-queue';
+import { sourceIdForBrowserDownloadEnqueue } from './browser-download-source';
 import { BROWSER_MEDIA_MESSAGES } from './browser-media-messages';
 import type { BrowserPrivateStorage } from './browser-private-storage';
 
@@ -17,11 +18,40 @@ export async function redownloadMissingBrowserDownload(
     emitChange: () => void,
     id: number
 ): Promise<ElectronBridgeErrorResult> {
+    const current = await storage.sanitizeDownload(id);
+    if (!current) {
+        return {
+            success: false,
+            error: BROWSER_MEDIA_MESSAGES.downloadNotFound,
+        };
+    }
+    if (!current.url) {
+        return {
+            success: false,
+            error: BROWSER_MEDIA_MESSAGES.sourceUnsupported,
+        };
+    }
+    if (
+        current.status !== 'completed' ||
+        current.fileAvailability !== 'missing'
+    ) {
+        return {
+            success: false,
+            error: BROWSER_MEDIA_MESSAGES.downloadAlreadyActive,
+        };
+    }
+    let capturedSourceId: string | undefined;
+    try {
+        capturedSourceId = await sourceIdForBrowserDownloadEnqueue(current, 0);
+    } catch (error) {
+        return { success: false, error: errorMessage(error) };
+    }
     const claim = await storage.claimDownloadForRedownload(
         id,
         ownerId,
         Date.now() + OWNER_LEASE_MS,
-        new Date().toISOString()
+        new Date().toISOString(),
+        capturedSourceId
     );
     if (!claim) {
         const current = await storage.getDownload(id);

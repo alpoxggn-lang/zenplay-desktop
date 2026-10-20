@@ -209,7 +209,10 @@ export function createWebBackendApp(
     });
 
     app.get('/config.js', corsMiddleware, (_req, res) => {
-        const config = JSON.stringify({ BACKEND_URL: runtimeBackendUrl });
+        const config = JSON.stringify({
+            BACKEND_URL: runtimeBackendUrl,
+            MANAGED_MEDIA: isManagedZenPlayDeployment,
+        });
         res.set('Cache-Control', 'no-store')
             .type('application/javascript')
             .send(

@@ -23,6 +23,7 @@ const BROWSER_RECORDING_POLL_MS = 15_000;
 export class RecordingsService implements OnDestroy {
     private readonly runtime = inject(RuntimeCapabilitiesService);
     private readonly translate = inject(TranslateService, { optional: true });
+    private readonly browserMediaAvailable = signal(true);
     private unsubscribe?: () => void;
     private browserPollId?: number;
     private destroyed = false;
@@ -35,7 +36,11 @@ export class RecordingsService implements OnDestroy {
         this.listLoadState.hasAuthoritativeList;
 
     /** Whether recordings are available through Electron or the browser recorder. */
-    readonly isAvailable = computed(() => this.runtime.supportsRecordings);
+    readonly isAvailable = computed(
+        () =>
+            this.runtime.supportsRecordings &&
+            (!this.usesBrowserMediaLibrary || this.browserMediaAvailable())
+    );
 
     readonly hasRecordings = computed(() => this.recordings().length > 0);
 
@@ -45,7 +50,7 @@ export class RecordingsService implements OnDestroy {
     );
 
     constructor() {
-        this.init();
+        void this.init();
     }
 
     private async init() {
@@ -54,15 +59,26 @@ export class RecordingsService implements OnDestroy {
         }
 
         if (this.usesBrowserMediaLibrary) {
-            this.unsubscribe = browserMediaLibrary.subscribe((kind) => {
-                if (kind === 'recordings') void this.loadRecordings();
-            });
-            await browserMediaLibrary.initialize();
-            await this.loadRecordings();
-            if (!this.destroyed) {
-                this.browserPollId = window.setInterval(
-                    () => void this.loadRecordings(),
-                    BROWSER_RECORDING_POLL_MS
+            try {
+                this.unsubscribe = browserMediaLibrary.subscribe((kind) => {
+                    if (kind === 'recordings') void this.loadRecordings();
+                });
+                await browserMediaLibrary.initialize();
+                await this.loadRecordings();
+                if (!this.destroyed) {
+                    this.browserPollId = window.setInterval(
+                        () => void this.loadRecordings(),
+                        BROWSER_RECORDING_POLL_MS
+                    );
+                }
+            } catch (error) {
+                this.unsubscribe?.();
+                this.unsubscribe = undefined;
+                this.browserMediaAvailable.set(false);
+                this.listLoadState.markFailed();
+                console.error(
+                    '[RecordingsService] Browser media initialization failed:',
+                    error
                 );
             }
             return;

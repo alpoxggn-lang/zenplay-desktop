@@ -129,7 +129,7 @@ export class DownloadsComponent {
                   tail: path.slice(separatorIndex),
               };
     });
-    readonly isAvailable = this.downloadsService.isAvailable;
+    readonly downloadsAvailable = this.downloadsService.isAvailable;
     readonly isLoadingDownloads = this.downloadsService.isLoadingDownloads;
     readonly hasLoadedDownloads = this.downloadsService.hasLoadedDownloads;
     readonly playlistId = toSignal(
@@ -166,6 +166,11 @@ export class DownloadsComponent {
         })
     );
     readonly recordingsAvailable = this.recordingsService.isAvailable;
+    readonly isLoadingRecordings = this.recordingsService.isLoadingRecordings;
+    readonly hasLoadedRecordings = this.recordingsService.hasLoadedRecordings;
+    readonly isAvailable = computed(
+        () => this.downloadsAvailable() || this.recordingsAvailable()
+    );
     readonly recordingPendingIds = this.recordingActions.pendingIds;
     readonly recordingModel = computed(() =>
         buildRecordingManagerViewModel({
@@ -211,7 +216,11 @@ export class DownloadsComponent {
     readonly showDownloadSkeleton = computed(
         () =>
             !this.hasScopedDownloads() &&
-            (!this.hasLoadedDownloads() || this.isLoadingDownloads())
+            ((this.downloadsAvailable() &&
+                (!this.hasLoadedDownloads() || this.isLoadingDownloads())) ||
+                (this.recordingsAvailable() &&
+                    (!this.hasLoadedRecordings() ||
+                        this.isLoadingRecordings())))
     );
     readonly skeletonItems = Array.from({ length: 6 }, (_, index) => index);
     readonly skeletonCards = Array.from({ length: 5 }, (_, index) => index);

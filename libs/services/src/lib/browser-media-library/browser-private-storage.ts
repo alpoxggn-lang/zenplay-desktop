@@ -111,13 +111,15 @@ export class BrowserPrivateStorage {
         id: number,
         ownerId: string,
         leaseUntil: number,
-        updatedAt: string
+        updatedAt: string,
+        capturedSourceId?: string
     ): Promise<BrowserDownloadResumeClaim | null> {
         return this.downloads.claimForResume(
             id,
             ownerId,
             leaseUntil,
-            updatedAt
+            updatedAt,
+            capturedSourceId
         );
     }
 
@@ -125,13 +127,15 @@ export class BrowserPrivateStorage {
         id: number,
         ownerId: string,
         leaseUntil: number,
-        updatedAt: string
+        updatedAt: string,
+        capturedSourceId?: string
     ): Promise<BrowserDownloadRedownloadClaim | null> {
         return this.downloads.claimForRedownload(
             id,
             ownerId,
             leaseUntil,
-            updatedAt
+            updatedAt,
+            capturedSourceId
         );
     }
 

@@ -56,7 +56,8 @@ export class BrowserDownloadStore {
         id: number,
         ownerId: string,
         leaseUntil: number,
-        updatedAt: string
+        updatedAt: string,
+        capturedSourceId?: string
     ): Promise<BrowserDownloadResumeClaim | null> {
         let claim: BrowserDownloadResumeClaim | null = null;
         await this.update(id, (current) => {
@@ -75,6 +76,9 @@ export class BrowserDownloadStore {
                 sanitized.status === 'canceled'
                     ? 0
                     : (sanitized.bytesDownloaded ?? 0);
+            const mediaSourceId =
+                sanitized.mediaSourceId ??
+                (offset === 0 ? capturedSourceId : undefined);
             const item: DownloadItem = {
                 ...sanitized,
                 status: 'queued',
@@ -82,6 +86,7 @@ export class BrowserDownloadStore {
                 browserLeaseUntil: leaseUntil,
                 errorMessage: undefined,
                 bytesDownloaded: offset,
+                ...(mediaSourceId ? { mediaSourceId } : {}),
                 updatedAt,
             };
             claim = { item, offset, previous };
@@ -94,7 +99,8 @@ export class BrowserDownloadStore {
         id: number,
         ownerId: string,
         leaseUntil: number,
-        updatedAt: string
+        updatedAt: string,
+        capturedSourceId?: string
     ): Promise<BrowserDownloadRedownloadClaim | null> {
         let claim: BrowserDownloadRedownloadClaim | null = null;
         await this.update(id, (current) => {
@@ -110,13 +116,14 @@ export class BrowserDownloadStore {
                     : sanitized;
             }
             const previous = { ...sanitized };
+            const mediaSourceId = sanitized.mediaSourceId ?? capturedSourceId;
             const item: DownloadItem = {
                 ...sanitized,
                 status: 'queued',
                 bytesDownloaded: 0,
                 totalBytes: undefined,
                 resumeValidator: undefined,
-                mediaSourceId: undefined,
+                ...(mediaSourceId ? { mediaSourceId } : {}),
                 errorMessage: undefined,
                 browserOwnerId: ownerId,
                 browserLeaseUntil: leaseUntil,

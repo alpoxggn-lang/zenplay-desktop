@@ -242,7 +242,10 @@ export class RuntimeCapabilitiesService {
 
     get supportsDownloads(): boolean {
         if (this.isPwa) {
-            return supportsBrowserPrivateMediaStorage();
+            return (
+                globalThis.window?.__IPTVNATOR_CONFIG__?.MANAGED_MEDIA ===
+                    true && supportsBrowserPrivateMediaStorage()
+            );
         }
         return [
             'downloadsStart',

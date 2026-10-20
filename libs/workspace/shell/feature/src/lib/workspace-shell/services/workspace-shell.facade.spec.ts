@@ -179,6 +179,7 @@ describe('WorkspaceShellFacade', () => {
         isMacOS: boolean;
         supportsGlobalSearch: boolean;
         supportsDownloads: boolean;
+        supportsRecordings: boolean;
     };
 
     beforeEach(() => {
@@ -189,6 +190,7 @@ describe('WorkspaceShellFacade', () => {
             isMacOS: true,
             supportsGlobalSearch: true,
             supportsDownloads: true,
+            supportsRecordings: false,
         };
 
         activePlaylistSignal = signal<PlaylistSignalMeta | null>({
@@ -428,10 +430,24 @@ describe('WorkspaceShellFacade', () => {
 
     it('hides the active download count when downloads are unsupported', () => {
         runtime.supportsDownloads = false;
+        runtime.supportsRecordings = true;
         downloadsActiveCountSignal.set(3);
 
         expect(facade.activeDownloadsCount()).toBe(0);
         expect(facade.hasActiveDownloads()).toBe(false);
+    });
+
+    it('keeps manager navigation available when only recordings are supported', () => {
+        runtime.supportsDownloads = false;
+        runtime.supportsRecordings = true;
+        activePlaylistSignal.set(null);
+        playlistsSignal.set([]);
+        facade.currentUrl.set('/workspace/dashboard');
+
+        expect(facade.supportsDownloads).toBe(true);
+        expect(facade.commandPaletteCommands().map(({ id }) => id)).toContain(
+            'open-downloads'
+        );
     });
 
     it('routes dashboard search Enter into the active Xtream playlist search', () => {
@@ -931,8 +947,9 @@ describe('WorkspaceShellFacade', () => {
         ).not.toContain('global-search');
     });
 
-    it('hides the downloads command when downloads are unsupported', () => {
+    it('hides the manager command when downloads and recordings are unsupported', () => {
         runtime.supportsDownloads = false;
+        runtime.supportsRecordings = false;
         activePlaylistSignal.set(null);
         playlistsSignal.set([]);
         facade.currentUrl.set('/workspace/dashboard');

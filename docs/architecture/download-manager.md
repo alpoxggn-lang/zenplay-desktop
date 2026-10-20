@@ -15,7 +15,18 @@ buttons, and theme-aware styling.
 IndexedDB and media bytes in the Origin Private File System (OPFS). Its
 `opfs://zenplay-private-media/...` identifiers are internal references, not
 provider URLs or public filesystem paths. The app requests persistent browser
-storage, but quota and eviction remain browser policy.
+storage, but quota and eviction remain browser policy. If opening or recovering
+that private storage fails, both libraries settle their initial load as failed
+and hide their browser actions instead of leaving an unhandled startup task.
+
+PWA downloads are advertised only when private browser storage is available
+and runtime config explicitly reports `MANAGED_MEDIA: true`. The backend emits
+that flag only for a non-empty `ZENPLAY_XTREAM_URL`, because those deployments
+can establish the HttpOnly media cookie required by `/media/*`. Recordings keep
+their separate browser capture capability and do not depend on this flag. The
+shared manager and its shell navigation remain available when either downloads
+or recordings are supported; download-specific folder, byte-total, and active
+transfer controls still require the download capability itself.
 
 - Movie and episode downloads accept only the managed opaque
   `/api/media/movie|series/:id.:extension` routes. A provider-shaped Xtream URL
@@ -41,9 +52,12 @@ storage, but quota and eviction remain browser policy.
   A successful response must contribute at least one byte; an empty 200 is
   removed and recorded as failed rather than becoming a playable library item.
 - The backend binds every response to an opaque `X-ZenPlay-Media-Source`
-  identity. A resume sends that identity back and fails before opening OPFS if
-  the active Xtream source changed. Web Locks plus an IndexedDB ownership lease
-  prevent another tab from recovering, replacing, or deleting an active file.
+  identity. Enqueue reads that identity from the authenticated
+  `/media/source` endpoint and persists it before entering the local FIFO; the
+  first byte request and every resume send it back and fail before opening
+  OPFS if the active Xtream source changed. Web Locks plus an IndexedDB
+  ownership lease prevent another tab from recovering, replacing, or deleting
+  an active file.
   Resume ownership is claimed in one IndexedDB read-write transaction before a
   worker enters the Web Lock, so simultaneous tabs cannot leave an ownerless
   queued row. A busy lock rolls that claim back atomically, and missing-file
@@ -512,7 +526,13 @@ available after restart and after the source archive expires.
   the current route query with `replaceUrl`. Opening a focused item then keeps
   that exact scoped URL as its validated return target, so Back restores the
   manager's scope, search query, filter, and browser-history position.
-- Downloads navigation is data-driven: `libs/portal/shared/util/src/lib/navigation/portal-rail-links.ts` emits a `downloads` section link (`path: [...root, 'downloads']`) for both portals, so they reuse the same download page.
+- Downloads navigation is data-driven:
+  `libs/portal/shared/util/src/lib/navigation/portal-rail-links.ts` emits a
+  `downloads` section link (`path: [...root, 'downloads']`) for both portals, so
+  they reuse the same page. Shell, command-palette, and keyboard navigation use
+  the aggregate `supportsDownloads || supportsRecordings` manager capability;
+  this keeps browser recordings reachable when an unmanaged PWA correctly
+  disables private downloads.
 
 ## Queuing, persistence, and UX notes
 

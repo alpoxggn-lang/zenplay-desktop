@@ -2,11 +2,16 @@ import type { DownloadItem, DownloadStartInput } from '../downloads.models';
 import { sanitizeBrowserDownloadItem } from './browser-download-item';
 import { BrowserDownloadManager } from './browser-download-manager';
 import { BROWSER_MEDIA_MESSAGES } from './browser-media-messages';
+import { captureBrowserDownloadSourceId } from './browser-download-source';
 import { transferBrowserDownload } from './browser-download-transfer';
 import type { BrowserPrivateStorage } from './browser-private-storage';
 
 jest.mock('./browser-download-transfer', () => ({
     transferBrowserDownload: jest.fn(),
+}));
+jest.mock('./browser-download-source', () => ({
+    ...jest.requireActual('./browser-download-source'),
+    captureBrowserDownloadSourceId: jest.fn(),
 }));
 
 function deferred() {
@@ -62,7 +67,8 @@ function testStorage(initial: DownloadItem[] = []) {
                 id: number,
                 ownerId: string,
                 leaseUntil: number,
-                updatedAt: string
+                updatedAt: string,
+                capturedSourceId?: string
             ) => {
                 const stored = items.get(id);
                 const current = stored
@@ -81,6 +87,9 @@ function testStorage(initial: DownloadItem[] = []) {
                         ? 0
                         : (current.bytesDownloaded ?? 0);
                 const previous = { ...current };
+                const mediaSourceId =
+                    current.mediaSourceId ??
+                    (offset === 0 ? capturedSourceId : undefined);
                 const item: DownloadItem = {
                     ...current,
                     status: 'queued',
@@ -88,6 +97,7 @@ function testStorage(initial: DownloadItem[] = []) {
                     browserLeaseUntil: leaseUntil,
                     errorMessage: undefined,
                     bytesDownloaded: offset,
+                    ...(mediaSourceId ? { mediaSourceId } : {}),
                     updatedAt,
                 };
                 items.set(id, item);
@@ -99,7 +109,8 @@ function testStorage(initial: DownloadItem[] = []) {
                 id: number,
                 ownerId: string,
                 leaseUntil: number,
-                updatedAt: string
+                updatedAt: string,
+                capturedSourceId?: string
             ) => {
                 const stored = items.get(id);
                 const current = stored
@@ -115,13 +126,14 @@ function testStorage(initial: DownloadItem[] = []) {
                     return null;
                 }
                 const previous = { ...current };
+                const mediaSourceId = current.mediaSourceId ?? capturedSourceId;
                 const item: DownloadItem = {
                     ...current,
                     status: 'queued',
                     bytesDownloaded: 0,
                     totalBytes: undefined,
                     resumeValidator: undefined,
-                    mediaSourceId: undefined,
+                    ...(mediaSourceId ? { mediaSourceId } : {}),
                     errorMessage: undefined,
                     browserOwnerId: ownerId,
                     browserLeaseUntil: leaseUntil,
@@ -254,6 +266,10 @@ describe('BrowserDownloadManager queue', () => {
 
     beforeEach(() => {
         jest.restoreAllMocks();
+        jest.mocked(captureBrowserDownloadSourceId).mockReset();
+        jest.mocked(captureBrowserDownloadSourceId).mockResolvedValue(
+            'source-a'
+        );
         jest.mocked(transferBrowserDownload).mockReset();
         jest.spyOn(Date, 'now').mockReturnValue(1000);
         jest.spyOn(Math, 'random')
@@ -305,6 +321,49 @@ describe('BrowserDownloadManager queue', () => {
         third.resolve();
         await Promise.all([second.promise, third.promise]);
         await Promise.resolve();
+        await Promise.resolve();
+    });
+
+    it('persists the enqueue source while a transfer waits in the queue', async () => {
+        const first = deferred();
+        const second = deferred();
+        const third = deferred();
+        const transfer = jest.mocked(transferBrowserDownload);
+        transfer
+            .mockReturnValueOnce(first.promise)
+            .mockReturnValueOnce(second.promise)
+            .mockReturnValueOnce(third.promise);
+        const storage = testStorage();
+        const manager = new BrowserDownloadManager(
+            storage,
+            () => true,
+            jest.fn()
+        );
+
+        await manager.start(input(21));
+        await manager.start(input(22));
+        const queued = await manager.start(input(23));
+
+        expect(await storage.getDownload(queued.id as number)).toMatchObject({
+            mediaSourceId: 'source-a',
+            status: 'queued',
+        });
+        jest.mocked(captureBrowserDownloadSourceId).mockResolvedValue(
+            'source-b'
+        );
+
+        first.resolve();
+        await first.promise;
+        await Promise.resolve();
+        await Promise.resolve();
+
+        expect(transfer.mock.calls[2]?.[1]).toMatchObject({
+            mediaSourceId: 'source-a',
+            xtreamId: 23,
+        });
+        second.resolve();
+        third.resolve();
+        await Promise.all([second.promise, third.promise]);
         await Promise.resolve();
     });
 
@@ -573,6 +632,7 @@ describe('BrowserDownloadManager queue', () => {
             xtreamId: 12,
             title: 'Movie 12',
             url: '/api/media/movie/12.mp4',
+            mediaSourceId: 'source-a',
         });
         for (const blocked of [
             'headers',
@@ -615,6 +675,7 @@ describe('BrowserDownloadManager queue', () => {
             macAddress: '00:11:22:33:44:55',
             username: 'alice',
             password: 'secret-password',
+            mediaSourceId: 'source-a',
             posterUrl: 'https://alice:secret@provider.example/poster.jpg',
             metadataSnapshot: {
                 version: 1,
@@ -656,6 +717,7 @@ describe('BrowserDownloadManager queue', () => {
         }
         expect(JSON.stringify(persisted)).not.toContain('secret');
         expect(JSON.stringify(persisted)).not.toContain('provider.example');
+        expect(persisted?.mediaSourceId).toBe('source-a');
     });
 
     it('makes an unconvertible legacy source non-resumable without retaining it', async () => {
@@ -797,6 +859,7 @@ describe('BrowserDownloadManager queue', () => {
             status: 'completed',
             bytesDownloaded: 100,
             totalBytes: 100,
+            mediaSourceId: 'source-a',
         };
         const storage = testStorage([missing]);
         const managers = [
@@ -815,6 +878,9 @@ describe('BrowserDownloadManager queue', () => {
         });
         expect(storage.deleteFile).toHaveBeenCalledTimes(1);
         expect(transferBrowserDownload).toHaveBeenCalledTimes(1);
+        expect(
+            jest.mocked(transferBrowserDownload).mock.calls[0]?.[1]
+        ).toMatchObject({ mediaSourceId: 'source-a' });
         running.resolve();
         await running.promise;
         await Promise.resolve();
@@ -845,6 +911,7 @@ describe('BrowserDownloadManager queue', () => {
             status: 'completed',
             bytesDownloaded: 100,
             totalBytes: 100,
+            mediaSourceId: 'source-a',
         };
         const storage = testStorage([missing]);
         const manager = new BrowserDownloadManager(

@@ -45,9 +45,7 @@ describe('single-origin ZenPlay PWA gateway', () => {
                 'camera=(), geolocation=(), microphone=()'
             );
             expect(asset.headers.get('referrer-policy')).toBe('no-referrer');
-            expect(asset.headers.get('x-content-type-options')).toBe(
-                'nosniff'
-            );
+            expect(asset.headers.get('x-content-type-options')).toBe('nosniff');
             expect(asset.headers.get('x-frame-options')).toBe('DENY');
             expect(asset.headers.get('x-powered-by')).toBeNull();
             await expect(asset.text()).resolves.toBe('window.ZenPlay=true;');
@@ -71,6 +69,27 @@ describe('single-origin ZenPlay PWA gateway', () => {
                 message: 'API route not found',
                 status: 404,
             });
+        });
+    });
+
+    it('serves backend runtime capabilities through the PWA config asset', async () => {
+        const app = createSingleOriginWebApp({
+            backend: createWebBackendApp({
+                runtimeBackendUrl: '/api',
+                storage: null,
+                zenPlayXtreamUrl: 'https://provider.example',
+            }),
+            staticDirectory,
+        });
+
+        await withServer(app, async (baseUrl) => {
+            const response = await fetch(`${baseUrl}/assets/app-config.js`);
+            const body = await response.text();
+
+            expect(response.url).toBe(`${baseUrl}/api/config.js`);
+            expect(response.headers.get('cache-control')).toBe('no-store');
+            expect(body).toContain('"BACKEND_URL":"/api"');
+            expect(body).toContain('"MANAGED_MEDIA":true');
         });
     });
 });

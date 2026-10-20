@@ -231,7 +231,9 @@ export class WorkspaceShellRouteStateService {
             buildPortalRailLinks({
                 provider: context.provider,
                 playlistId: context.playlistId,
-                supportsDownloads: this.runtime.supportsDownloads,
+                supportsDownloads:
+                    this.runtime.supportsDownloads ||
+                    this.runtime.supportsRecordings,
                 workspace: true,
             }).primary,
             context.provider,
@@ -250,7 +252,9 @@ export class WorkspaceShellRouteStateService {
             buildPortalRailLinks({
                 provider: context.provider,
                 playlistId: context.playlistId,
-                supportsDownloads: this.runtime.supportsDownloads,
+                supportsDownloads:
+                    this.runtime.supportsDownloads ||
+                    this.runtime.supportsRecordings,
                 workspace: true,
             }).secondary.filter((link) => link.section !== 'downloads'),
             context.provider,

@@ -168,13 +168,22 @@ describe('ZenPlay secure media gateway', () => {
                     );
                     const login = await loginRequest(backendUrl, targetId);
                     const mediaUrl = `${backendUrl}/media/live/7.ts`;
-                    const valid = await fetch(mediaUrl, {
+                    const source = await fetch(`${backendUrl}/media/source`, {
                         headers: { Cookie: cookiePair(login) },
                     });
-                    const sourceId = valid.headers.get(MEDIA_SOURCE_HEADER);
+                    const sourceId = source.headers.get(MEDIA_SOURCE_HEADER);
+
+                    expect(source.status).toBe(204);
+                    expect(sourceId).toMatch(/^[A-Za-z0-9_-]{43}$/);
+                    expect(mediaRequests).toBe(0);
+                    const valid = await fetch(mediaUrl, {
+                        headers: {
+                            Cookie: cookiePair(login),
+                            [EXPECTED_MEDIA_SOURCE_HEADER]: sourceId ?? '',
+                        },
+                    });
 
                     expect(valid.status).toBe(200);
-                    expect(sourceId).toMatch(/^[A-Za-z0-9_-]{43}$/);
                     expect(mediaRequests).toBe(1);
                     const mismatch = await fetch(mediaUrl, {
                         headers: {
@@ -188,6 +197,61 @@ describe('ZenPlay secure media gateway', () => {
                         sourceId
                     );
                     expect(mediaRequests).toBe(1);
+                });
+            },
+            undefined,
+            (url) => {
+                if (url.pathname.endsWith('/7.ts')) mediaRequests += 1;
+            }
+        );
+    });
+
+    it('rejects a queued source identity after the media account changes', async () => {
+        let mediaRequests = 0;
+        await withProvider(
+            async (providerUrl) => {
+                const app = createWebBackendApp({
+                    allowPrivateNetworkTargets: true,
+                    mediaSourceSecret: 'integration-source-secret',
+                    zenPlayXtreamUrl: providerUrl,
+                });
+                await withServer(app, async (backendUrl) => {
+                    const targetId = await registerProviderTarget(
+                        backendUrl,
+                        providerUrl
+                    );
+                    const firstLogin = await loginRequest(backendUrl, targetId);
+                    const firstCookie = cookiePair(firstLogin);
+                    const captured = await fetch(`${backendUrl}/media/source`, {
+                        headers: { Cookie: firstCookie },
+                    });
+                    const capturedSource =
+                        captured.headers.get(MEDIA_SOURCE_HEADER);
+                    const replacementLogin = await loginRequest(
+                        backendUrl,
+                        targetId,
+                        'second-password',
+                        firstCookie,
+                        'second-viewer'
+                    );
+
+                    const stale = await fetch(
+                        `${backendUrl}/media/movie/7.ts`,
+                        {
+                            headers: {
+                                Cookie: cookiePair(replacementLogin),
+                                [EXPECTED_MEDIA_SOURCE_HEADER]:
+                                    capturedSource ?? '',
+                            },
+                        }
+                    );
+
+                    expect(capturedSource).toMatch(/^[A-Za-z0-9_-]{43}$/);
+                    expect(stale.status).toBe(409);
+                    expect(stale.headers.get(MEDIA_SOURCE_HEADER)).not.toBe(
+                        capturedSource
+                    );
+                    expect(mediaRequests).toBe(0);
                 });
             },
             undefined,
@@ -769,12 +833,13 @@ async function loginRequest(
     backendUrl: string,
     targetId: string,
     password = 'secret-password',
-    cookie?: string
+    cookie?: string,
+    username = 'viewer'
 ): Promise<Response> {
     return fetch(`${backendUrl}/xtream`, {
         body: JSON.stringify({
             targetId,
-            params: { username: 'viewer', password },
+            params: { username, password },
             connectionTest: true,
         }),
         headers: {
