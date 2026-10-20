@@ -51,13 +51,16 @@ async function start(): Promise<void> {
     const app = staticDirectory
         ? createSingleOriginWebApp({ backend, staticDirectory })
         : backend;
+    const configuredHost = process.env['ZENPLAY_LISTEN_HOST']?.trim();
+    const listenHost =
+        configuredHost || (staticDirectory ? '127.0.0.1' : undefined);
     const onListening = () => {
         console.log(
-            `${staticDirectory ? 'ZenPlay PWA' : 'IPTVnator web backend'} listening on http://localhost:${port}`
+            `${staticDirectory ? 'ZenPlay PWA' : 'IPTVnator web backend'} listening on http://${listenHost ?? '0.0.0.0'}:${port}`
         );
     };
-    const server = staticDirectory
-        ? app.listen(port, '127.0.0.1', onListening)
+    const server = listenHost
+        ? app.listen(port, listenHost, onListening)
         : app.listen(port, onListening);
 
     const shutdown = () => {

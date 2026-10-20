@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: zenplay-web-online
+    runtime: docker
+    plan: free
+    branch: feat/zenplay-web-vnext
+    autoDeployTrigger: commit
+    dockerContext: .
+    dockerfilePath: ./docker/Dockerfile.render
+    healthCheckPath: /api/health
+    envVars:
+      - key: ZENPLAY_XTREAM_URL
+        sync: false

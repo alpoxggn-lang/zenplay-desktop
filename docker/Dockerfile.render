@@ -1,0 +1,60 @@
+# syntax=docker/dockerfile:1
+
+# Build the PWA and its complete browser backend, including adaptive MKV/HEVC
+# playback support. The heavy JavaScript build runs only once per deployment.
+FROM node:24-alpine AS build
+
+RUN apk add --no-cache python3 make g++ git
+
+WORKDIR /usr/src/app
+
+COPY .npmrc ./
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY patches ./patches
+
+RUN PNPM_VERSION="$(node -p 'require("./package.json").packageManager.split("@")[1].split("+")[0]')" \
+    && npm install --global "pnpm@${PNPM_VERSION}" \
+    && pnpm install --frozen-lockfile --ignore-scripts
+
+COPY . .
+
+ARG BUILD_COMMIT=""
+RUN node tools/build/inject-build-commit.mjs
+RUN pnpm nx build web --configuration=pwa
+RUN pnpm nx build web-backend
+
+# better-sqlite3 is the backend's only native Node dependency. Build it for
+# Render's Alpine runtime even though ZenPlay currently keeps client state in
+# the browser and does not require a persistent server database.
+FROM node:24-alpine AS native
+
+RUN apk add --no-cache python3 make g++
+
+WORKDIR /opt/native
+COPY package.json ./root-package.json
+RUN BETTER_SQLITE3_VERSION="$(node -p 'require("./root-package.json").dependencies["better-sqlite3"]')" \
+    && npm init -y >/dev/null \
+    && npm install --omit=dev --no-audit --no-fund "better-sqlite3@${BETTER_SQLITE3_VERSION}"
+
+FROM node:24-alpine AS runtime
+
+RUN apk add --no-cache ffmpeg
+
+WORKDIR /opt/zenplay
+
+ENV NODE_ENV=production
+ENV PORT=10000
+ENV BACKEND_URL=/api
+ENV ZENPLAY_LISTEN_HOST=0.0.0.0
+ENV ZENPLAY_STATIC_DIR=/opt/zenplay/web
+
+COPY --from=build /usr/src/app/dist/apps/web ./web
+COPY --from=build /usr/src/app/dist/apps/web-backend ./web-backend
+COPY --from=native /opt/native/node_modules ./web-backend/node_modules
+
+EXPOSE 10000
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD wget -qO- "http://127.0.0.1:${PORT}/api/health" >/dev/null || exit 1
+
+CMD ["node", "/opt/zenplay/web-backend/main.cjs"]
