@@ -154,6 +154,19 @@ describe('XtreamContentGateComponent', () => {
         ).not.toBeNull();
     });
 
+    it('retries the live portal from the cached offline warning', () => {
+        isContentInitialized.set(true);
+        portalStatus.set('unavailable');
+        fixture.detectChanges();
+
+        const retryButton = fixture.nativeElement.querySelector(
+            '[data-testid="xtream-offline-retry"]'
+        ) as HTMLButtonElement | null;
+        retryButton?.click();
+
+        expect(retryContentInitialization).toHaveBeenCalledTimes(1);
+    });
+
     it('retries content initialization from the blocked state', () => {
         contentInitBlockReason.set('cancelled');
         fixture.detectChanges();

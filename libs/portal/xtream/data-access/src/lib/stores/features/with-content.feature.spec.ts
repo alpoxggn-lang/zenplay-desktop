@@ -40,6 +40,7 @@ describe('withContent import state', () => {
         getCachedContent: jest.Mock;
         hasCategories: jest.Mock;
         hasContent: jest.Mock;
+        clearSessionCache: jest.Mock;
         restoreUserData: jest.Mock;
     };
     let databaseService: {
@@ -69,6 +70,7 @@ describe('withContent import state', () => {
             getCachedContent: jest.fn().mockResolvedValue([]),
             hasCategories: jest.fn().mockResolvedValue(true),
             hasContent: jest.fn().mockResolvedValue(false),
+            clearSessionCache: jest.fn(),
             restoreUserData: jest.fn().mockResolvedValue(undefined),
         };
         databaseService = {
@@ -1193,6 +1195,22 @@ describe('withContent import state', () => {
         expect(store.isContentInitialized()).toBe(false);
         expect(dataSource.getCategories).not.toHaveBeenCalled();
         expect(dataSource.getContent).not.toHaveBeenCalled();
+    });
+
+    it('evicts the PWA session cache before an active retry reloads content', async () => {
+        dataSource.getCategories.mockResolvedValue([]);
+        dataSource.getContent.mockResolvedValue([]);
+        store.setContentInitBlockReason('unavailable');
+
+        await store.retryContentInitialization();
+
+        expect(dataSource.clearSessionCache).toHaveBeenCalledTimes(1);
+        expect(dataSource.clearSessionCache).toHaveBeenCalledWith(PLAYLIST.id);
+        expect(
+            dataSource.clearSessionCache.mock.invocationCallOrder[0]
+        ).toBeLessThan(dataSource.getCategories.mock.invocationCallOrder[0]);
+        expect(store.isContentInitialized()).toBe(true);
+        expect(store.contentInitBlockReason()).toBeNull();
     });
 
     it('hydrates cached content on retry when status remains unavailable', async () => {

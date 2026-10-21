@@ -41,6 +41,7 @@ describe('withContent host connectivity guard', () => {
                     getCachedContent: jest.fn().mockResolvedValue([]),
                     hasCategories: jest.fn().mockResolvedValue(true),
                     hasContent: jest.fn().mockResolvedValue(false),
+                    clearSessionCache: jest.fn(),
                     restoreUserData: jest.fn().mockResolvedValue(undefined),
                 },
                 databaseService: {

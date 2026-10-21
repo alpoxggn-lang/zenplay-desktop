@@ -1,4 +1,5 @@
 import { createWebBackendApp } from './web-backend-app';
+import { XTREAM_CLIENT_USER_AGENT } from '@iptvnator/shared/interfaces';
 import {
     registerProviderTarget,
     resolvePublicHost,
@@ -93,7 +94,10 @@ describe('web backend Xtream POST transport', () => {
                 });
                 expect(httpClient.requests).toEqual([
                     {
-                        headers: undefined,
+                        headers: {
+                            Accept: 'application/json',
+                            'User-Agent': XTREAM_CLIENT_USER_AGENT,
+                        },
                         params: {
                             action: 'get_account_info',
                             password: 'secret',

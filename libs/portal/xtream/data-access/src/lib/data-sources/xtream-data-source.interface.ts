@@ -246,7 +246,7 @@ export interface IXtreamDataSource {
 
     /**
      * Get persisted categories without contacting the Xtream API.
-     * Electron reads SQLite; PWA has no persisted DB cache and returns [].
+     * Electron reads SQLite; PWA reads its session-scoped memory cache.
      */
     getCachedCategories(
         playlistId: string,
@@ -320,7 +320,7 @@ export interface IXtreamDataSource {
 
     /**
      * Get persisted content without contacting the Xtream API.
-     * Electron reads SQLite; PWA has no persisted DB cache and returns [].
+     * Electron reads SQLite; PWA reads its session-scoped memory cache.
      */
     getCachedContent(
         playlistId: string,

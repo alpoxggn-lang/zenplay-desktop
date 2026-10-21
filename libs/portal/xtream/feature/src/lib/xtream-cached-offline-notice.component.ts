@@ -1,11 +1,12 @@
 import { ChangeDetectionStrategy, Component, computed, inject } from '@angular/core';
+import { MatButtonModule } from '@angular/material/button';
 import { MatIconModule } from '@angular/material/icon';
 import { TranslatePipe } from '@ngx-translate/core';
 import { XtreamStore } from '@iptvnator/portal/xtream/data-access';
 
 @Component({
     selector: 'app-xtream-cached-offline-notice',
-    imports: [MatIconModule, TranslatePipe],
+    imports: [MatButtonModule, MatIconModule, TranslatePipe],
     template: `
         @if (showWarning()) {
             <div
@@ -29,6 +30,16 @@ import { XtreamStore } from '@iptvnator/portal/xtream/data-access';
                         }}
                     </span>
                 </div>
+
+                <button
+                    mat-stroked-button
+                    type="button"
+                    data-testid="xtream-offline-retry"
+                    (click)="retry()"
+                >
+                    <mat-icon>refresh</mat-icon>
+                    {{ 'DOWNLOADS.RETRY' | translate }}
+                </button>
             </div>
         }
     `,
@@ -65,6 +76,27 @@ import { XtreamStore } from '@iptvnator/portal/xtream/data-access';
                 margin-top: 1px;
                 flex-shrink: 0;
             }
+
+            .xtream-cached-offline-notice button {
+                margin-left: auto;
+                flex-shrink: 0;
+            }
+
+            @media (max-width: 640px) {
+                .xtream-cached-offline-notice {
+                    flex-wrap: wrap;
+                }
+
+                .xtream-cached-offline-notice__copy {
+                    min-width: 0;
+                    flex: 1;
+                }
+
+                .xtream-cached-offline-notice button {
+                    width: 100%;
+                    margin-left: 0;
+                }
+            }
         `,
     ],
     changeDetection: ChangeDetectionStrategy.OnPush,
@@ -78,4 +110,8 @@ export class XtreamCachedOfflineNoticeComponent {
             this.xtreamStore.isContentInitialized() &&
             !this.xtreamStore.contentInitBlockReason()
     );
+
+    retry(): void {
+        void this.xtreamStore.retryContentInitialization();
+    }
 }

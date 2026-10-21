@@ -13,6 +13,7 @@ import {
     buildStalkerRequestUrl,
     normalizeXtreamServerUrl,
     describeXtreamConnectionFailure,
+    XTREAM_CLIENT_USER_AGENT,
 } from '@iptvnator/shared/interfaces';
 import { extractDrmFromRaw } from '@iptvnator/shared/m3u-utils';
 import {
@@ -401,6 +402,10 @@ export function createWebBackendApp(
             requestUrl = appendPathSegment(url, 'player_api.php');
 
             const response = await httpClient.get(requestUrl, {
+                headers: {
+                    Accept: 'application/json',
+                    'User-Agent': XTREAM_CLIENT_USER_AGENT,
+                },
                 params: input.params,
                 timeout: PROVIDER_REQUEST_TIMEOUT_MS.xtream,
                 onConnect: () => {

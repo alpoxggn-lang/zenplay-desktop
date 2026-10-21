@@ -1512,6 +1512,7 @@ export function withContent() {
                         clearCancelledPlaylistInitializationLock(
                             ctx.playlistId
                         );
+                        dataSource.clearSessionCache(ctx.playlistId);
                     }
 
                     await runContentInitialization(true);

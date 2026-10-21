@@ -7,11 +7,25 @@ import {
     XtreamCredentials,
 } from '../services/xtream-api.service';
 import {
+    DatabaseService,
+    DataService,
     ParentalLockService,
     PlaylistsService,
     USER_DATA_STORAGE,
+    XtreamPendingRestoreService,
 } from '@iptvnator/services';
 import { of } from 'rxjs';
+import { PortalStatusType } from '../xtream-state';
+import { XTREAM_DATA_SOURCE } from './xtream-data-source.interface';
+import {
+    createContentTestStore,
+    createPendingRestoreServiceMock,
+} from '../stores/features/with-content.feature.spec-helpers';
+
+let checkPwaPortalStatusMock: jest.Mock<Promise<PortalStatusType>, []>;
+const PwaContentStore = createContentTestStore(() =>
+    checkPwaPortalStatusMock()
+);
 
 describe('PwaXtreamDataSource', () => {
     let dataSource: PwaXtreamDataSource;
@@ -53,10 +67,16 @@ describe('PwaXtreamDataSource', () => {
             ),
             withholdsEverything: jest.fn(() => false),
         };
+        checkPwaPortalStatusMock = jest.fn().mockResolvedValue('unavailable');
 
         TestBed.configureTestingModule({
             providers: [
                 PwaXtreamDataSource,
+                PwaContentStore,
+                {
+                    provide: XTREAM_DATA_SOURCE,
+                    useExisting: PwaXtreamDataSource,
+                },
                 { provide: ParentalLockService, useValue: parentalLock },
                 {
                     provide: XtreamApiService,
@@ -65,6 +85,24 @@ describe('PwaXtreamDataSource', () => {
                 {
                     provide: PlaylistsService,
                     useValue: playlistsService,
+                },
+                {
+                    provide: DatabaseService,
+                    useValue: {
+                        createOperationId: jest.fn(() => 'pwa-import'),
+                    },
+                },
+                {
+                    provide: XtreamPendingRestoreService,
+                    useValue: createPendingRestoreServiceMock(),
+                },
+                {
+                    provide: DataService,
+                    useValue: {
+                        sendIpcEvent: jest
+                            .fn()
+                            .mockResolvedValue({ success: true }),
+                    },
                 },
             ],
         });
@@ -176,6 +214,134 @@ describe('PwaXtreamDataSource', () => {
 
         expect(onPhaseChange).not.toHaveBeenCalled();
         expect(apiService.getStreams).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not treat unconfirmed empty entries as usable cache', async () => {
+        const cacheState = dataSource as unknown as {
+            categoryCache: Map<string, unknown[]>;
+            contentCache: Map<string, unknown[]>;
+        };
+        cacheState.categoryCache.set('playlist-1-vod-categories', []);
+        cacheState.contentCache.set('playlist-1-movie-content', []);
+
+        await expect(
+            dataSource.hasCategories('playlist-1', 'movies')
+        ).resolves.toBe(false);
+        await expect(
+            dataSource.hasContent('playlist-1', 'movie')
+        ).resolves.toBe(false);
+    });
+
+    it('reuses a successfully loaded empty catalog without treating it as offline content', async () => {
+        apiService.getStreams.mockResolvedValue([]);
+
+        await dataSource.getCategories('playlist-1', credentials, 'vod');
+        await dataSource.getContent('playlist-1', credentials, 'movie');
+
+        await expect(
+            dataSource.hasCategories('playlist-1', 'movies')
+        ).resolves.toBe(false);
+        await expect(
+            dataSource.hasContent('playlist-1', 'movie')
+        ).resolves.toBe(false);
+
+        await dataSource.getCategories('playlist-1', credentials, 'vod');
+        await dataSource.getContent('playlist-1', credentials, 'movie');
+
+        expect(apiService.getCategories).toHaveBeenCalledTimes(1);
+        expect(apiService.getStreams).toHaveBeenCalledTimes(1);
+
+        dataSource.clearSessionCache('playlist-1');
+
+        await expect(
+            dataSource.hasCategories('playlist-1', 'movies')
+        ).resolves.toBe(false);
+        await expect(
+            dataSource.hasContent('playlist-1', 'movie')
+        ).resolves.toBe(false);
+    });
+
+    it('hydrates the store from the actual non-empty PWA session cache while offline', async () => {
+        apiService.getCategories.mockResolvedValue([
+            {
+                category_id: '7',
+                category_name: 'Movies',
+                parent_id: 0,
+            },
+        ]);
+        apiService.getStreams.mockResolvedValue([
+            {
+                stream_id: 41,
+                name: 'Cached movie',
+                category_id: '7',
+                stream_type: 'movie',
+            },
+        ]);
+        await dataSource.getCategories('playlist-1', credentials, 'vod');
+        await dataSource.getContent('playlist-1', credentials, 'movie');
+        const store = TestBed.inject(PwaContentStore);
+        store.setContentInitBlockReason('unavailable');
+
+        await store.retryContentInitialization();
+
+        expect(store.contentInitBlockReason()).toBeNull();
+        expect(store.vodCategories()).toEqual([
+            expect.objectContaining({ name: 'Movies', xtream_id: 7 }),
+        ]);
+        expect(store.vodStreams()).toEqual([
+            expect.objectContaining({ name: 'Cached movie', xtream_id: 41 }),
+        ]);
+    });
+
+    it('uses the same parental filtering for cache availability and hydration', async () => {
+        apiService.getCategories.mockResolvedValue([
+            {
+                category_id: '7',
+                category_name: 'Locked movies',
+                parent_id: 0,
+            },
+        ]);
+        apiService.getStreams.mockResolvedValue([
+            {
+                stream_id: 41,
+                name: 'Locked movie',
+                category_id: '7',
+                stream_type: 'movie',
+            },
+        ]);
+        await dataSource.getCategories('playlist-1', credentials, 'vod');
+        await dataSource.getContent('playlist-1', credentials, 'movie');
+        parentalLock.lockedXtreamIds.mockImplementation((_id, type) =>
+            type === 'movies' ? [7] : []
+        );
+
+        await expect(
+            dataSource.hasCategories('playlist-1', 'movies')
+        ).resolves.toBe(true);
+        await expect(
+            dataSource.hasContent('playlist-1', 'movie')
+        ).resolves.toBe(true);
+        await expect(
+            dataSource.getCachedCategories('playlist-1', 'vod')
+        ).resolves.toHaveLength(1);
+        await expect(
+            dataSource.getCachedContent('playlist-1', 'movie')
+        ).resolves.toHaveLength(1);
+
+        parentalLock.active.mockReturnValue(true);
+
+        await expect(
+            dataSource.hasCategories('playlist-1', 'movies')
+        ).resolves.toBe(false);
+        await expect(
+            dataSource.hasContent('playlist-1', 'movie')
+        ).resolves.toBe(false);
+        await expect(
+            dataSource.getCachedCategories('playlist-1', 'vod')
+        ).resolves.toEqual([]);
+        await expect(
+            dataSource.getCachedContent('playlist-1', 'movie')
+        ).resolves.toEqual([]);
     });
 
     it('keeps Xtream passwords out of localStorage playlist metadata', async () => {
