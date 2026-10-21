@@ -94,6 +94,7 @@ interface EpgResponse {
 @Injectable({ providedIn: 'root' })
 export class XtreamApiService {
     private readonly dataService = inject(DataService);
+    private readonly rateLimitedUntil = new Map<string, number>();
     private readonly logger = createLogger('XtreamApiService');
 
     async cancelSession(sessionId: string): Promise<boolean> {
@@ -604,6 +605,15 @@ export class XtreamApiService {
         options?: XtreamRequestOptions
     ): Promise<TResponse> {
         const normalizedUrl = normalizeXtreamServerUrl(url);
+        const now = Date.now();
+        for (const [host, until] of this.rateLimitedUntil) {
+            if (until <= now) this.rateLimitedUntil.delete(host);
+        }
+        if ((this.rateLimitedUntil.get(normalizedUrl) ?? 0) > now) {
+            throw Object.assign(new Error('Provider rate limit; retry later'), {
+                status: 429,
+            });
+        }
         const serializedParams: Record<string, string> = {};
         Object.entries(params).forEach(([key, value]) => {
             const serializedValue = String(value);
@@ -621,6 +631,7 @@ export class XtreamApiService {
             suppressErrorLog: options?.suppressErrorLog,
         })) as {
             message?: string;
+            status?: number;
             payload?: unknown;
             type?: string;
         };
@@ -632,7 +643,15 @@ export class XtreamApiService {
             response?.type === 'ERROR' ||
             (!response?.payload && response?.message)
         ) {
-            throw new Error(response?.message ?? 'Request failed');
+            if (response.status === 429) {
+                this.rateLimitedUntil.set(normalizedUrl, Date.now() + 60_000);
+            }
+            throw Object.assign(
+                new Error(response?.message ?? 'Request failed'),
+                {
+                    status: response.status,
+                }
+            );
         }
 
         return response?.payload as TResponse;

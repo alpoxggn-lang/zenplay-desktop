@@ -552,3 +552,12 @@ Regression coverage: `serial-details-external-launch.spec.ts` (chain,
 duplicate guard, queued choice), `serial-details-playback.service.spec.ts`
 (page token) and, for the external-player and reset rows,
 `libs/ui/components/src/lib/detail-ui/series-hero.state.spec.ts`.
+
+## Browser catalog rate limits
+
+A global HTTP 429 stops category recovery immediately. Scoped category recovery
+is sequential with a 300 ms interval; its first 429 marks remaining categories
+failed without requesting them, preserving usable global results as partial.
+`XtreamApiService` preserves error status and stops further requests to that
+normalized provider for 60 seconds. This is a local cooldown, not a bypass of
+provider limits or a claim that all categories completed.

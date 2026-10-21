@@ -30,6 +30,33 @@ describe('XtreamApiService', () => {
         service = TestBed.inject(XtreamApiService);
     });
 
+    it('preserves rate-limit status and pauses requests to the same provider for one minute', async () => {
+        const clock = jest.spyOn(Date, 'now').mockReturnValue(1000);
+        try {
+            dataService.sendIpcEvent
+                .mockResolvedValueOnce({
+                    type: 'ERROR',
+                    status: 429,
+                    message: 'Limited',
+                })
+                .mockResolvedValue({ payload: [] });
+            await expect(
+                service.getStreams(credentials, 'movie')
+            ).rejects.toMatchObject({ status: 429 });
+            await expect(
+                service.getStreams(credentials, 'live')
+            ).rejects.toMatchObject({ status: 429 });
+            expect(dataService.sendIpcEvent).toHaveBeenCalledTimes(1);
+            clock.mockReturnValue(61001);
+            await expect(
+                service.getStreams(credentials, 'live')
+            ).resolves.toEqual([]);
+            expect(dataService.sendIpcEvent).toHaveBeenCalledTimes(2);
+        } finally {
+            clock.mockRestore();
+        }
+    });
+
     it('normalizes account-info server URLs and trims credentials before IPC', async () => {
         dataService.sendIpcEvent.mockResolvedValue({
             payload: {

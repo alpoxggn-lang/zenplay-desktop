@@ -171,6 +171,17 @@ describe('ZenPlaySessionService', () => {
         expect(playlists.deletePlaylist).not.toHaveBeenCalled();
     });
 
+    it('retries a transient unavailable validation on the next navigation without deleting the login', async () => {
+        connectionTest.test
+            .mockResolvedValueOnce({ status: 'unavailable' })
+            .mockResolvedValueOnce({ status: 'active' });
+        const service = TestBed.inject(ZenPlaySessionService);
+        await expect(service.restore()).resolves.toBe(true);
+        await expect(service.restore()).resolves.toBe(true);
+        expect(connectionTest.test).toHaveBeenCalledTimes(2);
+        expect(playlists.deletePlaylist).not.toHaveBeenCalled();
+    });
+
     it('reuses the successful login result without probing again', async () => {
         const service = TestBed.inject(ZenPlaySessionService);
         service.rememberAuthenticated(' cliente ', ' clave ');

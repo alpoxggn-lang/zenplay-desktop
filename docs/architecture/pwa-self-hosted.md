@@ -117,7 +117,8 @@ while media is requested, rotates when the account changes, and is removed by
 The ZenPlay application login is separate from that ephemeral media cookie.
 The managed source remains in the browser's IndexedDB and the selected profile
 in localStorage, so browser restarts and PWA updates restore the signed-in user.
-On each app run the route guard validates the saved account once; an unavailable
+On each app run the route guard validates the saved account; successful checks
+are reused, while unavailable checks are retried on the next navigation; an unavailable
 network/backend keeps the login, while a provider-confirmed inactive or expired
 account removes the managed source and revokes the media session. The probe uses
 the POST Xtream transport, so credentials never enter a browser URL.
@@ -126,7 +127,9 @@ The media routes rebuild the provider URL on the server and apply the same
 DNS/SSRF validation to every redirect as the portal proxy. Direct TS and VOD
 bodies stream with backpressure and support Range/If-Range (`206`/`416`). HLS
 manifests are bounded and every variant, segment, map, subtitle, and key URI is
-rewritten to a session-bound opaque resource token. Media responses disable
+rewritten to a session-bound opaque resource token. Relative HLS references
+resolve against the final validated response URL after redirects, including
+nested playlists; that URL stays server-side. Media responses disable
 browser/CDN caching and nginx buffering. Browser Xtream catch-up currently
 fails closed because it has no equivalent credential-free media route;
 Electron keeps its existing direct catch-up behavior.

@@ -108,6 +108,16 @@ export class ZenPlaySessionService {
             status = 'unavailable';
         }
 
+        // Keep the durable login during an outage, but do not cache that
+        // outage as a successful media-session renewal for this app's lifetime.
+        // Only clear our own request; an account switch may already own it.
+        if (
+            status === 'unavailable' &&
+            this.cachedRestore?.connection === connection
+        ) {
+            this.cachedRestore = null;
+        }
+
         if (status !== 'inactive' && status !== 'expired') {
             // A network or backend outage must never sign a remembered user out.
             return true;

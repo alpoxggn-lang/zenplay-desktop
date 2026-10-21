@@ -48,6 +48,8 @@ export interface WebBackendHttpResponse<T> {
     readonly status: number;
     readonly statusText?: string;
     readonly request?: ClientRequest;
+    /** Final validated URL, for resolving relative manifest resources. Server-only. */
+    readonly finalUrl?: string;
     readonly headers: Readonly<Record<string, string | undefined>>;
 }
 
@@ -161,7 +163,7 @@ export class ValidatedHttpClient implements WebBackendHttpClient {
                                 httpsAgent
                             );
                             streamOwnsAgents = true;
-                            return response;
+                            return { ...response, finalUrl: sentUrl.href };
                         }
                         try {
                             return {

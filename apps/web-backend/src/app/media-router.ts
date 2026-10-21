@@ -223,11 +223,15 @@ async function proxyMedia(
         });
         upstream = response.data;
         const contentType = response.headers['content-type'];
-        if (isHlsManifest(contentType, url)) {
+        const finalUrl = response.finalUrl ? new URL(response.finalUrl) : url;
+        if (
+            isHlsManifest(contentType, finalUrl) ||
+            isHlsManifest(contentType, url)
+        ) {
             const manifest = await readManifest(upstream);
             const body = rewriteHlsManifest({
                 body: manifest,
-                manifestUrl: url,
+                manifestUrl: finalUrl,
                 resourcePath: (resourceUrl) =>
                     remotePlayback?.resourcePath(resourceUrl) ??
                     resourcePath(

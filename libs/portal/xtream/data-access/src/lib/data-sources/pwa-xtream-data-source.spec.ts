@@ -637,6 +637,54 @@ describe('PwaXtreamDataSource', () => {
         ]);
     });
 
+    it('does not fan out into category requests after a global rate limit', async () => {
+        const limited = Object.assign(new Error('Limited'), { status: 429 });
+        apiService.getStreams.mockRejectedValue(limited);
+        apiService.getCategories.mockResolvedValue([
+            { category_id: '10', category_name: 'One', parent_id: 0 },
+        ]);
+        await expect(
+            dataSource.getContent('playlist-1', credentials, 'movie')
+        ).rejects.toMatchObject({ status: 429 });
+        expect(apiService.getStreams).toHaveBeenCalledTimes(1);
+        expect(apiService.getCategories).not.toHaveBeenCalled();
+    });
+
+    it('stops category recovery on rate limiting while retaining usable global items', async () => {
+        apiService.getCategories.mockResolvedValue(
+            Array.from({ length: 12 }, (_, i) => ({
+                category_id: String(i + 1),
+                category_name: 'Category',
+                parent_id: 0,
+                count: 2,
+            }))
+        );
+        apiService.getStreams.mockImplementation(
+            (_credentials, _type, options?: { categoryId?: string }) =>
+                options?.categoryId
+                    ? Promise.reject(
+                          Object.assign(new Error('Limited'), { status: 429 })
+                      )
+                    : Promise.resolve([
+                          {
+                              stream_id: 101,
+                              name: 'Available',
+                              category_id: '1',
+                          },
+                      ])
+        );
+        const content = await dataSource.getContent(
+            'playlist-1',
+            credentials,
+            'movie'
+        );
+        expect(content).toEqual([expect.objectContaining({ xtream_id: 101 })]);
+        expect(apiService.getStreams).toHaveBeenCalledTimes(2);
+        expect(
+            dataSource.getCatalogDiagnostics('playlist-1', 'movie')
+        ).toMatchObject({ status: 'partial', failedCategoryCount: 12 });
+    });
+
     it('recovers omitted and truncated catalog rows from category endpoints', async () => {
         apiService.getCategories.mockResolvedValue([
             {

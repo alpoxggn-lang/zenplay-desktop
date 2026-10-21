@@ -97,7 +97,8 @@ interface CategoryRecoveryResult {
     readonly error?: unknown;
 }
 
-const CATEGORY_RECOVERY_CONCURRENCY = 4;
+const CATEGORY_RECOVERY_CONCURRENCY = 1;
+const CATEGORY_RECOVERY_DELAY_MS = 300;
 const COMMON_PROVIDER_CATALOG_LIMITS = new Set([
     100, 250, 500, 1000, 2000, 5000, 10000,
 ]);
@@ -729,6 +730,8 @@ export class PwaXtreamDataSource implements IXtreamDataSource {
                 type
             )) as unknown as XtreamCachedContentItem[];
         } catch (error) {
+            if ((error as { status?: number } | null)?.status === 429)
+                throw error;
             globalError = error;
         }
 
@@ -871,6 +874,7 @@ export class PwaXtreamDataSource implements IXtreamDataSource {
     ): Promise<CategoryRecoveryResult[]> {
         const results = new Array<CategoryRecoveryResult>(categoryIds.length);
         let nextIndex = 0;
+        let rateLimitError: unknown;
         const workerCount = Math.min(
             CATEGORY_RECOVERY_CONCURRENCY,
             categoryIds.length
@@ -882,6 +886,15 @@ export class PwaXtreamDataSource implements IXtreamDataSource {
                     const index = nextIndex++;
                     if (index >= categoryIds.length) return;
                     const categoryId = categoryIds[index];
+                    if (rateLimitError) {
+                        results[index] = { categoryId, error: rateLimitError };
+                        continue;
+                    }
+                    if (index > 0) {
+                        await new Promise((resolve) =>
+                            setTimeout(resolve, CATEGORY_RECOVERY_DELAY_MS)
+                        );
+                    }
                     try {
                         results[index] = {
                             categoryId,
@@ -893,6 +906,12 @@ export class PwaXtreamDataSource implements IXtreamDataSource {
                         };
                     } catch (error) {
                         results[index] = { categoryId, error };
+                        if (
+                            (error as { status?: number } | null)?.status ===
+                            429
+                        ) {
+                            rateLimitError = error;
+                        }
                     }
                 }
             })
